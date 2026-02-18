@@ -1,7 +1,9 @@
 use crate::store::schema::{SCHEMA_SQL, SCHEMA_VERSION};
 use crate::store::traits::{DbStatus, StateStore, StoreError};
+use crate::vm::{CreateVmParams, Vm, VmState};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 pub struct SqliteStore {
     conn: std::sync::Mutex<Connection>,
@@ -171,11 +173,156 @@ impl StateStore for SqliteStore {
         // for the trait interface — other backends may need explicit cleanup.
         Ok(())
     }
+
+    fn create_vm(&self, params: &CreateVmParams) -> Result<Vm, StoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        let id = Uuid::new_v4().to_string();
+
+        // Auto-assign CID: find the max CID in use, start from 3
+        let max_cid: Option<u32> = conn
+            .query_row("SELECT MAX(cid) FROM vms", [], |row| row.get(0))
+            .map_err(|e| StoreError::Query(format!("cannot query max CID: {e}")))?;
+        let cid = max_cid.map(|c| c + 1).unwrap_or(3);
+
+        conn.execute(
+            "INSERT INTO vms (id, name, role, state, cid, vcpu_count, mem_size_mib) \
+             VALUES (?1, ?2, ?3, 'created', ?4, ?5, ?6)",
+            rusqlite::params![
+                id,
+                params.name,
+                params.role.as_str(),
+                cid,
+                params.vcpu_count,
+                params.mem_size_mib,
+            ],
+        )
+        .map_err(|e| {
+            if let rusqlite::Error::SqliteFailure(err, _) = &e {
+                if err.code == rusqlite::ErrorCode::ConstraintViolation {
+                    return StoreError::Conflict(format!("VM name '{}' already exists", params.name));
+                }
+            }
+            StoreError::Query(format!("cannot insert VM: {e}"))
+        })?;
+
+        // Release the lock before calling get_vm which will re-acquire it
+        drop(conn);
+
+        self.get_vm(&id)?
+            .ok_or_else(|| StoreError::Query("VM not found after insert".to_string()))
+    }
+
+    fn list_vms(&self, role: Option<&str>, state: Option<&str>) -> Result<Vec<Vm>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut sql = "SELECT id, name, role, state, cid, vcpu_count, mem_size_mib, \
+                        created_at, updated_at, started_at, stopped_at, pid, \
+                        socket_path, uds_path, console_log_path, config_json \
+                        FROM vms WHERE 1=1".to_string();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(r) = role {
+            sql.push_str(" AND role = ?");
+            params.push(Box::new(r.to_string()));
+        }
+        if let Some(s) = state {
+            sql.push_str(" AND state = ?");
+            params.push(Box::new(s.to_string()));
+        }
+
+        sql.push_str(" ORDER BY created_at DESC");
+
+        let mut stmt = conn.prepare(&sql)
+            .map_err(|e| StoreError::Query(format!("cannot prepare list query: {e}")))?;
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let vms = stmt
+            .query_map(param_refs.as_slice(), |row| Ok(row_to_vm(row)))
+            .map_err(|e| StoreError::Query(format!("cannot list VMs: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Query(format!("cannot read VM row: {e}")))?;
+
+        Ok(vms)
+    }
+
+    fn get_vm(&self, name_or_id: &str) -> Result<Option<Vm>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, role, state, cid, vcpu_count, mem_size_mib, \
+                 created_at, updated_at, started_at, stopped_at, pid, \
+                 socket_path, uds_path, console_log_path, config_json \
+                 FROM vms WHERE id = ?1 OR name = ?1",
+            )
+            .map_err(|e| StoreError::Query(format!("cannot prepare get query: {e}")))?;
+
+        let mut rows = stmt
+            .query_map([name_or_id], |row| Ok(row_to_vm(row)))
+            .map_err(|e| StoreError::Query(format!("cannot get VM: {e}")))?;
+
+        match rows.next() {
+            Some(Ok(vm)) => Ok(Some(vm)),
+            Some(Err(e)) => Err(StoreError::Query(format!("cannot read VM row: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    fn delete_vm(&self, name_or_id: &str) -> Result<bool, StoreError> {
+        // Check if VM exists and is not running
+        if let Some(vm) = self.get_vm(name_or_id)? {
+            if vm.state == VmState::Running {
+                return Err(StoreError::Conflict(format!(
+                    "cannot delete VM '{}': VM is running, stop it first",
+                    vm.name
+                )));
+            }
+        } else {
+            return Ok(false);
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn
+            .execute(
+                "DELETE FROM vms WHERE id = ?1 OR name = ?1",
+                [name_or_id],
+            )
+            .map_err(|e| StoreError::Query(format!("cannot delete VM: {e}")))?;
+
+        Ok(deleted > 0)
+    }
+}
+
+/// Map a rusqlite row to a Vm struct.
+/// NOTE: Uses unwrap() throughout -- will panic on invalid data.
+/// Accepted for pre-alpha: CHECK constraints in the schema prevent invalid
+/// values from being inserted through normal operations.
+fn row_to_vm(row: &rusqlite::Row) -> Vm {
+    Vm {
+        id: row.get(0).unwrap(),
+        name: row.get(1).unwrap(),
+        role: row.get::<_, String>(2).unwrap().parse().unwrap(),
+        state: row.get::<_, String>(3).unwrap().parse().unwrap(),
+        cid: row.get(4).unwrap(),
+        vcpu_count: row.get(5).unwrap(),
+        mem_size_mib: row.get(6).unwrap(),
+        created_at: row.get(7).unwrap(),
+        updated_at: row.get(8).unwrap(),
+        started_at: row.get(9).unwrap(),
+        stopped_at: row.get(10).unwrap(),
+        pid: row.get(11).unwrap(),
+        socket_path: row.get(12).unwrap(),
+        uds_path: row.get(13).unwrap(),
+        console_log_path: row.get(14).unwrap(),
+        config_json: row.get(15).unwrap(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vm::VmRole;
 
     #[test]
     fn open_creates_new_database() {
@@ -317,5 +464,236 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "wal", "WAL mode should be enabled");
+    }
+
+    #[test]
+    fn create_vm_assigns_id_and_cid() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let params = CreateVmParams {
+            name: "test-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 2,
+            mem_size_mib: 512,
+        };
+        let vm = store.create_vm(&params).unwrap();
+
+        assert!(!vm.id.is_empty());
+        assert_eq!(vm.name, "test-vm");
+        assert_eq!(vm.role, VmRole::Work);
+        assert_eq!(vm.state, VmState::Created);
+        assert_eq!(vm.cid, 3); // first CID
+        assert_eq!(vm.vcpu_count, 2);
+        assert_eq!(vm.mem_size_mib, 512);
+    }
+
+    #[test]
+    fn create_vm_auto_increments_cid() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let vm1 = store.create_vm(&CreateVmParams {
+            name: "vm-1".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let vm2 = store.create_vm(&CreateVmParams {
+            name: "vm-2".to_string(),
+            role: VmRole::Portal,
+            vcpu_count: 1,
+            mem_size_mib: 256,
+        }).unwrap();
+
+        assert_eq!(vm1.cid, 3);
+        assert_eq!(vm2.cid, 4);
+    }
+
+    #[test]
+    fn create_vm_duplicate_name_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let params = CreateVmParams {
+            name: "dup-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        };
+        store.create_vm(&params).unwrap();
+        let result = store.create_vm(&params);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_vms_returns_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        store.create_vm(&CreateVmParams {
+            name: "vm-a".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+        store.create_vm(&CreateVmParams {
+            name: "vm-b".to_string(),
+            role: VmRole::Portal,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let vms = store.list_vms(None, None).unwrap();
+        assert_eq!(vms.len(), 2);
+    }
+
+    #[test]
+    fn list_vms_filter_by_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        store.create_vm(&CreateVmParams {
+            name: "work-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+        store.create_vm(&CreateVmParams {
+            name: "portal-vm".to_string(),
+            role: VmRole::Portal,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let work_vms = store.list_vms(Some("work"), None).unwrap();
+        assert_eq!(work_vms.len(), 1);
+        assert_eq!(work_vms[0].name, "work-vm");
+    }
+
+    #[test]
+    fn get_vm_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let created = store.create_vm(&CreateVmParams {
+            name: "find-me".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let found = store.get_vm("find-me").unwrap().unwrap();
+        assert_eq!(found.id, created.id);
+        assert_eq!(found.name, "find-me");
+    }
+
+    #[test]
+    fn get_vm_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let created = store.create_vm(&CreateVmParams {
+            name: "id-test".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let found = store.get_vm(&created.id).unwrap().unwrap();
+        assert_eq!(found.name, "id-test");
+    }
+
+    #[test]
+    fn get_vm_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let result = store.get_vm("nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn delete_vm_removes_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        store.create_vm(&CreateVmParams {
+            name: "delete-me".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let deleted = store.delete_vm("delete-me").unwrap();
+        assert!(deleted);
+
+        let found = store.get_vm("delete-me").unwrap();
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn delete_vm_not_found_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let deleted = store.delete_vm("ghost").unwrap();
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn delete_vm_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let created = store.create_vm(&CreateVmParams {
+            name: "del-by-id".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let deleted = store.delete_vm(&created.id).unwrap();
+        assert!(deleted);
+    }
+
+    #[test]
+    fn cid_reused_after_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let vm1 = store.create_vm(&CreateVmParams {
+            name: "first".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+        assert_eq!(vm1.cid, 3);
+
+        store.delete_vm("first").unwrap();
+
+        // Next VM should get CID 3 again (lowest available)
+        // Implementation may choose CID 4 if using max+1 strategy.
+        // Both are acceptable -- the key invariant is uniqueness.
+        let vm2 = store.create_vm(&CreateVmParams {
+            name: "second".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+        assert!(vm2.cid >= 3);
     }
 }

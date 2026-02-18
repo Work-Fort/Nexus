@@ -65,6 +65,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use nexus_lib::store::traits::StoreError;
+    use nexus_lib::vm::{CreateVmParams, Vm};
     use tower::ServiceExt;
 
     /// A mock store for testing the health endpoint without SQLite.
@@ -80,6 +81,18 @@ mod tests {
             })
         }
         fn close(&self) -> Result<(), StoreError> { Ok(()) }
+        fn create_vm(&self, _params: &CreateVmParams) -> Result<Vm, StoreError> {
+            unimplemented!()
+        }
+        fn list_vms(&self, _role: Option<&str>, _state: Option<&str>) -> Result<Vec<Vm>, StoreError> {
+            unimplemented!()
+        }
+        fn get_vm(&self, _name_or_id: &str) -> Result<Option<Vm>, StoreError> {
+            unimplemented!()
+        }
+        fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
     }
 
     struct FailingStore;
@@ -90,6 +103,18 @@ mod tests {
             Err(StoreError::Query("disk I/O error".to_string()))
         }
         fn close(&self) -> Result<(), StoreError> { Ok(()) }
+        fn create_vm(&self, _params: &CreateVmParams) -> Result<Vm, StoreError> {
+            unimplemented!()
+        }
+        fn list_vms(&self, _role: Option<&str>, _state: Option<&str>) -> Result<Vec<Vm>, StoreError> {
+            unimplemented!()
+        }
+        fn get_vm(&self, _name_or_id: &str) -> Result<Option<Vm>, StoreError> {
+            unimplemented!()
+        }
+        fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]

@@ -1,3 +1,5 @@
+use crate::vm::{CreateVmParams, Vm};
+
 /// Information about the database for status reporting.
 #[derive(Debug, Clone)]
 pub struct DbStatus {
@@ -18,6 +20,8 @@ pub enum StoreError {
     Query(String),
     /// Schema migration required (version mismatch)
     SchemaMismatch { expected: u32, found: u32 },
+    /// Operation not allowed in current state
+    Conflict(String),
 }
 
 impl std::fmt::Display for StoreError {
@@ -28,6 +32,7 @@ impl std::fmt::Display for StoreError {
             StoreError::SchemaMismatch { expected, found } => {
                 write!(f, "schema version mismatch: expected {expected}, found {found}")
             }
+            StoreError::Conflict(e) => write!(f, "conflict: {e}"),
         }
     }
 }
@@ -48,6 +53,20 @@ pub trait StateStore {
 
     /// Close the store and release resources.
     fn close(&self) -> Result<(), StoreError>;
+
+    /// Create a new VM record. Assigns a unique ID and auto-assigns a vsock CID.
+    /// Returns the created VM.
+    fn create_vm(&self, params: &CreateVmParams) -> Result<Vm, StoreError>;
+
+    /// List all VMs, optionally filtered by role and/or state.
+    fn list_vms(&self, role: Option<&str>, state: Option<&str>) -> Result<Vec<Vm>, StoreError>;
+
+    /// Get a single VM by name or ID.
+    fn get_vm(&self, name_or_id: &str) -> Result<Option<Vm>, StoreError>;
+
+    /// Delete a VM by name or ID. Returns true if a record was deleted.
+    /// Refuses to delete VMs in the `running` state (returns StoreError).
+    fn delete_vm(&self, name_or_id: &str) -> Result<bool, StoreError>;
 }
 
 #[cfg(test)]
