@@ -60,6 +60,14 @@ pub fn default_config_path() -> PathBuf {
     config_dir.join("nexus.yaml")
 }
 
+/// Returns the default database path: $XDG_STATE_HOME/nexus/nexus.db
+pub fn default_db_path() -> PathBuf {
+    let state_dir = dirs::state_dir()
+        .expect("cannot determine XDG_STATE_HOME")
+        .join("nexus");
+    state_dir.join("nexus.db")
+}
+
 impl Config {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path).map_err(|e| {
@@ -100,6 +108,12 @@ api:
         let yaml = "{}";
         let config: Config = serde_norway::from_str(yaml).unwrap();
         assert_eq!(config.api.listen, "127.0.0.1:9600");
+    }
+
+    #[test]
+    fn default_db_path_ends_with_nexus_db() {
+        let path = default_db_path();
+        assert!(path.ends_with("nexus/nexus.db"), "expected path ending with nexus/nexus.db, got: {}", path.display());
     }
 
     #[test]
