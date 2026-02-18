@@ -24,7 +24,7 @@ impl ConfigError {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub api: ApiConfig,
@@ -34,14 +34,6 @@ pub struct Config {
 #[serde(default)]
 pub struct ApiConfig {
     pub listen: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            api: ApiConfig::default(),
-        }
-    }
 }
 
 impl Default for ApiConfig {

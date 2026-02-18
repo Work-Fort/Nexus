@@ -8,6 +8,23 @@ pub struct SqliteStore {
     db_path: PathBuf,
 }
 
+/// Enable WAL mode and foreign key enforcement on a connection.
+fn configure_connection(conn: &Connection) -> Result<(), StoreError> {
+    let mode: String = conn
+        .pragma_update_and_check(None, "journal_mode", "wal", |row| row.get(0))
+        .map_err(|e| StoreError::Init(format!("cannot set WAL mode: {e}")))?;
+    if mode != "wal" {
+        return Err(StoreError::Init(format!(
+            "failed to enable WAL mode: journal_mode is '{mode}'"
+        )));
+    }
+
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| StoreError::Init(format!("cannot enable foreign keys: {e}")))?;
+
+    Ok(())
+}
+
 impl SqliteStore {
     /// Open a SQLite database at the given path.
     /// Creates the parent directory if it doesn't exist.
@@ -22,19 +39,7 @@ impl SqliteStore {
         let conn = Connection::open(path)
             .map_err(|e| StoreError::Init(format!("cannot open database {}: {e}", path.display())))?;
 
-        // Enable WAL mode and verify it was applied
-        let mode: String = conn
-            .pragma_update_and_check(None, "journal_mode", "wal", |row| row.get(0))
-            .map_err(|e| StoreError::Init(format!("cannot set WAL mode: {e}")))?;
-        if mode != "wal" {
-            return Err(StoreError::Init(format!(
-                "failed to enable WAL mode: journal_mode is '{mode}'"
-            )));
-        }
-
-        // Enable foreign key enforcement
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(|e| StoreError::Init(format!("cannot enable foreign keys: {e}")))?;
+        configure_connection(&conn)?;
 
         Ok(SqliteStore {
             conn: std::sync::Mutex::new(conn),
@@ -58,14 +63,13 @@ impl SqliteStore {
 
     /// Delete the database file and reopen the connection.
     fn recreate(&self) -> Result<(), StoreError> {
-        // Lock and drop the current connection
-        {
-            let mut conn = self.conn.lock().unwrap();
-            let temp_conn = Connection::open_in_memory()
-                .map_err(|e| StoreError::Init(format!("cannot create temp connection: {e}")))?;
-            let old_conn = std::mem::replace(&mut *conn, temp_conn);
-            drop(old_conn);
-        }
+        let mut conn = self.conn.lock().unwrap();
+
+        // Replace with in-memory connection to close the file handle
+        let temp_conn = Connection::open_in_memory()
+            .map_err(|e| StoreError::Init(format!("cannot create temp connection: {e}")))?;
+        let old_conn = std::mem::replace(&mut *conn, temp_conn);
+        drop(old_conn);
 
         // Delete the database file and WAL/SHM files
         let _ = std::fs::remove_file(&self.db_path);
@@ -76,18 +80,8 @@ impl SqliteStore {
         let new_conn = Connection::open(&self.db_path)
             .map_err(|e| StoreError::Init(format!("cannot reopen database: {e}")))?;
 
-        let mode: String = new_conn
-            .pragma_update_and_check(None, "journal_mode", "wal", |row| row.get(0))
-            .map_err(|e| StoreError::Init(format!("cannot set WAL mode: {e}")))?;
-        if mode != "wal" {
-            return Err(StoreError::Init(format!(
-                "failed to enable WAL mode: journal_mode is '{mode}'"
-            )));
-        }
-        new_conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(|e| StoreError::Init(format!("cannot enable foreign keys: {e}")))?;
+        configure_connection(&new_conn)?;
 
-        let mut conn = self.conn.lock().unwrap();
         *conn = new_conn;
         Ok(())
     }
@@ -148,6 +142,12 @@ impl StateStore for SqliteStore {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(SCHEMA_SQL)
             .map_err(|e| StoreError::Init(format!("cannot create schema: {e}")))?;
+
+        conn.execute(
+            "INSERT INTO schema_meta (key, value) VALUES ('version', ?1)",
+            [SCHEMA_VERSION.to_string()],
+        )
+        .map_err(|e| StoreError::Init(format!("cannot insert schema version: {e}")))?;
 
         Ok(())
     }

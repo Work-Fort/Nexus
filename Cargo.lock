@@ -881,6 +881,7 @@ name = "nexus-lib"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "nix",
  "reqwest",
  "rusqlite",
  "serde",
@@ -898,11 +899,9 @@ dependencies = [
  "clap",
  "dirs",
  "nexus-lib",
- "nix",
  "reqwest",
  "serde",
  "serde_norway",
- "tempfile",
  "tokio",
 ]
 
@@ -913,11 +912,9 @@ dependencies = [
  "axum",
  "clap",
  "nexus-lib",
- "nix",
  "reqwest",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "tower",
  "tracing",

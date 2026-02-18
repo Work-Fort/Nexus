@@ -1,5 +1,6 @@
 use axum::{Json, Router, routing::get};
 use axum::extract::State;
+use axum::http::StatusCode;
 use nexus_lib::store::traits::{DbStatus, StateStore};
 use serde::Serialize;
 use std::sync::Arc;
@@ -33,12 +34,23 @@ pub struct AppState {
     pub store: Box<dyn StateStore + Send + Sync>,
 }
 
-async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let database = state.store.status().ok().map(DatabaseInfo::from);
-    Json(HealthResponse {
-        status: "ok".to_string(),
-        database,
-    })
+async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
+    match state.store.status() {
+        Ok(db_status) => (
+            StatusCode::OK,
+            Json(HealthResponse {
+                status: "ok".to_string(),
+                database: Some(DatabaseInfo::from(db_status)),
+            }),
+        ),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HealthResponse {
+                status: "degraded".to_string(),
+                database: None,
+            }),
+        ),
+    }
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -70,6 +82,16 @@ mod tests {
         fn close(&self) -> Result<(), StoreError> { Ok(()) }
     }
 
+    struct FailingStore;
+
+    impl StateStore for FailingStore {
+        fn init(&self) -> Result<(), StoreError> { Ok(()) }
+        fn status(&self) -> Result<DbStatus, StoreError> {
+            Err(StoreError::Query("disk I/O error".to_string()))
+        }
+        fn close(&self) -> Result<(), StoreError> { Ok(()) }
+    }
+
     #[tokio::test]
     async fn health_returns_ok_with_db_info() {
         let state = Arc::new(AppState {
@@ -93,5 +115,28 @@ mod tests {
         assert_eq!(json["database"]["path"], "/tmp/mock.db");
         assert_eq!(json["database"]["table_count"], 2);
         assert_eq!(json["database"]["size_bytes"], 8192);
+    }
+
+    #[tokio::test]
+    async fn health_returns_503_when_db_unhealthy() {
+        let state = Arc::new(AppState {
+            store: Box::new(FailingStore),
+        });
+        let app = router(state);
+
+        let response = app
+            .oneshot(Request::get("/v1/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "degraded");
+        assert!(json.get("database").is_none() || json["database"].is_null());
     }
 }

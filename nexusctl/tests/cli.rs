@@ -1,81 +1,24 @@
-use nix::sys::signal::{self, Signal};
-use nix::unistd::Pid;
-use std::process::{Child, Command};
-use std::time::Duration;
-
-/// Address used for nexusctl integration tests.
-/// Different from nexusd's integration test (port 9600) to avoid conflicts
-/// when running `cargo test --workspace`.
-const TEST_ADDR: &str = "127.0.0.1:9601";
-
-fn target_dir() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().expect("cannot get test binary path");
-    path.pop(); // remove cli-<hash>
-    path.pop(); // remove deps
-    path
-}
-
-fn start_daemon(db_path: &std::path::Path) -> Child {
-    let binary = target_dir().join("nexusd");
-    let config_yaml = format!("api:\n  listen: \"{TEST_ADDR}\"");
-    let config_path = std::env::temp_dir().join("nexusctl-test-config.yaml");
-    std::fs::write(&config_path, config_yaml).expect("failed to write test config");
-
-    Command::new(binary)
-        .env("RUST_LOG", "info")
-        .arg("--config")
-        .arg(&config_path)
-        .arg("--db")
-        .arg(db_path)
-        .spawn()
-        .expect("failed to start nexusd")
-}
-
-fn stop_daemon(child: &Child) {
-    signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM)
-        .expect("failed to send SIGTERM");
-}
+use nexus_lib::test_support::TestDaemon;
+use std::process::Command;
 
 #[tokio::test]
 async fn status_when_daemon_running() {
-    let tmp_dir = tempfile::tempdir().unwrap();
-    let db_path = tmp_dir.path().join("test.db");
-
-    let mut child = start_daemon(&db_path);
-
-    // Wait for daemon to be ready
-    let client = reqwest::Client::new();
-    let mut ready = false;
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if client
-            .get(format!("http://{TEST_ADDR}/v1/health"))
-            .send()
-            .await
-            .is_ok()
-        {
-            ready = true;
-            break;
-        }
-    }
-    assert!(ready, "daemon did not become ready within 5 seconds");
+    let daemon = TestDaemon::start().await;
 
     // Run nexusctl status
     let output = Command::new(env!("CARGO_BIN_EXE_nexusctl"))
-        .args(["--daemon", TEST_ADDR, "status"])
+        .args(["--daemon", &daemon.addr, "status"])
         .output()
         .expect("failed to run nexusctl");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "nexusctl status failed: {stdout}");
     assert!(stdout.contains("ok"), "expected 'ok' in output: {stdout}");
-    assert!(stdout.contains(TEST_ADDR), "expected address in output: {stdout}");
+    assert!(stdout.contains(&daemon.addr), "expected address in output: {stdout}");
     assert!(stdout.contains("Database:"), "expected database path in output: {stdout}");
     assert!(stdout.contains("Tables:"), "expected table count in output: {stdout}");
 
-    // Clean up
-    stop_daemon(&child);
-    child.wait().expect("failed to wait on daemon");
+    // TestDaemon sends SIGTERM and waits on drop
 }
 
 #[tokio::test]

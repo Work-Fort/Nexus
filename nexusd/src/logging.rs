@@ -6,6 +6,5 @@ pub fn init() {
 
     fmt()
         .with_env_filter(filter)
-        .without_time()
         .init();
 }

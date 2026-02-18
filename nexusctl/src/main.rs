@@ -5,6 +5,10 @@ use std::process::ExitCode;
 
 mod config;
 
+// Exit codes per CLI spec
+const EXIT_GENERAL_ERROR: u8 = 1;
+const EXIT_DAEMON_UNREACHABLE: u8 = 3;
+
 #[derive(Parser)]
 #[command(
     name = "nexusctl",
@@ -68,11 +72,11 @@ async fn cmd_status(daemon_addr: &str) -> ExitCode {
                  Start it: systemctl --user start nexus.service",
                 daemon_addr
             );
-            ExitCode::FAILURE
+            ExitCode::from(EXIT_DAEMON_UNREACHABLE)
         }
         Err(e) => {
             eprintln!("Error: {e}");
-            ExitCode::FAILURE
+            ExitCode::from(EXIT_GENERAL_ERROR)
         }
     }
 }

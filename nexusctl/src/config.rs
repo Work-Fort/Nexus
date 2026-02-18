@@ -28,7 +28,16 @@ pub fn default_config_path() -> PathBuf {
 pub fn load(path: impl AsRef<Path>) -> CtlConfig {
     let path = path.as_ref();
     match std::fs::read_to_string(path) {
-        Ok(content) => serde_norway::from_str(&content).unwrap_or_default(),
+        Ok(content) => match serde_norway::from_str(&content) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to parse config {}: {e}, using defaults",
+                    path.display()
+                );
+                CtlConfig::default()
+            }
+        },
         Err(_) => CtlConfig::default(),
     }
 }
