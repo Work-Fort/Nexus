@@ -1,7 +1,8 @@
-use axum::{Json, Router, routing::get};
-use axum::extract::State;
+use axum::{Json, Router, routing::{get, post}};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use nexus_lib::store::traits::{DbStatus, StateStore};
+use nexus_lib::store::traits::{DbStatus, StateStore, StoreError};
+use nexus_lib::vm::CreateVmParams;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -53,9 +54,82 @@ async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthR
     }
 }
 
+async fn create_vm(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<CreateVmParams>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.create_vm(&params) {
+        Ok(vm) => (StatusCode::CREATED, Json(serde_json::to_value(vm).unwrap())),
+        Err(StoreError::Conflict(msg)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn list_vms(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let role = query.get("role").map(|s| s.as_str());
+    let vm_state = query.get("state").map(|s| s.as_str());
+
+    match state.store.list_vms(role, vm_state) {
+        Ok(vms) => (StatusCode::OK, Json(serde_json::to_value(vms).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn get_vm(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => (StatusCode::OK, Json(serde_json::to_value(vm).unwrap())),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn delete_vm(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.delete_vm(&name_or_id) {
+        Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
+        ),
+        Err(StoreError::Conflict(msg)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/vms", post(create_vm).get(list_vms))
+        .route("/v1/vms/{name_or_id}", get(get_vm).delete(delete_vm))
         .with_state(state)
 }
 
@@ -64,6 +138,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use nexus_lib::store::sqlite::SqliteStore;
     use nexus_lib::store::traits::StoreError;
     use nexus_lib::vm::{CreateVmParams, Vm};
     use tower::ServiceExt;
@@ -163,5 +238,195 @@ mod tests {
 
         assert_eq!(json["status"], "degraded");
         assert!(json.get("database").is_none() || json["database"].is_null());
+    }
+
+    fn test_state() -> Arc<AppState> {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+        // Leak the tempdir so it lives long enough
+        std::mem::forget(dir);
+        Arc::new(AppState {
+            store: Box::new(store),
+        })
+    }
+
+    #[tokio::test]
+    async fn create_vm_returns_201() {
+        let state = test_state();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::post("/v1/vms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "test-vm"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "test-vm");
+        assert_eq!(json["state"], "created");
+        assert_eq!(json["role"], "work");
+        assert_eq!(json["cid"], 3);
+    }
+
+    #[tokio::test]
+    async fn create_vm_duplicate_returns_409() {
+        let state = test_state();
+        let app = router(state.clone());
+
+        // Create first
+        app.clone()
+            .oneshot(
+                Request::post("/v1/vms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "dup"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Create duplicate
+        let response = router(state)
+            .oneshot(
+                Request::post("/v1/vms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "dup"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn list_vms_returns_array() {
+        let state = test_state();
+
+        // Create a VM first
+        router(state.clone())
+            .oneshot(
+                Request::post("/v1/vms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "list-me"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = router(state)
+            .oneshot(Request::get("/v1/vms").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["name"], "list-me");
+    }
+
+    #[tokio::test]
+    async fn get_vm_returns_detail() {
+        let state = test_state();
+
+        router(state.clone())
+            .oneshot(
+                Request::post("/v1/vms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "detail-vm"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = router(state)
+            .oneshot(
+                Request::get("/v1/vms/detail-vm")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "detail-vm");
+    }
+
+    #[tokio::test]
+    async fn get_vm_not_found_returns_404() {
+        let state = test_state();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::get("/v1/vms/nonexistent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_vm_returns_204() {
+        let state = test_state();
+
+        router(state.clone())
+            .oneshot(
+                Request::post("/v1/vms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "doomed"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = router(state)
+            .oneshot(
+                Request::delete("/v1/vms/doomed")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn delete_vm_not_found_returns_404() {
+        let state = test_state();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::delete("/v1/vms/ghost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
