@@ -1,4 +1,5 @@
 use crate::vm::{CreateVmParams, Vm};
+use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 
 /// Information about the database for status reporting.
 #[derive(Debug, Clone)]
@@ -67,6 +68,43 @@ pub trait StateStore {
     /// Delete a VM by name or ID. Returns true if a record was deleted.
     /// Refuses to delete VMs in the `running` state (returns StoreError).
     fn delete_vm(&self, name_or_id: &str) -> Result<bool, StoreError>;
+
+    // --- Master Image methods ---
+
+    /// Register a master image in the database.
+    fn create_image(&self, params: &ImportImageParams, subvolume_path: &str) -> Result<MasterImage, StoreError>;
+
+    /// List all master images.
+    fn list_images(&self) -> Result<Vec<MasterImage>, StoreError>;
+
+    /// Get a master image by name or ID.
+    fn get_image(&self, name_or_id: &str) -> Result<Option<MasterImage>, StoreError>;
+
+    /// Delete a master image by name or ID.
+    /// Returns true if deleted, false if not found.
+    /// Fails with Conflict if workspaces reference this image.
+    fn delete_image(&self, name_or_id: &str) -> Result<bool, StoreError>;
+
+    // --- Workspace methods ---
+
+    /// Register a workspace in the database.
+    fn create_workspace(
+        &self,
+        name: Option<&str>,
+        subvolume_path: &str,
+        master_image_id: &str,
+    ) -> Result<Workspace, StoreError>;
+
+    /// List all workspaces, optionally filtered by master image name.
+    fn list_workspaces(&self, base: Option<&str>) -> Result<Vec<Workspace>, StoreError>;
+
+    /// Get a workspace by name or ID.
+    fn get_workspace(&self, name_or_id: &str) -> Result<Option<Workspace>, StoreError>;
+
+    /// Delete a workspace by name or ID.
+    /// Returns true if deleted, false if not found.
+    /// Fails with Conflict if workspace is attached to a VM.
+    fn delete_workspace(&self, name_or_id: &str) -> Result<bool, StoreError>;
 }
 
 #[cfg(test)]

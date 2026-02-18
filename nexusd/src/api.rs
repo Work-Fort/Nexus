@@ -141,6 +141,7 @@ mod tests {
     use nexus_lib::store::sqlite::SqliteStore;
     use nexus_lib::store::traits::StoreError;
     use nexus_lib::vm::{CreateVmParams, Vm};
+    use nexus_lib::workspace::{ImportImageParams, MasterImage, Workspace};
     use tower::ServiceExt;
 
     /// A mock store for testing the health endpoint without SQLite.
@@ -168,6 +169,30 @@ mod tests {
         fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+        fn create_image(&self, _params: &ImportImageParams, _subvolume_path: &str) -> Result<MasterImage, StoreError> {
+            unimplemented!()
+        }
+        fn list_images(&self) -> Result<Vec<MasterImage>, StoreError> {
+            unimplemented!()
+        }
+        fn get_image(&self, _name_or_id: &str) -> Result<Option<MasterImage>, StoreError> {
+            unimplemented!()
+        }
+        fn delete_image(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
+        fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: &str) -> Result<Workspace, StoreError> {
+            unimplemented!()
+        }
+        fn list_workspaces(&self, _base: Option<&str>) -> Result<Vec<Workspace>, StoreError> {
+            unimplemented!()
+        }
+        fn get_workspace(&self, _name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
+            unimplemented!()
+        }
+        fn delete_workspace(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
     }
 
     struct FailingStore;
@@ -188,6 +213,30 @@ mod tests {
             unimplemented!()
         }
         fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
+        fn create_image(&self, _params: &ImportImageParams, _subvolume_path: &str) -> Result<MasterImage, StoreError> {
+            unimplemented!()
+        }
+        fn list_images(&self) -> Result<Vec<MasterImage>, StoreError> {
+            unimplemented!()
+        }
+        fn get_image(&self, _name_or_id: &str) -> Result<Option<MasterImage>, StoreError> {
+            unimplemented!()
+        }
+        fn delete_image(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
+        fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: &str) -> Result<Workspace, StoreError> {
+            unimplemented!()
+        }
+        fn list_workspaces(&self, _base: Option<&str>) -> Result<Vec<Workspace>, StoreError> {
+            unimplemented!()
+        }
+        fn get_workspace(&self, _name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
+            unimplemented!()
+        }
+        fn delete_workspace(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
     }

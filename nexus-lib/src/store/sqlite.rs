@@ -1,6 +1,7 @@
 use crate::store::schema::{SCHEMA_SQL, SCHEMA_VERSION};
 use crate::store::traits::{DbStatus, StateStore, StoreError};
 use crate::vm::{CreateVmParams, Vm, VmState};
+use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -292,6 +293,207 @@ impl StateStore for SqliteStore {
 
         Ok(deleted > 0)
     }
+
+    fn create_image(&self, params: &ImportImageParams, subvolume_path: &str) -> Result<MasterImage, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let id = Uuid::new_v4().to_string();
+
+        conn.execute(
+            "INSERT INTO master_images (id, name, subvolume_path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, params.name, subvolume_path],
+        )
+        .map_err(|e| {
+            if let rusqlite::Error::SqliteFailure(err, _) = &e {
+                if err.code == rusqlite::ErrorCode::ConstraintViolation {
+                    return StoreError::Conflict(format!("image name '{}' already exists", params.name));
+                }
+            }
+            StoreError::Query(format!("cannot insert image: {e}"))
+        })?;
+
+        drop(conn);
+        self.get_image(&id)?
+            .ok_or_else(|| StoreError::Query("image not found after insert".to_string()))
+    }
+
+    fn list_images(&self) -> Result<Vec<MasterImage>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, subvolume_path, size_bytes, created_at FROM master_images ORDER BY created_at DESC")
+            .map_err(|e| StoreError::Query(format!("cannot prepare image list query: {e}")))?;
+
+        let images = stmt
+            .query_map([], |row| Ok(row_to_image(row)))
+            .map_err(|e| StoreError::Query(format!("cannot list images: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Query(format!("cannot read image row: {e}")))?;
+
+        Ok(images)
+    }
+
+    fn get_image(&self, name_or_id: &str) -> Result<Option<MasterImage>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, subvolume_path, size_bytes, created_at FROM master_images WHERE id = ?1 OR name = ?1")
+            .map_err(|e| StoreError::Query(format!("cannot prepare image get query: {e}")))?;
+
+        let mut rows = stmt
+            .query_map([name_or_id], |row| Ok(row_to_image(row)))
+            .map_err(|e| StoreError::Query(format!("cannot get image: {e}")))?;
+
+        match rows.next() {
+            Some(Ok(img)) => Ok(Some(img)),
+            Some(Err(e)) => Err(StoreError::Query(format!("cannot read image row: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    fn delete_image(&self, name_or_id: &str) -> Result<bool, StoreError> {
+        let image = match self.get_image(name_or_id)? {
+            Some(img) => img,
+            None => return Ok(false),
+        };
+
+        // Check for workspaces referencing this image
+        let conn = self.conn.lock().unwrap();
+        let ws_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspaces WHERE master_image_id = ?1",
+                [&image.id],
+                |row| row.get(0),
+            )
+            .map_err(|e| StoreError::Query(format!("cannot check workspace references: {e}")))?;
+
+        if ws_count > 0 {
+            return Err(StoreError::Conflict(format!(
+                "cannot delete image '{}': {} workspace(s) reference it, delete them first",
+                image.name, ws_count
+            )));
+        }
+
+        let deleted = conn
+            .execute(
+                "DELETE FROM master_images WHERE id = ?1",
+                [&image.id],
+            )
+            .map_err(|e| StoreError::Query(format!("cannot delete image: {e}")))?;
+
+        Ok(deleted > 0)
+    }
+
+    fn create_workspace(
+        &self,
+        name: Option<&str>,
+        subvolume_path: &str,
+        master_image_id: &str,
+    ) -> Result<Workspace, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let id = Uuid::new_v4().to_string();
+
+        conn.execute(
+            "INSERT INTO workspaces (id, name, subvolume_path, master_image_id) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, name, subvolume_path, master_image_id],
+        )
+        .map_err(|e| {
+            if let rusqlite::Error::SqliteFailure(err, _) = &e {
+                if err.code == rusqlite::ErrorCode::ConstraintViolation {
+                    return StoreError::Conflict(format!(
+                        "workspace name '{}' already exists",
+                        name.unwrap_or("(unnamed)")
+                    ));
+                }
+            }
+            StoreError::Query(format!("cannot insert workspace: {e}"))
+        })?;
+
+        drop(conn);
+        self.get_workspace(&id)?
+            .ok_or_else(|| StoreError::Query("workspace not found after insert".to_string()))
+    }
+
+    fn list_workspaces(&self, base: Option<&str>) -> Result<Vec<Workspace>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match base {
+            Some(base_name) => {
+                (
+                    "SELECT w.id, w.name, w.vm_id, w.subvolume_path, w.master_image_id, \
+                     w.parent_workspace_id, w.size_bytes, w.is_root_device, w.is_read_only, \
+                     w.attached_at, w.detached_at, w.created_at \
+                     FROM workspaces w \
+                     JOIN master_images m ON w.master_image_id = m.id \
+                     WHERE m.name = ? \
+                     ORDER BY w.created_at DESC".to_string(),
+                    vec![Box::new(base_name.to_string()) as Box<dyn rusqlite::types::ToSql>],
+                )
+            }
+            None => {
+                (
+                    "SELECT id, name, vm_id, subvolume_path, master_image_id, \
+                     parent_workspace_id, size_bytes, is_root_device, is_read_only, \
+                     attached_at, detached_at, created_at \
+                     FROM workspaces ORDER BY created_at DESC".to_string(),
+                    vec![],
+                )
+            }
+        };
+
+        let mut stmt = conn.prepare(&sql)
+            .map_err(|e| StoreError::Query(format!("cannot prepare workspace list query: {e}")))?;
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let workspaces = stmt
+            .query_map(param_refs.as_slice(), |row| Ok(row_to_workspace(row)))
+            .map_err(|e| StoreError::Query(format!("cannot list workspaces: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Query(format!("cannot read workspace row: {e}")))?;
+
+        Ok(workspaces)
+    }
+
+    fn get_workspace(&self, name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, vm_id, subvolume_path, master_image_id, \
+                 parent_workspace_id, size_bytes, is_root_device, is_read_only, \
+                 attached_at, detached_at, created_at \
+                 FROM workspaces WHERE id = ?1 OR name = ?1",
+            )
+            .map_err(|e| StoreError::Query(format!("cannot prepare workspace get query: {e}")))?;
+
+        let mut rows = stmt
+            .query_map([name_or_id], |row| Ok(row_to_workspace(row)))
+            .map_err(|e| StoreError::Query(format!("cannot get workspace: {e}")))?;
+
+        match rows.next() {
+            Some(Ok(ws)) => Ok(Some(ws)),
+            Some(Err(e)) => Err(StoreError::Query(format!("cannot read workspace row: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    fn delete_workspace(&self, name_or_id: &str) -> Result<bool, StoreError> {
+        let ws = match self.get_workspace(name_or_id)? {
+            Some(ws) => ws,
+            None => return Ok(false),
+        };
+
+        // Cannot delete workspace attached to a VM
+        if ws.vm_id.is_some() {
+            return Err(StoreError::Conflict(format!(
+                "cannot delete workspace '{}': attached to VM, detach it first",
+                ws.name.as_deref().unwrap_or(&ws.id)
+            )));
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn
+            .execute("DELETE FROM workspaces WHERE id = ?1", [&ws.id])
+            .map_err(|e| StoreError::Query(format!("cannot delete workspace: {e}")))?;
+
+        Ok(deleted > 0)
+    }
 }
 
 /// Map a rusqlite row to a Vm struct.
@@ -319,10 +521,38 @@ fn row_to_vm(row: &rusqlite::Row) -> Vm {
     }
 }
 
+fn row_to_image(row: &rusqlite::Row) -> MasterImage {
+    MasterImage {
+        id: row.get(0).unwrap(),
+        name: row.get(1).unwrap(),
+        subvolume_path: row.get(2).unwrap(),
+        size_bytes: row.get(3).unwrap(),
+        created_at: row.get(4).unwrap(),
+    }
+}
+
+fn row_to_workspace(row: &rusqlite::Row) -> Workspace {
+    Workspace {
+        id: row.get(0).unwrap(),
+        name: row.get(1).unwrap(),
+        vm_id: row.get(2).unwrap(),
+        subvolume_path: row.get(3).unwrap(),
+        master_image_id: row.get(4).unwrap(),
+        parent_workspace_id: row.get(5).unwrap(),
+        size_bytes: row.get(6).unwrap(),
+        is_root_device: row.get::<_, i32>(7).unwrap() != 0,
+        is_read_only: row.get::<_, i32>(8).unwrap() != 0,
+        attached_at: row.get(9).unwrap(),
+        detached_at: row.get(10).unwrap(),
+        created_at: row.get(11).unwrap(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vm::VmRole;
+    use crate::workspace::ImportImageParams;
 
     #[test]
     fn open_creates_new_database() {
@@ -695,5 +925,205 @@ mod tests {
             mem_size_mib: 128,
         }).unwrap();
         assert!(vm2.cid >= 3);
+    }
+
+    #[test]
+    fn create_image_and_get_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let params = ImportImageParams {
+            name: "base-agent".to_string(),
+            source_path: "/tmp/rootfs".to_string(),
+        };
+        let img = store.create_image(&params, "/data/workspaces/@base-agent").unwrap();
+
+        assert!(!img.id.is_empty());
+        assert_eq!(img.name, "base-agent");
+        assert_eq!(img.subvolume_path, "/data/workspaces/@base-agent");
+
+        let found = store.get_image("base-agent").unwrap().unwrap();
+        assert_eq!(found.id, img.id);
+    }
+
+    #[test]
+    fn create_image_duplicate_name_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let params = ImportImageParams {
+            name: "dup-img".to_string(),
+            source_path: "/tmp/a".to_string(),
+        };
+        store.create_image(&params, "/data/a").unwrap();
+        let result = store.create_image(&params, "/data/b");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_images_returns_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        store.create_image(
+            &ImportImageParams { name: "img-a".to_string(), source_path: "/a".to_string() },
+            "/data/a",
+        ).unwrap();
+        store.create_image(
+            &ImportImageParams { name: "img-b".to_string(), source_path: "/b".to_string() },
+            "/data/b",
+        ).unwrap();
+
+        let imgs = store.list_images().unwrap();
+        assert_eq!(imgs.len(), 2);
+    }
+
+    #[test]
+    fn delete_image_removes_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        store.create_image(
+            &ImportImageParams { name: "del-me".to_string(), source_path: "/a".to_string() },
+            "/data/del-me",
+        ).unwrap();
+
+        let deleted = store.delete_image("del-me").unwrap();
+        assert!(deleted);
+        assert!(store.get_image("del-me").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_image_not_found_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        assert!(!store.delete_image("ghost").unwrap());
+    }
+
+    #[test]
+    fn delete_image_with_workspaces_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let img = store.create_image(
+            &ImportImageParams { name: "base".to_string(), source_path: "/a".to_string() },
+            "/data/base",
+        ).unwrap();
+
+        store.create_workspace(Some("ws-1"), "/data/ws-1", &img.id).unwrap();
+
+        let result = store.delete_image("base");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn create_workspace_and_get_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let img = store.create_image(
+            &ImportImageParams { name: "base".to_string(), source_path: "/a".to_string() },
+            "/data/base",
+        ).unwrap();
+
+        let ws = store.create_workspace(Some("my-ws"), "/data/my-ws", &img.id).unwrap();
+
+        assert!(!ws.id.is_empty());
+        assert_eq!(ws.name, Some("my-ws".to_string()));
+        assert_eq!(ws.master_image_id, Some(img.id.clone()));
+
+        let found = store.get_workspace("my-ws").unwrap().unwrap();
+        assert_eq!(found.id, ws.id);
+    }
+
+    #[test]
+    fn create_workspace_auto_generates_name_when_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let img = store.create_image(
+            &ImportImageParams { name: "base".to_string(), source_path: "/a".to_string() },
+            "/data/base",
+        ).unwrap();
+
+        let ws = store.create_workspace(None, "/data/anon-ws", &img.id).unwrap();
+        assert!(ws.name.is_none());
+    }
+
+    #[test]
+    fn list_workspaces_returns_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let img = store.create_image(
+            &ImportImageParams { name: "base".to_string(), source_path: "/a".to_string() },
+            "/data/base",
+        ).unwrap();
+
+        store.create_workspace(Some("ws-a"), "/data/ws-a", &img.id).unwrap();
+        store.create_workspace(Some("ws-b"), "/data/ws-b", &img.id).unwrap();
+
+        let wss = store.list_workspaces(None).unwrap();
+        assert_eq!(wss.len(), 2);
+    }
+
+    #[test]
+    fn list_workspaces_filter_by_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let img_a = store.create_image(
+            &ImportImageParams { name: "base-a".to_string(), source_path: "/a".to_string() },
+            "/data/base-a",
+        ).unwrap();
+        let img_b = store.create_image(
+            &ImportImageParams { name: "base-b".to_string(), source_path: "/b".to_string() },
+            "/data/base-b",
+        ).unwrap();
+
+        store.create_workspace(Some("ws-a"), "/data/ws-a", &img_a.id).unwrap();
+        store.create_workspace(Some("ws-b"), "/data/ws-b", &img_b.id).unwrap();
+
+        let wss = store.list_workspaces(Some("base-a")).unwrap();
+        assert_eq!(wss.len(), 1);
+        assert_eq!(wss[0].name, Some("ws-a".to_string()));
+    }
+
+    #[test]
+    fn delete_workspace_removes_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let img = store.create_image(
+            &ImportImageParams { name: "base".to_string(), source_path: "/a".to_string() },
+            "/data/base",
+        ).unwrap();
+
+        store.create_workspace(Some("del-ws"), "/data/del-ws", &img.id).unwrap();
+
+        let deleted = store.delete_workspace("del-ws").unwrap();
+        assert!(deleted);
+        assert!(store.get_workspace("del-ws").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_workspace_not_found_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        assert!(!store.delete_workspace("ghost").unwrap());
     }
 }
