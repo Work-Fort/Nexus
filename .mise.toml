@@ -1,9 +1,41 @@
 [tools]
 rust = "latest"
 
+[tasks.build]
+description = "Build all crates (debug)"
+run = "cargo build"
+
 [tasks."build:release"]
-description = "Build nexusd in release mode"
+description = "Build all crates (release)"
 run = "cargo build --release"
+
+[tasks.test]
+description = "Run all workspace tests"
+run = "cargo test --workspace"
+
+[tasks."test:unit"]
+description = "Run unit tests only (no integration tests)"
+run = "cargo test --workspace --lib"
+
+[tasks."test:lib"]
+description = "Run tests for nexus-lib"
+run = "cargo test -p nexus-lib"
+
+[tasks."test:nexusd"]
+description = "Run tests for nexusd"
+run = "cargo test -p nexusd"
+
+[tasks.run]
+description = "Run nexusd (debug build)"
+run = "cargo run -p nexusd"
+
+[tasks.check]
+description = "Check all crates for errors without building"
+run = "cargo check --workspace"
+
+[tasks.clippy]
+description = "Run clippy lints"
+run = "cargo clippy --workspace"
 
 [tasks."install:release"]
 description = "Build release and install nexusd + systemd unit"
