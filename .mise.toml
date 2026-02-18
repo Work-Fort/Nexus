@@ -27,7 +27,11 @@ run = "cargo test -p nexusd"
 
 [tasks.run]
 description = "Run nexusd (debug build)"
-run = "cargo run -p nexusd"
+run = "cargo run -p nexusd --"
+
+[tasks."run:nexusctl"]
+description = "Run nexusctl (debug build)"
+run = "cargo run -p nexusctl --"
 
 [tasks.check]
 description = "Check all crates for errors without building"
@@ -37,13 +41,55 @@ run = "cargo check --workspace"
 description = "Run clippy lints"
 run = "cargo clippy --workspace"
 
-[tasks."install:release"]
-description = "Build release and install nexusd + systemd unit"
-depends = ["build:release"]
+# nexusd install tasks
+[tasks."install:nexusd:debug"]
+description = "Install nexusd debug build + systemd unit"
+depends = ["build"]
 run = """
-cp target/release/nexusd ~/.cargo/bin/
+mkdir -p ~/.local/bin
+cp target/debug/nexusd ~/.local/bin/
 mkdir -p ~/.config/systemd/user
 cp dist/nexus.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-echo "Installed nexusd to ~/.cargo/bin/ and nexus.service to ~/.config/systemd/user/"
+echo "Installed nexusd (debug) to ~/.local/bin/ and nexus.service"
 """
+
+[tasks."install:nexusd:release"]
+description = "Install nexusd release build + systemd unit"
+depends = ["build:release"]
+run = """
+mkdir -p ~/.local/bin
+cp target/release/nexusd ~/.local/bin/
+mkdir -p ~/.config/systemd/user
+cp dist/nexus.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+echo "Installed nexusd (release) to ~/.local/bin/ and nexus.service"
+"""
+
+# nexusctl install tasks
+[tasks."install:nexusctl:debug"]
+description = "Install nexusctl debug build"
+depends = ["build"]
+run = """
+mkdir -p ~/.local/bin
+cp target/debug/nexusctl ~/.local/bin/
+echo "Installed nexusctl (debug) to ~/.local/bin/"
+"""
+
+[tasks."install:nexusctl:release"]
+description = "Install nexusctl release build"
+depends = ["build:release"]
+run = """
+mkdir -p ~/.local/bin
+cp target/release/nexusctl ~/.local/bin/
+echo "Installed nexusctl (release) to ~/.local/bin/"
+"""
+
+# Aggregate install tasks
+[tasks."install:release"]
+description = "Install all binaries (release) + systemd unit"
+depends = ["install:nexusd:release", "install:nexusctl:release"]
+
+[tasks."install:debug"]
+description = "Install all binaries (debug) + systemd unit"
+depends = ["install:nexusd:debug", "install:nexusctl:debug"]

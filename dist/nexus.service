@@ -3,7 +3,7 @@ Description=WorkFort Nexus Daemon
 
 [Service]
 Type=exec
-ExecStart=%h/.cargo/bin/nexusd
+ExecStart=%h/.local/bin/nexusd
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
