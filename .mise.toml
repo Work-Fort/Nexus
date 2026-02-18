@@ -1,2 +1,17 @@
 [tools]
 rust = "latest"
+
+[tasks."build:release"]
+description = "Build nexusd in release mode"
+run = "cargo build --release"
+
+[tasks."install:release"]
+description = "Build release and install nexusd + systemd unit"
+depends = ["build:release"]
+run = """
+cp target/release/nexusd ~/.cargo/bin/
+mkdir -p ~/.config/systemd/user
+cp dist/nexus.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+echo "Installed nexusd to ~/.cargo/bin/ and nexus.service to ~/.config/systemd/user/"
+"""
