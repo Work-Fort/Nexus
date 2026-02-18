@@ -1,5 +1,50 @@
-mod api;
+use clap::Parser;
+use nexus_lib::config::{self, Config};
+use tracing::{error, info};
 
-fn main() {
-    println!("nexusd");
+mod api;
+mod logging;
+mod server;
+
+#[derive(Parser)]
+#[command(name = "nexusd", about = "WorkFort Nexus daemon")]
+struct Cli {
+    /// Path to configuration file
+    /// [default: $XDG_CONFIG_HOME/nexus/nexus.yaml]
+    #[arg(long)]
+    config: Option<String>,
+}
+
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+
+    logging::init();
+
+    let config_path = cli
+        .config
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(config::default_config_path);
+
+    let config = match Config::load(&config_path) {
+        Ok(config) => {
+            info!(config_path = %config_path.display(), "loaded configuration");
+            config
+        }
+        Err(e) if e.is_not_found() => {
+            info!("no config file found, using defaults");
+            Config::default()
+        }
+        Err(e) => {
+            error!(error = %e, path = %config_path.display(), "invalid configuration file");
+            std::process::exit(1);
+        }
+    };
+
+    info!("nexusd starting");
+
+    if let Err(e) = server::run(&config).await {
+        error!(error = %e, "daemon failed");
+        std::process::exit(1);
+    }
 }
