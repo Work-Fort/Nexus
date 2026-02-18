@@ -25,6 +25,10 @@ run = "cargo test -p nexus-lib"
 description = "Run tests for nexusd"
 run = "cargo test -p nexusd"
 
+[tasks."test:nexusctl"]
+description = "Run tests for nexusctl"
+run = "cargo test -p nexusctl"
+
 [tasks.run]
 description = "Run nexusd (debug build)"
 run = "cargo run -p nexusd --"
