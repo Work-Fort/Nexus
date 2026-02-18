@@ -10,6 +10,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_norway = "0.9"
 dirs = "6"
+chrono = "0.4"
 
 [dev-dependencies]
 nexus-lib = { path = "../nexus-lib", features = ["test-support"] }
