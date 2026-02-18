@@ -28,6 +28,14 @@ impl ClientError {
 #[derive(Debug, Clone, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
+    pub database: Option<DatabaseInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatabaseInfo {
+    pub path: String,
+    pub table_count: usize,
+    pub size_bytes: Option<u64>,
 }
 
 pub struct NexusClient {
@@ -85,6 +93,25 @@ mod tests {
     fn client_with_custom_addr() {
         let client = NexusClient::new("10.0.0.1:8080");
         assert_eq!(client.base_url(), "http://10.0.0.1:8080");
+    }
+
+    #[test]
+    fn health_response_with_database_deserializes() {
+        let json = r#"{"status":"ok","database":{"path":"/tmp/test.db","table_count":2,"size_bytes":8192}}"#;
+        let resp: HealthResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.status, "ok");
+        let db = resp.database.unwrap();
+        assert_eq!(db.path, "/tmp/test.db");
+        assert_eq!(db.table_count, 2);
+        assert_eq!(db.size_bytes, Some(8192));
+    }
+
+    #[test]
+    fn health_response_without_database_deserializes() {
+        let json = r#"{"status":"ok"}"#;
+        let resp: HealthResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.status, "ok");
+        assert!(resp.database.is_none());
     }
 
     #[tokio::test]

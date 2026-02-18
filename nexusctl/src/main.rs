@@ -52,6 +52,13 @@ async fn cmd_status(daemon_addr: &str) -> ExitCode {
     match client.health().await {
         Ok(resp) => {
             println!("Daemon: {} ({})", resp.status, daemon_addr);
+            if let Some(db) = resp.database {
+                println!("Database: {}", db.path);
+                println!("  Tables: {}", db.table_count);
+                if let Some(size) = db.size_bytes {
+                    println!("  Size:   {} bytes", size);
+                }
+            }
             ExitCode::SUCCESS
         }
         Err(e) if e.is_connect() => {
