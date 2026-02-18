@@ -344,8 +344,8 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        // Expected tables: schema_meta, settings, vms = 3 tables
-        assert_eq!(status.table_count, 3, "expected 3 tables, got {}", status.table_count);
+        // Expected tables: schema_meta, settings, vms, master_images, workspaces = 5 tables
+        assert_eq!(status.table_count, 5, "expected 5 tables, got {}", status.table_count);
     }
 
     #[test]
@@ -359,7 +359,7 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 3);
+        assert_eq!(status.table_count, 5);
     }
 
     #[test]
@@ -423,7 +423,7 @@ mod tests {
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 3, "should have all tables after recreate");
+        assert_eq!(status.table_count, 5, "should have all tables after recreate");
 
         let conn = store.conn.lock().unwrap();
         let version: String = conn
