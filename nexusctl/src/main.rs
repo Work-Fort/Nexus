@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use nexus_lib::client::NexusClient;
 use nexus_lib::vm::{CreateVmParams, VmRole};
+use nexus_lib::workspace::{CreateWorkspaceParams, ImportImageParams};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -42,6 +43,17 @@ enum Commands {
     Vm {
         #[command(subcommand)]
         action: VmAction,
+    },
+    /// Manage master images
+    Image {
+        #[command(subcommand)]
+        action: ImageAction,
+    },
+    /// Manage workspaces (alias: workspace)
+    #[command(alias = "workspace")]
+    Ws {
+        #[command(subcommand)]
+        action: WsAction,
     },
 }
 
@@ -85,6 +97,65 @@ enum VmAction {
     },
 }
 
+#[derive(Subcommand)]
+enum ImageAction {
+    /// List all master images
+    List,
+    /// Import a directory as a master image
+    Import {
+        /// Path to directory to import
+        path: String,
+        /// Name for the image
+        #[arg(long)]
+        name: String,
+    },
+    /// Show image details
+    Inspect {
+        /// Image name or ID
+        name: String,
+    },
+    /// Delete a master image
+    Delete {
+        /// Image name or ID
+        name: String,
+        /// Skip confirmation
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum WsAction {
+    /// List all workspaces
+    List {
+        /// Filter by base image name
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// Create a workspace from a master image
+    Create {
+        /// Workspace name
+        #[arg(long)]
+        name: Option<String>,
+        /// Base image name
+        #[arg(long)]
+        base: String,
+    },
+    /// Show workspace details
+    Inspect {
+        /// Workspace name or ID
+        name: String,
+    },
+    /// Delete a workspace
+    Delete {
+        /// Workspace name or ID
+        name: String,
+        /// Skip confirmation
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -97,6 +168,8 @@ async fn main() -> ExitCode {
         Commands::Status => cmd_status(&daemon_addr).await,
         Commands::Version => cmd_version(&daemon_addr).await,
         Commands::Vm { action } => cmd_vm(&daemon_addr, action).await,
+        Commands::Image { action } => cmd_image(&daemon_addr, action).await,
+        Commands::Ws { action } => cmd_ws(&daemon_addr, action).await,
     }
 }
 
@@ -263,6 +336,232 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("Error: cannot delete VM \"{}\"\n  {e}", name);
+                    ExitCode::from(EXIT_CONFLICT)
+                }
+            }
+        }
+    }
+}
+
+async fn cmd_image(daemon_addr: &str, action: ImageAction) -> ExitCode {
+    let client = NexusClient::new(daemon_addr);
+
+    match action {
+        ImageAction::List => {
+            match client.list_images().await {
+                Ok(imgs) => {
+                    if imgs.is_empty() {
+                        println!("No images found.");
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<20} {:<50}", "NAME", "PATH");
+                    for img in &imgs {
+                        println!("{:<20} {:<50}", img.name, img.subvolume_path);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        ImageAction::Import { path, name } => {
+            let params = ImportImageParams {
+                name: name.clone(),
+                source_path: path.clone(),
+            };
+            match client.import_image(&params).await {
+                Ok(img) => {
+                    println!("Imported image \"{}\"", img.name);
+                    println!("  Path: {}", img.subvolume_path);
+                    println!("\n  Create a workspace: nexusctl ws create --base {} --name my-ws", img.name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot import image \"{name}\"\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        ImageAction::Inspect { name } => {
+            match client.get_image(&name).await {
+                Ok(Some(img)) => {
+                    println!("Name:       {}", img.name);
+                    println!("ID:         {}", img.id);
+                    println!("Path:       {}", img.subvolume_path);
+                    if let Some(size) = img.size_bytes {
+                        println!("Size:       {} bytes", size);
+                    }
+                    println!("Created:    {}", format_timestamp(img.created_at));
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    eprintln!("Error: image \"{}\" not found", name);
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        ImageAction::Delete { name, yes } => {
+            if !yes {
+                eprintln!(
+                    "Error: refusing to delete image without confirmation\n  \
+                     Run with --yes to skip confirmation: nexusctl image delete {} --yes",
+                    name
+                );
+                return ExitCode::from(EXIT_GENERAL_ERROR);
+            }
+            match client.delete_image(&name).await {
+                Ok(true) => {
+                    println!("Deleted image \"{}\"", name);
+                    ExitCode::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!("Error: image \"{}\" not found", name);
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot delete image \"{}\"\n  {e}", name);
+                    ExitCode::from(EXIT_CONFLICT)
+                }
+            }
+        }
+    }
+}
+
+async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
+    let client = NexusClient::new(daemon_addr);
+
+    match action {
+        WsAction::List { base } => {
+            match client.list_workspaces(base.as_deref()).await {
+                Ok(wss) => {
+                    if wss.is_empty() {
+                        println!("No workspaces found.");
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<20} {:<50} {:<10}", "NAME", "PATH", "READ-ONLY");
+                    for ws in &wss {
+                        let name = ws.name.as_deref().unwrap_or("(unnamed)");
+                        let ro = if ws.is_read_only { "yes" } else { "no" };
+                        println!("{:<20} {:<50} {:<10}", name, ws.subvolume_path, ro);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        WsAction::Create { name, base } => {
+            let params = CreateWorkspaceParams {
+                name: name.clone(),
+                base: base.clone(),
+            };
+            match client.create_workspace(&params).await {
+                Ok(ws) => {
+                    let ws_name = ws.name.as_deref().unwrap_or(&ws.id);
+                    println!("Created workspace \"{}\" from base \"{}\"", ws_name, base);
+                    println!("  Path: {}", ws.subvolume_path);
+                    println!("\n  Inspect it: nexusctl ws inspect {}", ws_name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create workspace\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        WsAction::Inspect { name } => {
+            match client.get_workspace(&name).await {
+                Ok(Some(ws)) => {
+                    let ws_name = ws.name.as_deref().unwrap_or("(unnamed)");
+                    println!("Name:       {}", ws_name);
+                    println!("ID:         {}", ws.id);
+                    println!("Path:       {}", ws.subvolume_path);
+                    if let Some(ref img_id) = ws.master_image_id {
+                        println!("Base Image: {}", img_id);
+                    }
+                    if let Some(ref vm_id) = ws.vm_id {
+                        println!("Attached:   VM {}", vm_id);
+                    } else {
+                        println!("Attached:   (none)");
+                    }
+                    println!("Read-Only:  {}", if ws.is_read_only { "yes" } else { "no" });
+                    println!("Root Dev:   {}", if ws.is_root_device { "yes" } else { "no" });
+                    if let Some(size) = ws.size_bytes {
+                        println!("Size:       {} bytes", size);
+                    }
+                    println!("Created:    {}", format_timestamp(ws.created_at));
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    eprintln!("Error: workspace \"{}\" not found", name);
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        WsAction::Delete { name, yes } => {
+            if !yes {
+                eprintln!(
+                    "Error: refusing to delete workspace without confirmation\n  \
+                     Run with --yes to skip confirmation: nexusctl ws delete {} --yes",
+                    name
+                );
+                return ExitCode::from(EXIT_GENERAL_ERROR);
+            }
+            match client.delete_workspace(&name).await {
+                Ok(true) => {
+                    println!("Deleted workspace \"{}\"", name);
+                    ExitCode::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!("Error: workspace \"{}\" not found", name);
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot delete workspace \"{}\"\n  {e}", name);
                     ExitCode::from(EXIT_CONFLICT)
                 }
             }
