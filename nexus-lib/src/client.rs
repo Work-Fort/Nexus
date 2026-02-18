@@ -167,6 +167,147 @@ impl NexusClient {
             other => Err(ClientError::Api(format!("unexpected status: {other}"))),
         }
     }
+
+    // --- Image methods ---
+
+    pub async fn import_image(&self, params: &crate::workspace::ImportImageParams) -> Result<crate::workspace::MasterImage, ClientError> {
+        let url = format!("{}/v1/images", self.base_url);
+        let resp = self.http.post(&url).json(params).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::CONFLICT {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("conflict").to_string()));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status {status}: {body}")));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn list_images(&self) -> Result<Vec<crate::workspace::MasterImage>, ClientError> {
+        let url = format!("{}/v1/images", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn get_image(&self, name_or_id: &str) -> Result<Option<crate::workspace::MasterImage>, ClientError> {
+        let url = format!("{}/v1/images/{name_or_id}", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND { return Ok(None); }
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        resp.json().await.map(Some).map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn delete_image(&self, name_or_id: &str) -> Result<bool, ClientError> {
+        let url = format!("{}/v1/images/{name_or_id}", self.base_url);
+        let resp = self.http.delete(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        match resp.status().as_u16() {
+            204 => Ok(true),
+            404 => Ok(false),
+            409 => {
+                let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+                Err(ClientError::Api(body["error"].as_str().unwrap_or("conflict").to_string()))
+            }
+            other => Err(ClientError::Api(format!("unexpected status: {other}"))),
+        }
+    }
+
+    // --- Workspace methods ---
+
+    pub async fn create_workspace(&self, params: &crate::workspace::CreateWorkspaceParams) -> Result<crate::workspace::Workspace, ClientError> {
+        let url = format!("{}/v1/workspaces", self.base_url);
+        let resp = self.http.post(&url).json(params).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::CONFLICT {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("conflict").to_string()));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status {status}: {body}")));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn list_workspaces(&self, base: Option<&str>) -> Result<Vec<crate::workspace::Workspace>, ClientError> {
+        let mut url = format!("{}/v1/workspaces", self.base_url);
+        if let Some(b) = base {
+            url.push_str(&format!("?base={b}"));
+        }
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn get_workspace(&self, name_or_id: &str) -> Result<Option<crate::workspace::Workspace>, ClientError> {
+        let url = format!("{}/v1/workspaces/{name_or_id}", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND { return Ok(None); }
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        resp.json().await.map(Some).map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn delete_workspace(&self, name_or_id: &str) -> Result<bool, ClientError> {
+        let url = format!("{}/v1/workspaces/{name_or_id}", self.base_url);
+        let resp = self.http.delete(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        match resp.status().as_u16() {
+            204 => Ok(true),
+            404 => Ok(false),
+            409 => {
+                let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+                Err(ClientError::Api(body["error"].as_str().unwrap_or("conflict").to_string()))
+            }
+            other => Err(ClientError::Api(format!("unexpected status: {other}"))),
+        }
+    }
 }
 
 #[cfg(test)]
