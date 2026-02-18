@@ -1,0 +1,12 @@
+[Unit]
+Description=WorkFort Nexus Daemon
+
+[Service]
+Type=exec
+ExecStart=%h/.cargo/bin/nexusd
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
