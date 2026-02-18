@@ -9,17 +9,13 @@ use std::time::Duration;
 const TEST_ADDR: &str = "127.0.0.1:9601";
 
 fn target_dir() -> std::path::PathBuf {
-    // The test binary is at target/debug/deps/cli-<hash>
-    // Cross-package binaries are at target/debug/nexusd
     let mut path = std::env::current_exe().expect("cannot get test binary path");
     path.pop(); // remove cli-<hash>
     path.pop(); // remove deps
     path
 }
 
-fn start_daemon() -> Child {
-    // nexusd is a cross-package binary, so env!("CARGO_BIN_EXE_nexusd") won't work.
-    // Locate it relative to the test binary in target/debug/.
+fn start_daemon(db_path: &std::path::Path) -> Child {
     let binary = target_dir().join("nexusd");
     let config_yaml = format!("api:\n  listen: \"{TEST_ADDR}\"");
     let config_path = std::env::temp_dir().join("nexusctl-test-config.yaml");
@@ -29,6 +25,8 @@ fn start_daemon() -> Child {
         .env("RUST_LOG", "info")
         .arg("--config")
         .arg(&config_path)
+        .arg("--db")
+        .arg(db_path)
         .spawn()
         .expect("failed to start nexusd")
 }
@@ -40,7 +38,10 @@ fn stop_daemon(child: &Child) {
 
 #[tokio::test]
 async fn status_when_daemon_running() {
-    let mut child = start_daemon();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let db_path = tmp_dir.path().join("test.db");
+
+    let mut child = start_daemon(&db_path);
 
     // Wait for daemon to be ready
     let client = reqwest::Client::new();
@@ -59,7 +60,7 @@ async fn status_when_daemon_running() {
     }
     assert!(ready, "daemon did not become ready within 5 seconds");
 
-    // Run nexusctl status — use env!("CARGO_BIN_EXE_nexusctl") since it's the same package
+    // Run nexusctl status
     let output = Command::new(env!("CARGO_BIN_EXE_nexusctl"))
         .args(["--daemon", TEST_ADDR, "status"])
         .output()
@@ -68,10 +69,9 @@ async fn status_when_daemon_running() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "nexusctl status failed: {stdout}");
     assert!(stdout.contains("ok"), "expected 'ok' in output: {stdout}");
-    assert!(
-        stdout.contains(TEST_ADDR),
-        "expected address in output: {stdout}"
-    );
+    assert!(stdout.contains(TEST_ADDR), "expected address in output: {stdout}");
+    assert!(stdout.contains("Database:"), "expected database path in output: {stdout}");
+    assert!(stdout.contains("Tables:"), "expected table count in output: {stdout}");
 
     // Clean up
     stop_daemon(&child);
