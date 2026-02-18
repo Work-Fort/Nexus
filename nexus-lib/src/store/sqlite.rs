@@ -197,9 +197,8 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        // Expected tables: schema_meta, settings = 2 tables
-        // Domain tables (vms, workspaces, etc.) are added by later steps.
-        assert_eq!(status.table_count, 2, "expected 2 tables, got {}", status.table_count);
+        // Expected tables: schema_meta, settings, vms = 3 tables
+        assert_eq!(status.table_count, 3, "expected 3 tables, got {}", status.table_count);
     }
 
     #[test]
@@ -213,7 +212,7 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 2);
+        assert_eq!(status.table_count, 3);
     }
 
     #[test]
@@ -277,7 +276,7 @@ mod tests {
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 2, "should have all tables after recreate");
+        assert_eq!(status.table_count, 3, "should have all tables after recreate");
 
         let conn = store.conn.lock().unwrap();
         let version: String = conn
