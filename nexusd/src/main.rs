@@ -1,4 +1,5 @@
 use clap::Parser;
+use nexus_lib::backend::btrfs::BtrfsBackend;
 use nexus_lib::config::{self, Config};
 use nexus_lib::store::sqlite::SqliteStore;
 use tracing::{error, info};
@@ -65,8 +66,23 @@ async fn main() {
         }
     };
 
+    let workspaces_root = std::path::PathBuf::from(&config.storage.workspaces);
+
+    let backend = match BtrfsBackend::new(workspaces_root.clone()) {
+        Ok(backend) => {
+            info!(workspaces = %workspaces_root.display(), "workspace backend initialized");
+            backend
+        }
+        Err(e) => {
+            error!(error = %e, "failed to initialize workspace backend");
+            std::process::exit(1);
+        }
+    };
+
     let state = Arc::new(api::AppState {
         store: Box::new(store),
+        backend: Box::new(backend),
+        workspaces_root,
     });
 
     info!("nexusd starting");

@@ -1,9 +1,13 @@
 use axum::{Json, Router, routing::{get, post}};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use nexus_lib::backend::traits::WorkspaceBackend;
 use nexus_lib::store::traits::{DbStatus, StateStore, StoreError};
 use nexus_lib::vm::CreateVmParams;
+use nexus_lib::workspace::{ImportImageParams, CreateWorkspaceParams};
+use nexus_lib::workspace_service::{WorkspaceService, WorkspaceServiceError};
 use serde::Serialize;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Serialize)]
@@ -33,6 +37,8 @@ impl From<DbStatus> for DatabaseInfo {
 /// Application state shared across handlers.
 pub struct AppState {
     pub store: Box<dyn StateStore + Send + Sync>,
+    pub backend: Box<dyn WorkspaceBackend>,
+    pub workspaces_root: PathBuf,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
@@ -125,11 +131,195 @@ async fn delete_vm(
     }
 }
 
+async fn import_image(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<ImportImageParams>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = WorkspaceService::new(
+        state.store.as_ref(),
+        state.backend.as_ref(),
+        state.workspaces_root.clone(),
+    );
+    match svc.import_image(&params) {
+        Ok(img) => (StatusCode::CREATED, Json(serde_json::to_value(img).unwrap())),
+        Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn list_images(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = WorkspaceService::new(
+        state.store.as_ref(),
+        state.backend.as_ref(),
+        state.workspaces_root.clone(),
+    );
+    match svc.list_images() {
+        Ok(imgs) => (StatusCode::OK, Json(serde_json::to_value(imgs).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn get_image(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = WorkspaceService::new(
+        state.store.as_ref(),
+        state.backend.as_ref(),
+        state.workspaces_root.clone(),
+    );
+    match svc.get_image(&name_or_id) {
+        Ok(Some(img)) => (StatusCode::OK, Json(serde_json::to_value(img).unwrap())),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("image '{}' not found", name_or_id)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn delete_image_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = WorkspaceService::new(
+        state.store.as_ref(),
+        state.backend.as_ref(),
+        state.workspaces_root.clone(),
+    );
+    match svc.delete_image(&name_or_id) {
+        Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("image '{}' not found", name_or_id)})),
+        ),
+        Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn create_workspace_handler(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<CreateWorkspaceParams>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = WorkspaceService::new(
+        state.store.as_ref(),
+        state.backend.as_ref(),
+        state.workspaces_root.clone(),
+    );
+    match svc.create_workspace(&params.base, params.name.as_deref()) {
+        Ok(ws) => (StatusCode::CREATED, Json(serde_json::to_value(ws).unwrap())),
+        Err(WorkspaceServiceError::NotFound(msg)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn list_workspaces(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let base = query.get("base").map(|s| s.as_str());
+    let svc = WorkspaceService::new(
+        state.store.as_ref(),
+        state.backend.as_ref(),
+        state.workspaces_root.clone(),
+    );
+    match svc.list_workspaces(base) {
+        Ok(wss) => (StatusCode::OK, Json(serde_json::to_value(wss).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn get_workspace(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = WorkspaceService::new(
+        state.store.as_ref(),
+        state.backend.as_ref(),
+        state.workspaces_root.clone(),
+    );
+    match svc.get_workspace(&name_or_id) {
+        Ok(Some(ws)) => (StatusCode::OK, Json(serde_json::to_value(ws).unwrap())),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn delete_workspace_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = WorkspaceService::new(
+        state.store.as_ref(),
+        state.backend.as_ref(),
+        state.workspaces_root.clone(),
+    );
+    match svc.delete_workspace(&name_or_id) {
+        Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+        ),
+        Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/vms", post(create_vm).get(list_vms))
         .route("/v1/vms/{name_or_id}", get(get_vm).delete(delete_vm))
+        .route("/v1/images", post(import_image).get(list_images))
+        .route("/v1/images/{name_or_id}", get(get_image).delete(delete_image_handler))
+        .route("/v1/workspaces", post(create_workspace_handler).get(list_workspaces))
+        .route("/v1/workspaces/{name_or_id}", get(get_workspace).delete(delete_workspace_handler))
         .with_state(state)
 }
 
@@ -241,11 +431,17 @@ mod tests {
         }
     }
 
+    fn mock_state_with_store(store: impl StateStore + Send + Sync + 'static) -> Arc<AppState> {
+        Arc::new(AppState {
+            store: Box::new(store),
+            backend: Box::new(MockBackend),
+            workspaces_root: std::path::PathBuf::from("/tmp/mock-ws"),
+        })
+    }
+
     #[tokio::test]
     async fn health_returns_ok_with_db_info() {
-        let state = Arc::new(AppState {
-            store: Box::new(MockStore),
-        });
+        let state = mock_state_with_store(MockStore);
         let app = router(state);
 
         let response = app
@@ -268,9 +464,7 @@ mod tests {
 
     #[tokio::test]
     async fn health_returns_503_when_db_unhealthy() {
-        let state = Arc::new(AppState {
-            store: Box::new(FailingStore),
-        });
+        let state = mock_state_with_store(FailingStore);
         let app = router(state);
 
         let response = app
@@ -289,14 +483,38 @@ mod tests {
         assert!(json.get("database").is_none() || json["database"].is_null());
     }
 
+    use nexus_lib::backend::traits::{BackendError, SubvolumeInfo, WorkspaceBackend};
+
+    /// A no-op backend for API unit tests (no real btrfs needed).
+    struct MockBackend;
+
+    impl WorkspaceBackend for MockBackend {
+        fn import_image(&self, _source: &std::path::Path, dest: &std::path::Path) -> Result<SubvolumeInfo, BackendError> {
+            Ok(SubvolumeInfo { path: dest.to_path_buf(), read_only: true, size_bytes: None })
+        }
+        fn create_snapshot(&self, _source: &std::path::Path, dest: &std::path::Path) -> Result<SubvolumeInfo, BackendError> {
+            Ok(SubvolumeInfo { path: dest.to_path_buf(), read_only: false, size_bytes: None })
+        }
+        fn delete_subvolume(&self, _path: &std::path::Path) -> Result<(), BackendError> { Ok(()) }
+        fn is_subvolume(&self, _path: &std::path::Path) -> Result<bool, BackendError> { Ok(true) }
+        fn subvolume_info(&self, path: &std::path::Path) -> Result<SubvolumeInfo, BackendError> {
+            Ok(SubvolumeInfo { path: path.to_path_buf(), read_only: false, size_bytes: None })
+        }
+        fn set_read_only(&self, _path: &std::path::Path, _read_only: bool) -> Result<(), BackendError> { Ok(()) }
+    }
+
     fn test_state() -> Arc<AppState> {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
+        let ws_root = dir.path().join("workspaces");
+        std::fs::create_dir_all(&ws_root).unwrap();
         let store = SqliteStore::open_and_init(&db_path).unwrap();
         // Leak the tempdir so it lives long enough
         std::mem::forget(dir);
         Arc::new(AppState {
             store: Box::new(store),
+            backend: Box::new(MockBackend),
+            workspaces_root: ws_root,
         })
     }
 
