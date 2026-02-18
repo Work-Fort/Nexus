@@ -28,6 +28,25 @@ impl ConfigError {
 #[serde(default)]
 pub struct Config {
     pub api: ApiConfig,
+    pub storage: StorageConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct StorageConfig {
+    pub workspaces: String,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        let data_dir = dirs::data_dir()
+            .expect("cannot determine XDG_DATA_HOME")
+            .join("nexus")
+            .join("workspaces");
+        StorageConfig {
+            workspaces: data_dir.to_string_lossy().to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -50,6 +69,14 @@ pub fn default_config_path() -> PathBuf {
         .expect("cannot determine XDG_CONFIG_HOME")
         .join("nexus");
     config_dir.join("nexus.yaml")
+}
+
+/// Returns the default workspaces path: $XDG_DATA_HOME/nexus/workspaces
+pub fn default_workspaces_path() -> PathBuf {
+    let data_dir = dirs::data_dir()
+        .expect("cannot determine XDG_DATA_HOME")
+        .join("nexus");
+    data_dir.join("workspaces")
 }
 
 /// Returns the default database path: $XDG_STATE_HOME/nexus/nexus.db
@@ -106,6 +133,24 @@ api:
     fn default_db_path_ends_with_nexus_db() {
         let path = default_db_path();
         assert!(path.ends_with("nexus/nexus.db"), "expected path ending with nexus/nexus.db, got: {}", path.display());
+    }
+
+    #[test]
+    fn storage_config_defaults() {
+        let config = Config::default();
+        assert!(config.storage.workspaces.contains("nexus/workspaces"));
+    }
+
+    #[test]
+    fn config_with_storage_section_deserializes() {
+        let yaml = r#"
+api:
+  listen: "127.0.0.1:8080"
+storage:
+  workspaces: "/mnt/btrfs/nexus/workspaces"
+"#;
+        let config: Config = serde_norway::from_str(yaml).unwrap();
+        assert_eq!(config.storage.workspaces, "/mnt/btrfs/nexus/workspaces");
     }
 
     #[test]
