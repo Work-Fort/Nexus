@@ -1,6 +1,8 @@
 use clap::Parser;
 use nexus_lib::config::{self, Config};
+use nexus_lib::store::sqlite::SqliteStore;
 use tracing::{error, info};
+use std::sync::Arc;
 
 mod api;
 mod logging;
@@ -13,6 +15,11 @@ struct Cli {
     /// [default: $XDG_CONFIG_HOME/nexus/nexus.yaml]
     #[arg(long)]
     config: Option<String>,
+
+    /// Path to database file
+    /// [default: $XDG_STATE_HOME/nexus/nexus.db]
+    #[arg(long)]
+    db: Option<String>,
 }
 
 #[tokio::main]
@@ -41,9 +48,30 @@ async fn main() {
         }
     };
 
+    // Initialize SQLite state store
+    let db_path = cli
+        .db
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(config::default_db_path);
+
+    let store = match SqliteStore::open_and_init(&db_path) {
+        Ok(store) => {
+            info!(db_path = %db_path.display(), "database initialized");
+            store
+        }
+        Err(e) => {
+            error!(error = %e, db_path = %db_path.display(), "failed to initialize database");
+            std::process::exit(1);
+        }
+    };
+
+    let state = Arc::new(api::AppState {
+        store: Box::new(store),
+    });
+
     info!("nexusd starting");
 
-    if let Err(e) = server::run(&config).await {
+    if let Err(e) = server::run(&config, state).await {
         error!(error = %e, "daemon failed");
         std::process::exit(1);
     }

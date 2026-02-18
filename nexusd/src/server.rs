@@ -1,10 +1,11 @@
-use crate::api;
+use crate::api::{self, AppState};
 use nexus_lib::config::Config;
 use tokio::net::TcpListener;
 use tracing::info;
+use std::sync::Arc;
 
-pub async fn run(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
-    let app = api::router();
+pub async fn run(config: &Config, state: Arc<AppState>) -> Result<(), Box<dyn std::error::Error>> {
+    let app = api::router(state);
 
     let listener = TcpListener::bind(&config.api.listen).await?;
     info!(listen = %config.api.listen, "HTTP API ready");
