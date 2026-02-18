@@ -884,9 +884,11 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "serde",
+ "serde_json",
  "serde_norway",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -900,6 +902,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_norway",
+ "tempfile",
  "tokio",
 ]
 
@@ -914,6 +917,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower",
  "tracing",
