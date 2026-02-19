@@ -446,6 +446,124 @@ impl NexusClient {
             other => Err(ClientError::Api(format!("unexpected status: {other}"))),
         }
     }
+
+    // --- Template methods ---
+
+    pub async fn create_template(&self, params: &crate::template::CreateTemplateParams) -> Result<crate::template::Template, ClientError> {
+        let url = format!("{}/v1/templates", self.base_url);
+        let resp = self.http.post(&url).json(params).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::CONFLICT {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("conflict").to_string()));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status {status}: {body}")));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn list_templates(&self) -> Result<Vec<crate::template::Template>, ClientError> {
+        let url = format!("{}/v1/templates", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn get_template(&self, name_or_id: &str) -> Result<Option<crate::template::Template>, ClientError> {
+        let url = format!("{}/v1/templates/{name_or_id}", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND { return Ok(None); }
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        resp.json().await.map(Some).map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn delete_template(&self, name_or_id: &str) -> Result<bool, ClientError> {
+        let url = format!("{}/v1/templates/{name_or_id}", self.base_url);
+        let resp = self.http.delete(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        match resp.status().as_u16() {
+            204 => Ok(true),
+            404 => Ok(false),
+            other => Err(ClientError::Api(format!("unexpected status: {other}"))),
+        }
+    }
+
+    // --- Build methods ---
+
+    pub async fn trigger_build(&self, template_name_or_id: &str) -> Result<crate::template::Build, ClientError> {
+        let url = format!("{}/v1/templates/{template_name_or_id}/build", self.base_url);
+        let resp = self.http.post(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(ClientError::Api(format!("template '{template_name_or_id}' not found")));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status {status}: {body}")));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn list_builds(&self, template: Option<&str>) -> Result<Vec<crate::template::Build>, ClientError> {
+        let mut url = format!("{}/v1/builds", self.base_url);
+        if let Some(t) = template {
+            url.push_str(&format!("?template={t}"));
+        }
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn get_build(&self, id: &str) -> Result<Option<crate::template::Build>, ClientError> {
+        let url = format!("{}/v1/builds/{id}", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND { return Ok(None); }
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        resp.json().await.map(Some).map_err(|e| ClientError::Api(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -501,5 +619,20 @@ mod tests {
         let vm: crate::vm::Vm = serde_json::from_str(json).unwrap();
         assert_eq!(vm.name, "test");
         assert_eq!(vm.cid, 3);
+    }
+
+    #[test]
+    fn template_response_deserializes() {
+        let json = r#"{"id":"tpl-1","name":"base","version":1,"source_type":"rootfs","source_identifier":"https://example.com/rootfs.tar.gz","created_at":1000,"updated_at":1000}"#;
+        let tpl: crate::template::Template = serde_json::from_str(json).unwrap();
+        assert_eq!(tpl.name, "base");
+        assert_eq!(tpl.version, 1);
+    }
+
+    #[test]
+    fn build_response_deserializes() {
+        let json = r#"{"id":"bld-1","template_id":"tpl-1","template_version":1,"name":"base","source_type":"rootfs","source_identifier":"https://example.com/rootfs.tar.gz","status":"building","created_at":1000}"#;
+        let build: crate::template::Build = serde_json::from_str(json).unwrap();
+        assert_eq!(build.status, crate::template::BuildStatus::Building);
     }
 }
