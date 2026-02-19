@@ -137,3 +137,75 @@ async fn vm_crud_lifecycle() {
     let vms: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert_eq!(vms.len(), 0);
 }
+
+#[tokio::test]
+async fn template_crud_lifecycle() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    )
+    .await;
+
+    let client = reqwest::Client::new();
+    let base = format!("http://{}", daemon.addr);
+
+    // Create template
+    let resp = client
+        .post(format!("{base}/v1/templates"))
+        .json(&serde_json::json!({
+            "name": "test-template",
+            "source_type": "rootfs",
+            "source_identifier": "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-3.21.3-x86_64.tar.gz"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let tpl: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(tpl["name"], "test-template");
+    assert_eq!(tpl["version"], 1);
+
+    // List templates
+    let resp = client.get(format!("{base}/v1/templates")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let templates: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(templates.len(), 1);
+
+    // Get template by name
+    let resp = client
+        .get(format!("{base}/v1/templates/test-template"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let detail: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(detail["name"], "test-template");
+
+    // Get template not found
+    let resp = client
+        .get(format!("{base}/v1/templates/nonexistent"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    // Delete template
+    let resp = client
+        .delete(format!("{base}/v1/templates/test-template"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+
+    // Verify deleted
+    let resp = client
+        .get(format!("{base}/v1/templates/test-template"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    // List should be empty
+    let resp = client.get(format!("{base}/v1/templates")).send().await.unwrap();
+    let templates: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(templates.len(), 0);
+}
