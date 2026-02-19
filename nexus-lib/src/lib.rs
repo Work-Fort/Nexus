@@ -9,6 +9,7 @@ pub mod pgp;
 pub mod pipeline;
 pub mod rootfs_service;
 pub mod store;
+pub mod template;
 pub mod vm;
 pub mod workspace;
 pub mod workspace_service;
