@@ -97,3 +97,11 @@ depends = ["install:nexusd:release", "install:nexusctl:release"]
 [tasks."install:debug"]
 description = "Install all binaries (debug) + systemd unit"
 depends = ["install:nexusd:debug", "install:nexusctl:debug"]
+
+[tasks.rootfs]
+description = "Build Alpine rootfs ext4 image"
+run = "bash scripts/build-rootfs.sh --output artifacts/rootfs.ext4 --force"
+
+[tasks."rootfs:clean"]
+description = "Remove built rootfs artifacts"
+run = "rm -rf artifacts/rootfs.ext4"
