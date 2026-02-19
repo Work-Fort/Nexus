@@ -1,7 +1,7 @@
 /// Schema version — increment when the schema changes.
 /// Pre-alpha migration strategy: if the stored version doesn't match,
 /// delete the DB and recreate.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Database schema. Executed as a single batch on first start.
 /// Domain tables are added by later steps — each step bumps SCHEMA_VERSION
@@ -169,6 +169,20 @@ CREATE TABLE builds (
 CREATE INDEX idx_builds_template_id ON builds(template_id);
 CREATE INDEX idx_builds_status ON builds(status);
 CREATE INDEX idx_builds_master_image_id ON builds(master_image_id);
+
+-- VM boot history: tracks each boot/shutdown cycle
+CREATE TABLE vm_boot_history (
+    id TEXT PRIMARY KEY,
+    vm_id TEXT NOT NULL,
+    boot_started_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    boot_stopped_at INTEGER,
+    exit_code INTEGER,
+    error_message TEXT,
+    console_log_path TEXT,
+    FOREIGN KEY (vm_id) REFERENCES vms(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_vm_boot_history_vm_id ON vm_boot_history(vm_id);
 "#;
 
 /// Seed the providers table with default provider configurations.
