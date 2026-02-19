@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use nexus_lib::client::NexusClient;
 use nexus_lib::vm::{CreateVmParams, VmRole};
+use nexus_lib::template::CreateTemplateParams;
 use nexus_lib::workspace::{CreateWorkspaceParams, ImportImageParams};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -69,6 +70,16 @@ enum Commands {
     Firecracker {
         #[command(subcommand)]
         action: FirecrackerAction,
+    },
+    /// Manage templates
+    Template {
+        #[command(subcommand)]
+        action: TemplateAction,
+    },
+    /// Manage builds
+    Build {
+        #[command(subcommand)]
+        action: BuildAction,
     },
 }
 
@@ -209,6 +220,60 @@ enum FirecrackerAction {
     Remove { version: String },
 }
 
+#[derive(Subcommand)]
+enum TemplateAction {
+    /// List all templates
+    List,
+    /// Create a new template
+    Create {
+        /// Template name
+        #[arg(long)]
+        name: String,
+        /// Source type (rootfs)
+        #[arg(long, default_value = "rootfs")]
+        source_type: String,
+        /// Source identifier (URL or path to rootfs tarball)
+        #[arg(long)]
+        source: String,
+        /// File overlay: path=content (can be repeated)
+        #[arg(long = "overlay", value_name = "PATH=CONTENT")]
+        overlays: Vec<String>,
+    },
+    /// Show template details
+    Inspect {
+        /// Template name or ID
+        name: String,
+    },
+    /// Delete a template
+    Delete {
+        /// Template name or ID
+        name: String,
+        /// Skip confirmation
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum BuildAction {
+    /// Trigger a build from a template
+    Trigger {
+        /// Template name or ID
+        template: String,
+    },
+    /// List all builds
+    List {
+        /// Filter by template name
+        #[arg(long)]
+        template: Option<String>,
+    },
+    /// Show build details
+    Inspect {
+        /// Build ID
+        id: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -226,6 +291,8 @@ async fn main() -> ExitCode {
         Commands::Kernel { action } => cmd_kernel(&daemon_addr, action).await,
         Commands::Rootfs { action } => cmd_rootfs(&daemon_addr, action).await,
         Commands::Firecracker { action } => cmd_firecracker(&daemon_addr, action).await,
+        Commands::Template { action } => cmd_template(&daemon_addr, action).await,
+        Commands::Build { action } => cmd_build(&daemon_addr, action).await,
     }
 }
 
@@ -894,6 +961,223 @@ async fn cmd_firecracker(daemon_addr: &str, action: FirecrackerAction) -> ExitCo
                 }
                 Ok(false) => {
                     eprintln!("Error: Firecracker {version} not found");
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+    }
+}
+
+async fn cmd_template(daemon_addr: &str, action: TemplateAction) -> ExitCode {
+    let client = NexusClient::new(daemon_addr);
+
+    match action {
+        TemplateAction::List => {
+            match client.list_templates().await {
+                Ok(tpls) => {
+                    if tpls.is_empty() {
+                        println!("No templates found.");
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<20} {:<8} {:<10} {:<50}", "NAME", "VERSION", "TYPE", "SOURCE");
+                    for tpl in &tpls {
+                        let source = if tpl.source_identifier.len() > 48 {
+                            format!("{}...", &tpl.source_identifier[..45])
+                        } else {
+                            tpl.source_identifier.clone()
+                        };
+                        println!("{:<20} {:<8} {:<10} {:<50}", tpl.name, tpl.version, tpl.source_type, source);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        TemplateAction::Create { name, source_type, source, overlays } => {
+            let overlay_map = if overlays.is_empty() {
+                None
+            } else {
+                let mut map = std::collections::HashMap::new();
+                for entry in &overlays {
+                    if let Some((path, content)) = entry.split_once('=') {
+                        map.insert(path.to_string(), content.to_string());
+                    } else {
+                        eprintln!("Error: invalid overlay format '{}' (expected PATH=CONTENT)", entry);
+                        return ExitCode::from(EXIT_GENERAL_ERROR);
+                    }
+                }
+                Some(map)
+            };
+
+            let params = CreateTemplateParams {
+                name: name.clone(),
+                source_type,
+                source_identifier: source,
+                overlays: overlay_map,
+            };
+            match client.create_template(&params).await {
+                Ok(tpl) => {
+                    println!("Created template \"{}\" (version {})", tpl.name, tpl.version);
+                    println!("\n  Trigger a build: nexusctl build trigger {}", tpl.name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create template \"{name}\"\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        TemplateAction::Inspect { name } => {
+            match client.get_template(&name).await {
+                Ok(Some(tpl)) => {
+                    println!("Name:       {}", tpl.name);
+                    println!("ID:         {}", tpl.id);
+                    println!("Version:    {}", tpl.version);
+                    println!("Source:     {} ({})", tpl.source_identifier, tpl.source_type);
+                    if let Some(ref overlays) = tpl.overlays {
+                        println!("Overlays:   {} files", overlays.len());
+                        for path in overlays.keys() {
+                            println!("  {}", path);
+                        }
+                    }
+                    println!("Created:    {}", format_timestamp(tpl.created_at));
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    eprintln!("Error: template \"{}\" not found", name);
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        TemplateAction::Delete { name, yes } => {
+            if !yes {
+                eprintln!(
+                    "Error: refusing to delete template without confirmation\n  \
+                     Run with --yes to skip confirmation: nexusctl template delete {} --yes",
+                    name
+                );
+                return ExitCode::from(EXIT_GENERAL_ERROR);
+            }
+            match client.delete_template(&name).await {
+                Ok(true) => {
+                    println!("Deleted template \"{}\"", name);
+                    ExitCode::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!("Error: template \"{}\" not found", name);
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot delete template \"{}\"\n  {e}", name);
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+    }
+}
+
+async fn cmd_build(daemon_addr: &str, action: BuildAction) -> ExitCode {
+    let client = NexusClient::new(daemon_addr);
+
+    match action {
+        BuildAction::Trigger { template } => {
+            match client.trigger_build(&template).await {
+                Ok(build) => {
+                    println!("Build triggered (ID: {})", &build.id[..8]);
+                    println!("  Template: {} (version {})", build.name, build.template_version);
+                    println!("  Status:   {}", build.status);
+                    println!("\n  Check progress: nexusctl build inspect {}", build.id);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot trigger build\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        BuildAction::List { template } => {
+            match client.list_builds(template.as_deref()).await {
+                Ok(builds) => {
+                    if builds.is_empty() {
+                        println!("No builds found.");
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<10} {:<20} {:<10} {:<20}", "ID", "TEMPLATE", "STATUS", "CREATED");
+                    for build in &builds {
+                        let short_id = &build.id[..std::cmp::min(8, build.id.len())];
+                        println!(
+                            "{:<10} {:<20} {:<10} {:<20}",
+                            short_id, build.name, build.status, format_timestamp(build.created_at),
+                        );
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        BuildAction::Inspect { id } => {
+            match client.get_build(&id).await {
+                Ok(Some(build)) => {
+                    println!("Build ID:     {}", build.id);
+                    println!("Template:     {} (version {})", build.name, build.template_version);
+                    println!("Status:       {}", build.status);
+                    println!("Source:       {} ({})", build.source_identifier, build.source_type);
+                    if let Some(ref img_id) = build.master_image_id {
+                        println!("Master Image: {}", img_id);
+                    }
+                    if let Some(ref log) = build.build_log_path {
+                        println!("Log:          {}", log);
+                    }
+                    println!("Created:      {}", format_timestamp(build.created_at));
+                    if let Some(completed) = build.completed_at {
+                        println!("Completed:    {}", format_timestamp(completed));
+                    }
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    eprintln!("Error: build \"{}\" not found", id);
                     ExitCode::from(EXIT_NOT_FOUND)
                 }
                 Err(e) if e.is_connect() => {
