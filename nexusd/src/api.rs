@@ -559,7 +559,8 @@ mod tests {
         FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
         RegisterKernelParams, RegisterRootfsParams, RootfsImage,
     };
-    use nexus_lib::store::traits::{AssetStore, ImageStore, StoreError, VmStore, WorkspaceStore};
+    use nexus_lib::store::traits::{AssetStore, BuildStore, ImageStore, StoreError, VmStore, WorkspaceStore};
+    use nexus_lib::template::{Build, BuildStatus, CreateTemplateParams, Template};
     use nexus_lib::vm::{CreateVmParams, Vm};
     use nexus_lib::workspace::{ImportImageParams, MasterImage, Workspace};
     use tower::ServiceExt;
@@ -628,6 +629,17 @@ mod tests {
         fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> { Ok(vec![]) }
         fn get_firecracker(&self, _id: &str, _arch: Option<&str>) -> Result<Option<FirecrackerVersion>, StoreError> { unimplemented!() }
         fn delete_firecracker(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+    }
+
+    impl BuildStore for MockStore {
+        fn create_template(&self, _params: &CreateTemplateParams) -> Result<Template, StoreError> { unimplemented!() }
+        fn list_templates(&self) -> Result<Vec<Template>, StoreError> { unimplemented!() }
+        fn get_template(&self, _name_or_id: &str) -> Result<Option<Template>, StoreError> { unimplemented!() }
+        fn delete_template(&self, _name_or_id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn create_build(&self, _template: &Template) -> Result<Build, StoreError> { unimplemented!() }
+        fn list_builds(&self, _template: Option<&str>) -> Result<Vec<Build>, StoreError> { unimplemented!() }
+        fn get_build(&self, _id: &str) -> Result<Option<Build>, StoreError> { unimplemented!() }
+        fn update_build_status(&self, _id: &str, _status: BuildStatus, _master_image_id: Option<&str>, _build_log_path: Option<&str>) -> Result<Build, StoreError> { unimplemented!() }
     }
 
     impl StateStore for MockStore {
@@ -705,6 +717,17 @@ mod tests {
         fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> { unimplemented!() }
         fn get_firecracker(&self, _id: &str, _arch: Option<&str>) -> Result<Option<FirecrackerVersion>, StoreError> { unimplemented!() }
         fn delete_firecracker(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+    }
+
+    impl BuildStore for FailingStore {
+        fn create_template(&self, _params: &CreateTemplateParams) -> Result<Template, StoreError> { unimplemented!() }
+        fn list_templates(&self) -> Result<Vec<Template>, StoreError> { unimplemented!() }
+        fn get_template(&self, _name_or_id: &str) -> Result<Option<Template>, StoreError> { unimplemented!() }
+        fn delete_template(&self, _name_or_id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn create_build(&self, _template: &Template) -> Result<Build, StoreError> { unimplemented!() }
+        fn list_builds(&self, _template: Option<&str>) -> Result<Vec<Build>, StoreError> { unimplemented!() }
+        fn get_build(&self, _id: &str) -> Result<Option<Build>, StoreError> { unimplemented!() }
+        fn update_build_status(&self, _id: &str, _status: BuildStatus, _master_image_id: Option<&str>, _build_log_path: Option<&str>) -> Result<Build, StoreError> { unimplemented!() }
     }
 
     impl StateStore for FailingStore {

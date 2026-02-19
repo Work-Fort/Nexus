@@ -2,6 +2,7 @@ use crate::asset::{
     FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
     RegisterKernelParams, RegisterRootfsParams, RootfsImage,
 };
+use crate::template::{Build, BuildStatus, CreateTemplateParams, Template};
 use crate::vm::{CreateVmParams, Vm};
 use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 
@@ -148,12 +149,47 @@ pub trait AssetStore {
     fn delete_firecracker(&self, id: &str) -> Result<bool, StoreError>;
 }
 
+/// Template and build persistence.
+pub trait BuildStore {
+    /// Create a new template. Returns the created template.
+    fn create_template(&self, params: &CreateTemplateParams) -> Result<Template, StoreError>;
+
+    /// List all templates.
+    fn list_templates(&self) -> Result<Vec<Template>, StoreError>;
+
+    /// Get a template by name or ID.
+    fn get_template(&self, name_or_id: &str) -> Result<Option<Template>, StoreError>;
+
+    /// Delete a template by name or ID. Cascade-deletes associated builds.
+    /// Returns true if deleted, false if not found.
+    fn delete_template(&self, name_or_id: &str) -> Result<bool, StoreError>;
+
+    /// Create a new build from a template snapshot.
+    fn create_build(&self, template: &Template) -> Result<Build, StoreError>;
+
+    /// List all builds, optionally filtered by template name.
+    fn list_builds(&self, template: Option<&str>) -> Result<Vec<Build>, StoreError>;
+
+    /// Get a build by ID.
+    fn get_build(&self, id: &str) -> Result<Option<Build>, StoreError>;
+
+    /// Update a build's status. Sets completed_at when status is success or failed.
+    /// For success, also sets master_image_id.
+    fn update_build_status(
+        &self,
+        id: &str,
+        status: BuildStatus,
+        master_image_id: Option<&str>,
+        build_log_path: Option<&str>,
+    ) -> Result<Build, StoreError>;
+}
+
 /// Convenience super-trait for code that needs the full store.
 ///
 /// All state persistence goes through this trait. The pre-alpha
 /// implementation is SQLite; this trait exists so the backend can
 /// be swapped to Postgres or etcd for clustering later.
-pub trait StateStore: VmStore + ImageStore + WorkspaceStore + AssetStore {
+pub trait StateStore: VmStore + ImageStore + WorkspaceStore + AssetStore + BuildStore {
     /// Initialize the store (create schema if needed, run migrations).
     fn init(&self) -> Result<(), StoreError>;
 

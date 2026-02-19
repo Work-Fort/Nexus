@@ -3,7 +3,8 @@ use crate::asset::{
     RegisterKernelParams, RegisterRootfsParams, RootfsImage,
 };
 use crate::store::schema::{seed_default_providers, SCHEMA_SQL, SCHEMA_VERSION};
-use crate::store::traits::{AssetStore, DbStatus, ImageStore, StateStore, StoreError, VmStore, WorkspaceStore};
+use crate::store::traits::{AssetStore, BuildStore, DbStatus, ImageStore, StateStore, StoreError, VmStore, WorkspaceStore};
+use crate::template::{Build, BuildStatus, CreateTemplateParams, Template};
 use crate::vm::{CreateVmParams, Vm, VmState};
 use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 use rusqlite::Connection;
@@ -846,11 +847,182 @@ fn row_to_workspace(row: &rusqlite::Row) -> Workspace {
     }
 }
 
+fn row_to_template(row: &rusqlite::Row) -> Result<Template, rusqlite::Error> {
+    let overlays_json: Option<String> = row.get("overlays")?;
+    let overlays = overlays_json.and_then(|j| serde_json::from_str(&j).ok());
+    Ok(Template {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        version: row.get("version")?,
+        source_type: row.get("source_type")?,
+        source_identifier: row.get("source_identifier")?,
+        overlays,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn row_to_build(row: &rusqlite::Row) -> Result<Build, rusqlite::Error> {
+    let overlays_json: Option<String> = row.get("overlays")?;
+    let overlays = overlays_json.and_then(|j| serde_json::from_str(&j).ok());
+    let status_str: String = row.get("status")?;
+    let status: BuildStatus = status_str.parse().unwrap_or(BuildStatus::Failed);
+    Ok(Build {
+        id: row.get("id")?,
+        template_id: row.get("template_id")?,
+        template_version: row.get("template_version")?,
+        name: row.get("name")?,
+        source_type: row.get("source_type")?,
+        source_identifier: row.get("source_identifier")?,
+        overlays,
+        status,
+        build_log_path: row.get("build_log_path")?,
+        master_image_id: row.get("master_image_id")?,
+        created_at: row.get("created_at")?,
+        completed_at: row.get("completed_at")?,
+    })
+}
+
+impl BuildStore for SqliteStore {
+    fn create_template(&self, params: &CreateTemplateParams) -> Result<Template, StoreError> {
+        let id = Uuid::new_v4().to_string();
+        let overlays_json = params.overlays.as_ref().map(|o| serde_json::to_string(o).unwrap());
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO templates (id, name, version, source_type, source_identifier, overlays) VALUES (?1, ?2, 1, ?3, ?4, ?5)",
+            rusqlite::params![id, params.name, params.source_type, params.source_identifier, overlays_json],
+        ).map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint") {
+                StoreError::Conflict(format!("template '{}' already exists", params.name))
+            } else {
+                StoreError::Query(e.to_string())
+            }
+        })?;
+        drop(conn);
+        self.get_template(&id)?.ok_or_else(|| StoreError::Query("failed to read back template".to_string()))
+    }
+
+    fn list_templates(&self) -> Result<Vec<Template>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT * FROM templates ORDER BY name")
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let templates = stmt.query_map([], |row| row_to_template(row))
+            .map_err(|e| StoreError::Query(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(templates)
+    }
+
+    fn get_template(&self, name_or_id: &str) -> Result<Option<Template>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT * FROM templates WHERE name = ?1 OR id = ?1")
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut rows = stmt.query_map(rusqlite::params![name_or_id], |row| row_to_template(row))
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        match rows.next() {
+            Some(Ok(tpl)) => Ok(Some(tpl)),
+            Some(Err(e)) => Err(StoreError::Query(e.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    fn delete_template(&self, name_or_id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn.execute(
+            "DELETE FROM templates WHERE name = ?1 OR id = ?1",
+            rusqlite::params![name_or_id],
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(deleted > 0)
+    }
+
+    fn create_build(&self, template: &Template) -> Result<Build, StoreError> {
+        let id = Uuid::new_v4().to_string();
+        let overlays_json = template.overlays.as_ref().map(|o| serde_json::to_string(o).unwrap());
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO builds (id, template_id, template_version, name, source_type, source_identifier, overlays) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![id, template.id, template.version, template.name, template.source_type, template.source_identifier, overlays_json],
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        drop(conn);
+        self.get_build(&id)?.ok_or_else(|| StoreError::Query("failed to read back build".to_string()))
+    }
+
+    fn list_builds(&self, template: Option<&str>) -> Result<Vec<Build>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(tpl_name) = template {
+            let mut stmt = conn.prepare(
+                "SELECT b.* FROM builds b JOIN templates t ON b.template_id = t.id WHERE t.name = ?1 OR t.id = ?1 ORDER BY b.created_at DESC"
+            ).map_err(|e| StoreError::Query(e.to_string()))?;
+            let builds = stmt.query_map(rusqlite::params![tpl_name], |row| row_to_build(row))
+                .map_err(|e| StoreError::Query(e.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| StoreError::Query(e.to_string()))?;
+            Ok(builds)
+        } else {
+            let mut stmt = conn.prepare("SELECT * FROM builds ORDER BY created_at DESC")
+                .map_err(|e| StoreError::Query(e.to_string()))?;
+            let builds = stmt.query_map([], |row| row_to_build(row))
+                .map_err(|e| StoreError::Query(e.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| StoreError::Query(e.to_string()))?;
+            Ok(builds)
+        }
+    }
+
+    fn get_build(&self, id: &str) -> Result<Option<Build>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT * FROM builds WHERE id = ?1")
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut rows = stmt.query_map(rusqlite::params![id], |row| row_to_build(row))
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        match rows.next() {
+            Some(Ok(build)) => Ok(Some(build)),
+            Some(Err(e)) => Err(StoreError::Query(e.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    fn update_build_status(
+        &self,
+        id: &str,
+        status: BuildStatus,
+        master_image_id: Option<&str>,
+        build_log_path: Option<&str>,
+    ) -> Result<Build, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let status_str = status.to_string();
+
+        if status == BuildStatus::Building {
+            conn.execute(
+                "UPDATE builds SET status = ?1, master_image_id = ?2, build_log_path = ?3 WHERE id = ?4",
+                rusqlite::params![status_str, master_image_id, build_log_path, id],
+            ).map_err(|e| StoreError::Query(e.to_string()))?;
+        } else {
+            conn.execute(
+                "UPDATE builds SET status = ?1, master_image_id = ?2, build_log_path = ?3, completed_at = strftime('%s', 'now') WHERE id = ?4",
+                rusqlite::params![status_str, master_image_id, build_log_path, id],
+            ).map_err(|e| StoreError::Query(e.to_string()))?;
+        }
+        drop(conn);
+        self.get_build(id)?.ok_or_else(|| StoreError::Query(format!("build '{id}' not found")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::template::{BuildStatus, CreateTemplateParams};
     use crate::vm::VmRole;
     use crate::workspace::ImportImageParams;
+
+    fn test_store() -> SqliteStore {
+        // Use a named temp file so the path stays valid for the store lifetime.
+        // TempDir would delete the directory on drop, but on Linux the open fd
+        // remains valid. However, to be safe we use a path in /tmp directly.
+        let id = uuid::Uuid::new_v4();
+        let db_path = std::path::PathBuf::from(format!("/tmp/nexus-test-{id}.db"));
+        SqliteStore::open_and_init(&db_path).unwrap()
+    }
 
     #[test]
     fn open_creates_new_database() {
@@ -1424,5 +1596,257 @@ mod tests {
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
         assert!(!store.delete_workspace("ghost").unwrap());
+    }
+
+    #[test]
+    fn create_template_assigns_id() {
+        let store = test_store();
+        let params = CreateTemplateParams {
+            name: "base-agent".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: None,
+        };
+        let tpl = store.create_template(&params).unwrap();
+        assert!(!tpl.id.is_empty());
+        assert_eq!(tpl.name, "base-agent");
+        assert_eq!(tpl.version, 1);
+        assert_eq!(tpl.source_type, "rootfs");
+    }
+
+    #[test]
+    fn create_template_duplicate_name_returns_conflict() {
+        let store = test_store();
+        let params = CreateTemplateParams {
+            name: "dup".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: None,
+        };
+        store.create_template(&params).unwrap();
+        let result = store.create_template(&params);
+        assert!(matches!(result, Err(StoreError::Conflict(_))));
+    }
+
+    #[test]
+    fn list_templates_returns_all() {
+        let store = test_store();
+        let params = CreateTemplateParams {
+            name: "tpl-a".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/a.tar.gz".to_string(),
+            overlays: None,
+        };
+        store.create_template(&params).unwrap();
+        let params2 = CreateTemplateParams {
+            name: "tpl-b".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/b.tar.gz".to_string(),
+            overlays: None,
+        };
+        store.create_template(&params2).unwrap();
+        let all = store.list_templates().unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn get_template_by_name_or_id() {
+        let store = test_store();
+        let params = CreateTemplateParams {
+            name: "find-me".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: None,
+        };
+        let tpl = store.create_template(&params).unwrap();
+
+        let by_name = store.get_template("find-me").unwrap().unwrap();
+        assert_eq!(by_name.id, tpl.id);
+
+        let by_id = store.get_template(&tpl.id).unwrap().unwrap();
+        assert_eq!(by_id.name, "find-me");
+
+        assert!(store.get_template("nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_template_removes_record() {
+        let store = test_store();
+        let params = CreateTemplateParams {
+            name: "doomed".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: None,
+        };
+        store.create_template(&params).unwrap();
+        assert!(store.delete_template("doomed").unwrap());
+        assert!(store.get_template("doomed").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_nonexistent_template_returns_false() {
+        let store = test_store();
+        assert!(!store.delete_template("ghost").unwrap());
+    }
+
+    #[test]
+    fn create_build_snapshots_template() {
+        let store = test_store();
+        let params = CreateTemplateParams {
+            name: "build-me".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: None,
+        };
+        let tpl = store.create_template(&params).unwrap();
+        let build = store.create_build(&tpl).unwrap();
+
+        assert!(!build.id.is_empty());
+        assert_eq!(build.template_id, tpl.id);
+        assert_eq!(build.template_version, tpl.version);
+        assert_eq!(build.name, tpl.name);
+        assert_eq!(build.source_type, tpl.source_type);
+        assert_eq!(build.source_identifier, tpl.source_identifier);
+        assert_eq!(build.status, BuildStatus::Building);
+        assert!(build.master_image_id.is_none());
+    }
+
+    #[test]
+    fn update_build_status_to_success() {
+        let store = test_store();
+        // Create a real master image to satisfy the foreign key constraint
+        let img = store.create_image(
+            &ImportImageParams { name: "test-image".to_string(), source_path: "/tmp/img".to_string() },
+            "/data/test-image",
+        ).unwrap();
+
+        let params = CreateTemplateParams {
+            name: "success-tpl".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: None,
+        };
+        let tpl = store.create_template(&params).unwrap();
+        let build = store.create_build(&tpl).unwrap();
+
+        let updated = store.update_build_status(
+            &build.id,
+            BuildStatus::Success,
+            Some(&img.id),
+            Some("/tmp/build.log"),
+        ).unwrap();
+
+        assert_eq!(updated.status, BuildStatus::Success);
+        assert_eq!(updated.master_image_id, Some(img.id));
+        assert_eq!(updated.build_log_path, Some("/tmp/build.log".to_string()));
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[test]
+    fn update_build_status_to_failed() {
+        let store = test_store();
+        let params = CreateTemplateParams {
+            name: "fail-tpl".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: None,
+        };
+        let tpl = store.create_template(&params).unwrap();
+        let build = store.create_build(&tpl).unwrap();
+
+        let updated = store.update_build_status(
+            &build.id,
+            BuildStatus::Failed,
+            None,
+            Some("/tmp/build.log"),
+        ).unwrap();
+
+        assert_eq!(updated.status, BuildStatus::Failed);
+        assert!(updated.master_image_id.is_none());
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[test]
+    fn list_builds_all_and_filtered() {
+        let store = test_store();
+        let params_a = CreateTemplateParams {
+            name: "tpl-a".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/a.tar.gz".to_string(),
+            overlays: None,
+        };
+        let tpl_a = store.create_template(&params_a).unwrap();
+        store.create_build(&tpl_a).unwrap();
+
+        let params_b = CreateTemplateParams {
+            name: "tpl-b".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/b.tar.gz".to_string(),
+            overlays: None,
+        };
+        let tpl_b = store.create_template(&params_b).unwrap();
+        store.create_build(&tpl_b).unwrap();
+
+        let all = store.list_builds(None).unwrap();
+        assert_eq!(all.len(), 2);
+
+        let filtered = store.list_builds(Some("tpl-a")).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "tpl-a");
+    }
+
+    #[test]
+    fn get_build_by_id() {
+        let store = test_store();
+        let params = CreateTemplateParams {
+            name: "get-build-tpl".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: None,
+        };
+        let tpl = store.create_template(&params).unwrap();
+        let build = store.create_build(&tpl).unwrap();
+
+        let found = store.get_build(&build.id).unwrap().unwrap();
+        assert_eq!(found.id, build.id);
+
+        assert!(store.get_build("nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_template_cascades_to_builds() {
+        let store = test_store();
+        let params = CreateTemplateParams {
+            name: "cascade-tpl".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: None,
+        };
+        let tpl = store.create_template(&params).unwrap();
+        let build = store.create_build(&tpl).unwrap();
+
+        store.delete_template("cascade-tpl").unwrap();
+        assert!(store.get_build(&build.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn template_overlays_round_trip() {
+        let store = test_store();
+        let mut overlays = std::collections::HashMap::new();
+        overlays.insert("/etc/hostname".to_string(), "nexus-vm".to_string());
+        overlays.insert("/etc/resolv.conf".to_string(), "nameserver 8.8.8.8".to_string());
+
+        let params = CreateTemplateParams {
+            name: "overlay-tpl".to_string(),
+            source_type: "rootfs".to_string(),
+            source_identifier: "https://example.com/rootfs.tar.gz".to_string(),
+            overlays: Some(overlays.clone()),
+        };
+        let tpl = store.create_template(&params).unwrap();
+        let loaded = store.get_template(&tpl.id).unwrap().unwrap();
+
+        let loaded_overlays = loaded.overlays.unwrap();
+        assert_eq!(loaded_overlays.get("/etc/hostname").unwrap(), "nexus-vm");
+        assert_eq!(loaded_overlays.get("/etc/resolv.conf").unwrap(), "nameserver 8.8.8.8");
     }
 }
