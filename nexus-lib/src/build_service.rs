@@ -1,6 +1,6 @@
 use crate::backend::traits::WorkspaceBackend;
 use crate::pipeline::{ChecksumSet, PipelineExecutor, PipelineStage};
-use crate::store::traits::{BuildStore, ImageStore, StoreError};
+use crate::store::traits::StoreError;
 use crate::template::{Build, BuildStatus};
 use crate::workspace::ImportImageParams;
 use std::io::Write;

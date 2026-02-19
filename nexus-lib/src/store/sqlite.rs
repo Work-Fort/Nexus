@@ -906,7 +906,7 @@ impl BuildStore for SqliteStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT * FROM templates ORDER BY name")
             .map_err(|e| StoreError::Query(e.to_string()))?;
-        let templates = stmt.query_map([], |row| row_to_template(row))
+        let templates = stmt.query_map([], row_to_template)
             .map_err(|e| StoreError::Query(e.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -917,7 +917,7 @@ impl BuildStore for SqliteStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT * FROM templates WHERE name = ?1 OR id = ?1")
             .map_err(|e| StoreError::Query(e.to_string()))?;
-        let mut rows = stmt.query_map(rusqlite::params![name_or_id], |row| row_to_template(row))
+        let mut rows = stmt.query_map(rusqlite::params![name_or_id], row_to_template)
             .map_err(|e| StoreError::Query(e.to_string()))?;
         match rows.next() {
             Some(Ok(tpl)) => Ok(Some(tpl)),
@@ -953,7 +953,7 @@ impl BuildStore for SqliteStore {
             let mut stmt = conn.prepare(
                 "SELECT b.* FROM builds b JOIN templates t ON b.template_id = t.id WHERE t.name = ?1 OR t.id = ?1 ORDER BY b.created_at DESC"
             ).map_err(|e| StoreError::Query(e.to_string()))?;
-            let builds = stmt.query_map(rusqlite::params![tpl_name], |row| row_to_build(row))
+            let builds = stmt.query_map(rusqlite::params![tpl_name], row_to_build)
                 .map_err(|e| StoreError::Query(e.to_string()))?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -961,7 +961,7 @@ impl BuildStore for SqliteStore {
         } else {
             let mut stmt = conn.prepare("SELECT * FROM builds ORDER BY created_at DESC")
                 .map_err(|e| StoreError::Query(e.to_string()))?;
-            let builds = stmt.query_map([], |row| row_to_build(row))
+            let builds = stmt.query_map([], row_to_build)
                 .map_err(|e| StoreError::Query(e.to_string()))?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -973,7 +973,7 @@ impl BuildStore for SqliteStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT * FROM builds WHERE id = ?1")
             .map_err(|e| StoreError::Query(e.to_string()))?;
-        let mut rows = stmt.query_map(rusqlite::params![id], |row| row_to_build(row))
+        let mut rows = stmt.query_map(rusqlite::params![id], row_to_build)
             .map_err(|e| StoreError::Query(e.to_string()))?;
         match rows.next() {
             Some(Ok(build)) => Ok(Some(build)),
