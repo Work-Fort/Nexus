@@ -345,7 +345,7 @@ impl RootfsProvider for AlpineProvider {
 // and constructs URLs directly. See Step 7, Task 3.
 
 /// Get the current system architecture as used in asset filenames.
-fn current_arch() -> &'static str {
+pub(crate) fn current_arch() -> &'static str {
     #[cfg(target_arch = "x86_64")]
     { "x86_64" }
     #[cfg(target_arch = "aarch64")]
