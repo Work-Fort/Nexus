@@ -3,6 +3,7 @@ pub mod client;
 pub mod config;
 pub mod github;
 pub mod pgp;
+pub mod pipeline;
 pub mod store;
 pub mod vm;
 pub mod workspace;
