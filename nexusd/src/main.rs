@@ -1,6 +1,7 @@
 use clap::Parser;
 use nexus_lib::backend::btrfs::BtrfsBackend;
 use nexus_lib::config::{self, Config};
+use nexus_lib::pipeline::PipelineExecutor;
 use nexus_lib::store::sqlite::SqliteStore;
 use tracing::{error, info};
 use std::sync::Arc;
@@ -79,10 +80,15 @@ async fn main() {
         }
     };
 
+    let assets_dir = nexus_lib::config::default_assets_dir();
+    let executor = PipelineExecutor::new();
+
     let state = Arc::new(api::AppState {
         store: Box::new(store),
         backend: Box::new(backend),
         workspaces_root,
+        assets_dir,
+        executor,
     });
 
     info!("nexusd starting");

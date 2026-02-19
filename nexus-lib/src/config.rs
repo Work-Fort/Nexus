@@ -87,6 +87,14 @@ pub fn default_db_path() -> PathBuf {
     state_dir.join("nexus.db")
 }
 
+/// Returns the default assets directory: $XDG_DATA_HOME/nexus/assets
+pub fn default_assets_dir() -> PathBuf {
+    let data_dir = dirs::data_dir()
+        .expect("cannot determine XDG_DATA_HOME")
+        .join("nexus");
+    data_dir.join("assets")
+}
+
 impl Config {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path).map_err(|e| {

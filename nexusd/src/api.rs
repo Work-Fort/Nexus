@@ -1,12 +1,16 @@
-use axum::{Json, Router, routing::{get, post}};
+use axum::{Json, Router, routing::{delete, get, post}};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use nexus_lib::backend::traits::WorkspaceBackend;
+use nexus_lib::firecracker_service::FirecrackerService;
+use nexus_lib::kernel_service::KernelService;
+use nexus_lib::pipeline::PipelineExecutor;
+use nexus_lib::rootfs_service::RootfsService;
 use nexus_lib::store::traits::{DbStatus, StateStore, StoreError};
 use nexus_lib::vm::CreateVmParams;
 use nexus_lib::workspace::{ImportImageParams, CreateWorkspaceParams};
 use nexus_lib::workspace_service::{WorkspaceService, WorkspaceServiceError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -39,6 +43,8 @@ pub struct AppState {
     pub store: Box<dyn StateStore + Send + Sync>,
     pub backend: Box<dyn WorkspaceBackend>,
     pub workspaces_root: PathBuf,
+    pub assets_dir: PathBuf,
+    pub executor: PipelineExecutor,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
@@ -311,6 +317,216 @@ async fn delete_workspace_handler(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Kernel handlers
+// ---------------------------------------------------------------------------
+
+async fn list_kernels_handler(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.list_kernels() {
+        Ok(kernels) => (StatusCode::OK, Json(serde_json::to_value(kernels).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct DownloadKernelRequest {
+    version: String,
+}
+
+async fn download_kernel_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DownloadKernelRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let provider_config = match state.store.get_default_provider("kernel") {
+        Ok(Some(p)) => p,
+        Ok(None) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "no default kernel provider configured"})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    let svc = KernelService::new(state.store.as_ref(), &state.executor, state.assets_dir.clone());
+    match svc.download(&req.version, &provider_config).await {
+        Ok(kernel) => (StatusCode::CREATED, Json(serde_json::to_value(kernel).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn remove_kernel_handler(
+    State(state): State<Arc<AppState>>,
+    Path(version): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = KernelService::new(state.store.as_ref(), &state.executor, state.assets_dir.clone());
+    match svc.remove(&version) {
+        Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("kernel '{}' not found", version)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn verify_kernel_handler(
+    State(state): State<Arc<AppState>>,
+    Path(version): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = KernelService::new(state.store.as_ref(), &state.executor, state.assets_dir.clone());
+    match svc.verify(&version) {
+        Ok(ok) => (StatusCode::OK, Json(serde_json::json!(ok))),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rootfs handlers
+// ---------------------------------------------------------------------------
+
+async fn list_rootfs_handler(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.list_rootfs_images() {
+        Ok(images) => (StatusCode::OK, Json(serde_json::to_value(images).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct DownloadRootfsRequest {
+    distro: String,
+    version: String,
+}
+
+async fn download_rootfs_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DownloadRootfsRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let provider_config = match state.store.get_default_provider("rootfs") {
+        Ok(Some(p)) => p,
+        Ok(None) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "no default rootfs provider configured"})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    let svc = RootfsService::new(state.store.as_ref(), &state.executor, state.assets_dir.clone());
+    match svc.download(&req.distro, &req.version, &provider_config).await {
+        Ok(rootfs) => (StatusCode::CREATED, Json(serde_json::to_value(rootfs).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn remove_rootfs_handler(
+    State(state): State<Arc<AppState>>,
+    Path((distro, version)): Path<(String, String)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = RootfsService::new(state.store.as_ref(), &state.executor, state.assets_dir.clone());
+    match svc.remove(&distro, &version) {
+        Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("rootfs '{distro}-{version}' not found")})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Firecracker handlers
+// ---------------------------------------------------------------------------
+
+async fn list_firecracker_handler(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.list_firecracker_versions() {
+        Ok(versions) => (StatusCode::OK, Json(serde_json::to_value(versions).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct DownloadFirecrackerRequest {
+    version: String,
+}
+
+async fn download_firecracker_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<DownloadFirecrackerRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let provider_config = match state.store.get_default_provider("firecracker") {
+        Ok(Some(p)) => p,
+        Ok(None) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "no default firecracker provider configured"})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    let svc = FirecrackerService::from_provider(state.store.as_ref(), &state.executor, state.assets_dir.clone(), &provider_config);
+    match svc.download(&req.version, &provider_config).await {
+        Ok(fc) => (StatusCode::CREATED, Json(serde_json::to_value(fc).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn remove_firecracker_handler(
+    State(state): State<Arc<AppState>>,
+    Path(version): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let svc = FirecrackerService::new(state.store.as_ref(), &state.executor, state.assets_dir.clone());
+    match svc.remove(&version) {
+        Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("firecracker '{}' not found", version)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
@@ -320,6 +536,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/images/{name_or_id}", get(get_image).delete(delete_image_handler))
         .route("/v1/workspaces", post(create_workspace_handler).get(list_workspaces))
         .route("/v1/workspaces/{name_or_id}", get(get_workspace).delete(delete_workspace_handler))
+        .route("/v1/kernels", get(list_kernels_handler))
+        .route("/v1/kernels/download", post(download_kernel_handler))
+        .route("/v1/kernels/{version}", delete(remove_kernel_handler))
+        .route("/v1/kernels/{version}/verify", get(verify_kernel_handler))
+        .route("/v1/rootfs-images", get(list_rootfs_handler))
+        .route("/v1/rootfs-images/download", post(download_rootfs_handler))
+        .route("/v1/rootfs-images/{distro}/{version}", delete(remove_rootfs_handler))
+        .route("/v1/firecracker", get(list_firecracker_handler))
+        .route("/v1/firecracker/download", post(download_firecracker_handler))
+        .route("/v1/firecracker/{version}", delete(remove_firecracker_handler))
         .with_state(state)
 }
 
@@ -391,15 +617,15 @@ mod tests {
         fn get_default_provider(&self, _asset_type: &str) -> Result<Option<Provider>, StoreError> { unimplemented!() }
         fn list_providers(&self, _asset_type: Option<&str>) -> Result<Vec<Provider>, StoreError> { unimplemented!() }
         fn register_kernel(&self, _params: &RegisterKernelParams) -> Result<Kernel, StoreError> { unimplemented!() }
-        fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError> { unimplemented!() }
+        fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError> { Ok(vec![]) }
         fn get_kernel(&self, _id: &str, _arch: Option<&str>) -> Result<Option<Kernel>, StoreError> { unimplemented!() }
         fn delete_kernel(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
         fn register_rootfs(&self, _params: &RegisterRootfsParams) -> Result<RootfsImage, StoreError> { unimplemented!() }
-        fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError> { unimplemented!() }
+        fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError> { Ok(vec![]) }
         fn get_rootfs(&self, _id: &str, _arch: Option<&str>) -> Result<Option<RootfsImage>, StoreError> { unimplemented!() }
         fn delete_rootfs(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
         fn register_firecracker(&self, _params: &RegisterFirecrackerParams) -> Result<FirecrackerVersion, StoreError> { unimplemented!() }
-        fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> { unimplemented!() }
+        fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> { Ok(vec![]) }
         fn get_firecracker(&self, _id: &str, _arch: Option<&str>) -> Result<Option<FirecrackerVersion>, StoreError> { unimplemented!() }
         fn delete_firecracker(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
     }
@@ -494,6 +720,8 @@ mod tests {
             store: Box::new(store),
             backend: Box::new(MockBackend),
             workspaces_root: std::path::PathBuf::from("/tmp/mock-ws"),
+            assets_dir: std::path::PathBuf::from("/tmp/mock-assets"),
+            executor: nexus_lib::pipeline::PipelineExecutor::new(),
         })
     }
 
@@ -541,6 +769,7 @@ mod tests {
         assert!(json.get("database").is_none() || json["database"].is_null());
     }
 
+    use nexus_lib::pipeline::PipelineExecutor;
     use nexus_lib::backend::traits::{BackendError, SubvolumeInfo, WorkspaceBackend};
 
     /// A no-op backend for API unit tests (no real btrfs needed).
@@ -565,7 +794,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let ws_root = dir.path().join("workspaces");
+        let assets_dir = dir.path().join("assets");
         std::fs::create_dir_all(&ws_root).unwrap();
+        std::fs::create_dir_all(&assets_dir).unwrap();
         let store = SqliteStore::open_and_init(&db_path).unwrap();
         // Leak the tempdir so it lives long enough
         std::mem::forget(dir);
@@ -573,6 +804,8 @@ mod tests {
             store: Box::new(store),
             backend: Box::new(MockBackend),
             workspaces_root: ws_root,
+            assets_dir,
+            executor: nexus_lib::pipeline::PipelineExecutor::new(),
         })
     }
 
@@ -753,5 +986,38 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn list_kernels_returns_array() {
+        let state = test_state();
+        let app = router(state);
+        let response = app
+            .oneshot(Request::get("/v1/kernels").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert!(json.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_rootfs_images_returns_array() {
+        let state = test_state();
+        let app = router(state);
+        let response = app
+            .oneshot(Request::get("/v1/rootfs-images").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn list_firecracker_returns_array() {
+        let state = test_state();
+        let app = router(state);
+        let response = app
+            .oneshot(Request::get("/v1/firecracker").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

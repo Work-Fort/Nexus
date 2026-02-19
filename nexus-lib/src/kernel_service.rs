@@ -6,7 +6,7 @@ use crate::asset::{
 };
 use crate::github::GitHubError;
 use crate::pipeline::{self, PipelineError, PipelineExecutor};
-use crate::store::traits::{AssetStore, StoreError};
+use crate::store::traits::{StateStore, StoreError};
 use std::path::{Path, PathBuf};
 
 /// Errors from kernel service operations.
@@ -57,7 +57,7 @@ impl From<GitHubError> for KernelServiceError {
 /// (the second checksum stage in the anvil pipeline), enabling later re-verification:
 /// `nexusctl kernel verify 6.18.9`
 pub struct KernelService<'a> {
-    store: &'a (dyn AssetStore + Send + Sync),
+    store: &'a (dyn StateStore + Send + Sync),
     executor: &'a PipelineExecutor,
     assets_dir: PathBuf,
     providers: Vec<Box<dyn KernelProvider>>,
@@ -65,7 +65,7 @@ pub struct KernelService<'a> {
 
 impl<'a> KernelService<'a> {
     pub fn new(
-        store: &'a (dyn AssetStore + Send + Sync),
+        store: &'a (dyn StateStore + Send + Sync),
         executor: &'a PipelineExecutor,
         assets_dir: PathBuf,
     ) -> Self {
@@ -80,7 +80,7 @@ impl<'a> KernelService<'a> {
 
     /// Create a KernelService with explicit providers (constructed from DB config).
     pub fn with_providers(
-        store: &'a (dyn AssetStore + Send + Sync),
+        store: &'a (dyn StateStore + Send + Sync),
         executor: &'a PipelineExecutor,
         assets_dir: PathBuf,
         providers: Vec<Box<dyn KernelProvider>>,

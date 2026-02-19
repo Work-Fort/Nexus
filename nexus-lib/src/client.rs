@@ -308,6 +308,144 @@ impl NexusClient {
             other => Err(ClientError::Api(format!("unexpected status: {other}"))),
         }
     }
+
+    // --- Kernel methods ---
+
+    pub async fn list_kernels(&self) -> Result<Vec<crate::asset::Kernel>, ClientError> {
+        let url = format!("{}/v1/kernels", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn download_kernel(&self, version: &str) -> Result<crate::asset::Kernel, ClientError> {
+        let url = format!("{}/v1/kernels/download", self.base_url);
+        let resp = self.http.post(&url)
+            .json(&serde_json::json!({ "version": version }))
+            .send().await.map_err(|e| {
+                if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+                else { ClientError::Api(e.to_string()) }
+            })?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status: {body}")));
+        }
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn remove_kernel(&self, version: &str) -> Result<bool, ClientError> {
+        let url = format!("{}/v1/kernels/{version}", self.base_url);
+        let resp = self.http.delete(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+        match resp.status().as_u16() {
+            204 => Ok(true),
+            404 => Ok(false),
+            other => Err(ClientError::Api(format!("unexpected status: {other}"))),
+        }
+    }
+
+    pub async fn verify_kernel(&self, version: &str) -> Result<bool, ClientError> {
+        let url = format!("{}/v1/kernels/{version}/verify", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    // --- Rootfs methods ---
+
+    pub async fn list_rootfs(&self) -> Result<Vec<crate::asset::RootfsImage>, ClientError> {
+        let url = format!("{}/v1/rootfs-images", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn download_rootfs(&self, distro: &str, version: &str) -> Result<crate::asset::RootfsImage, ClientError> {
+        let url = format!("{}/v1/rootfs-images/download", self.base_url);
+        let resp = self.http.post(&url)
+            .json(&serde_json::json!({ "distro": distro, "version": version }))
+            .send().await.map_err(|e| {
+                if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+                else { ClientError::Api(e.to_string()) }
+            })?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status: {body}")));
+        }
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn remove_rootfs(&self, distro: &str, version: &str) -> Result<bool, ClientError> {
+        let url = format!("{}/v1/rootfs-images/{distro}/{version}", self.base_url);
+        let resp = self.http.delete(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+        match resp.status().as_u16() {
+            204 => Ok(true),
+            404 => Ok(false),
+            other => Err(ClientError::Api(format!("unexpected status: {other}"))),
+        }
+    }
+
+    // --- Firecracker methods ---
+
+    pub async fn list_firecracker(&self) -> Result<Vec<crate::asset::FirecrackerVersion>, ClientError> {
+        let url = format!("{}/v1/firecracker", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn download_firecracker(&self, version: &str) -> Result<crate::asset::FirecrackerVersion, ClientError> {
+        let url = format!("{}/v1/firecracker/download", self.base_url);
+        let resp = self.http.post(&url)
+            .json(&serde_json::json!({ "version": version }))
+            .send().await.map_err(|e| {
+                if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+                else { ClientError::Api(e.to_string()) }
+            })?;
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status: {body}")));
+        }
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn remove_firecracker(&self, version: &str) -> Result<bool, ClientError> {
+        let url = format!("{}/v1/firecracker/{version}", self.base_url);
+        let resp = self.http.delete(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+        match resp.status().as_u16() {
+            204 => Ok(true),
+            404 => Ok(false),
+            other => Err(ClientError::Api(format!("unexpected status: {other}"))),
+        }
+    }
 }
 
 #[cfg(test)]

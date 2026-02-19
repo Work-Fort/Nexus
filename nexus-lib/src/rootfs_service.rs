@@ -5,7 +5,7 @@ use crate::asset::{
     RootfsProvider,
 };
 use crate::pipeline::{PipelineError, PipelineExecutor};
-use crate::store::traits::{AssetStore, StoreError};
+use crate::store::traits::{StateStore, StoreError};
 use std::path::PathBuf;
 
 /// Errors from rootfs service operations.
@@ -48,7 +48,7 @@ impl From<PipelineError> for RootfsServiceError {
 /// Uses a `RootfsProvider` trait for URL construction and checksum fetching.
 /// Uses the `PipelineExecutor` with pipeline stages from the providers table.
 pub struct RootfsService<'a> {
-    store: &'a (dyn AssetStore + Send + Sync),
+    store: &'a (dyn StateStore + Send + Sync),
     executor: &'a PipelineExecutor,
     assets_dir: PathBuf,
     providers: Vec<Box<dyn RootfsProvider>>,
@@ -56,7 +56,7 @@ pub struct RootfsService<'a> {
 
 impl<'a> RootfsService<'a> {
     pub fn new(
-        store: &'a (dyn AssetStore + Send + Sync),
+        store: &'a (dyn StateStore + Send + Sync),
         executor: &'a PipelineExecutor,
         assets_dir: PathBuf,
     ) -> Self {
@@ -67,7 +67,7 @@ impl<'a> RootfsService<'a> {
     }
 
     pub fn with_providers(
-        store: &'a (dyn AssetStore + Send + Sync),
+        store: &'a (dyn StateStore + Send + Sync),
         executor: &'a PipelineExecutor,
         assets_dir: PathBuf,
         providers: Vec<Box<dyn RootfsProvider>>,

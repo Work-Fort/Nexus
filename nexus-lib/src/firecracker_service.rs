@@ -6,7 +6,7 @@ use crate::asset::{
 };
 use crate::github::{GitHubError, GitHubReleaseClient};
 use crate::pipeline::{self, PipelineError, PipelineExecutor};
-use crate::store::traits::{AssetStore, StoreError};
+use crate::store::traits::{StateStore, StoreError};
 use std::path::{Path, PathBuf};
 
 /// Errors from Firecracker service operations.
@@ -49,7 +49,7 @@ impl From<GitHubError> for FirecrackerServiceError {
 /// from the providers table config (default: `firecracker-microvm/firecracker`).
 /// Pipeline stages come from the providers table.
 pub struct FirecrackerService<'a> {
-    store: &'a (dyn AssetStore + Send + Sync),
+    store: &'a (dyn StateStore + Send + Sync),
     executor: &'a PipelineExecutor,
     assets_dir: PathBuf,
     repo: String,
@@ -58,7 +58,7 @@ pub struct FirecrackerService<'a> {
 impl<'a> FirecrackerService<'a> {
     /// Create from a provider config record (read from the providers table).
     pub fn from_provider(
-        store: &'a (dyn AssetStore + Send + Sync),
+        store: &'a (dyn StateStore + Send + Sync),
         executor: &'a PipelineExecutor,
         assets_dir: PathBuf,
         provider_config: &Provider,
@@ -72,7 +72,7 @@ impl<'a> FirecrackerService<'a> {
 
     /// Create with default config (for tests / fallback).
     pub fn new(
-        store: &'a (dyn AssetStore + Send + Sync),
+        store: &'a (dyn StateStore + Send + Sync),
         executor: &'a PipelineExecutor,
         assets_dir: PathBuf,
     ) -> Self {
