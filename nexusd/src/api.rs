@@ -7,6 +7,7 @@ use nexus_lib::kernel_service::KernelService;
 use nexus_lib::pipeline::PipelineExecutor;
 use nexus_lib::rootfs_service::RootfsService;
 use nexus_lib::store::traits::{DbStatus, StateStore, StoreError};
+use nexus_lib::template::CreateTemplateParams;
 use nexus_lib::vm::CreateVmParams;
 use nexus_lib::workspace::{ImportImageParams, CreateWorkspaceParams};
 use nexus_lib::workspace_service::{WorkspaceService, WorkspaceServiceError};
@@ -527,6 +528,154 @@ async fn remove_firecracker_handler(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Template handlers
+// ---------------------------------------------------------------------------
+
+async fn create_template(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<CreateTemplateParams>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.create_template(&params) {
+        Ok(tpl) => (StatusCode::CREATED, Json(serde_json::to_value(tpl).unwrap())),
+        Err(StoreError::Conflict(msg)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn list_templates(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.list_templates() {
+        Ok(tpls) => (StatusCode::OK, Json(serde_json::to_value(tpls).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn get_template_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.get_template(&name_or_id) {
+        Ok(Some(tpl)) => (StatusCode::OK, Json(serde_json::to_value(tpl).unwrap())),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("template '{}' not found", name_or_id)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn delete_template_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.delete_template(&name_or_id) {
+        Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("template '{}' not found", name_or_id)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Build handlers
+// ---------------------------------------------------------------------------
+
+async fn trigger_build(
+    State(state): State<Arc<AppState>>,
+    Path(template_name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let template = match state.store.get_template(&template_name_or_id) {
+        Ok(Some(tpl)) => tpl,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("template '{}' not found", template_name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    let build = match state.store.create_build(&template) {
+        Ok(b) => b,
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    // Spawn background build execution
+    let build_clone = build.clone();
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        let builds_dir = state_clone.assets_dir.parent()
+            .unwrap_or(std::path::Path::new("/tmp"))
+            .join("builds");
+        let _ = std::fs::create_dir_all(&builds_dir);
+
+        let svc = nexus_lib::build_service::BuildService::new(
+            state_clone.store.as_ref(),
+            state_clone.backend.as_ref(),
+            &state_clone.executor,
+            state_clone.workspaces_root.clone(),
+            builds_dir,
+        );
+        svc.execute_build(&build_clone).await;
+    });
+
+    (StatusCode::CREATED, Json(serde_json::to_value(build).unwrap()))
+}
+
+async fn list_builds_handler(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let template = query.get("template").map(|s| s.as_str());
+    match state.store.list_builds(template) {
+        Ok(builds) => (StatusCode::OK, Json(serde_json::to_value(builds).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn get_build_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.store.get_build(&id) {
+        Ok(Some(build)) => (StatusCode::OK, Json(serde_json::to_value(build).unwrap())),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("build '{}' not found", id)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
@@ -546,6 +695,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/firecracker", get(list_firecracker_handler))
         .route("/v1/firecracker/download", post(download_firecracker_handler))
         .route("/v1/firecracker/{version}", delete(remove_firecracker_handler))
+        .route("/v1/templates", post(create_template).get(list_templates))
+        .route("/v1/templates/{name_or_id}", get(get_template_handler).delete(delete_template_handler))
+        .route("/v1/templates/{name_or_id}/build", post(trigger_build))
+        .route("/v1/builds", get(list_builds_handler))
+        .route("/v1/builds/{id}", get(get_build_handler))
         .with_state(state)
 }
 
@@ -1041,5 +1195,118 @@ mod tests {
             .oneshot(Request::get("/v1/firecracker").body(Body::empty()).unwrap())
             .await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn create_template_returns_201() {
+        let state = test_state();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::post("/v1/templates")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "base", "source_type": "rootfs", "source_identifier": "https://example.com/rootfs.tar.gz"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "base");
+        assert_eq!(json["source_type"], "rootfs");
+        assert_eq!(json["version"], 1);
+    }
+
+    #[tokio::test]
+    async fn list_templates_returns_array() {
+        let state = test_state();
+
+        router(state.clone())
+            .oneshot(
+                Request::post("/v1/templates")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "tpl1", "source_type": "rootfs", "source_identifier": "https://example.com/rootfs.tar.gz"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = router(state)
+            .oneshot(Request::get("/v1/templates").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_template_returns_detail() {
+        let state = test_state();
+
+        router(state.clone())
+            .oneshot(
+                Request::post("/v1/templates")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "detail-tpl", "source_type": "rootfs", "source_identifier": "https://example.com/rootfs.tar.gz"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = router(state)
+            .oneshot(Request::get("/v1/templates/detail-tpl").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["name"], "detail-tpl");
+    }
+
+    #[tokio::test]
+    async fn delete_template_returns_204() {
+        let state = test_state();
+
+        router(state.clone())
+            .oneshot(
+                Request::post("/v1/templates")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "doomed-tpl", "source_type": "rootfs", "source_identifier": "https://example.com/rootfs.tar.gz"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let response = router(state)
+            .oneshot(
+                Request::delete("/v1/templates/doomed-tpl")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn list_builds_returns_array() {
+        let state = test_state();
+        let response = router(state)
+            .oneshot(Request::get("/v1/builds").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert!(json.is_empty());
     }
 }
