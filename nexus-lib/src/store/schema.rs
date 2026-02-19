@@ -1,7 +1,7 @@
 /// Schema version — increment when the schema changes.
 /// Pre-alpha migration strategy: if the stored version doesn't match,
 /// delete the DB and recreate.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Database schema. Executed as a single batch on first start.
 /// Domain tables are added by later steps — each step bumps SCHEMA_VERSION
@@ -133,6 +133,42 @@ CREATE TABLE firecracker_versions (
 );
 
 CREATE UNIQUE INDEX idx_firecracker_version_arch ON firecracker_versions(version, architecture);
+
+-- Templates: blueprints for building rootfs images
+CREATE TABLE templates (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    version INTEGER NOT NULL DEFAULT 1,
+    source_type TEXT NOT NULL CHECK(source_type IN ('rootfs')),
+    source_identifier TEXT NOT NULL,
+    overlays TEXT,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE INDEX idx_templates_name ON templates(name);
+
+-- Builds: immutable build attempts from templates
+CREATE TABLE builds (
+    id TEXT PRIMARY KEY,
+    template_id TEXT NOT NULL,
+    template_version INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_identifier TEXT NOT NULL,
+    overlays TEXT,
+    status TEXT NOT NULL DEFAULT 'building' CHECK(status IN ('building', 'success', 'failed')),
+    build_log_path TEXT,
+    master_image_id TEXT,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    completed_at INTEGER,
+    FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+    FOREIGN KEY (master_image_id) REFERENCES master_images(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_builds_template_id ON builds(template_id);
+CREATE INDEX idx_builds_status ON builds(status);
+CREATE INDEX idx_builds_master_image_id ON builds(master_image_id);
 "#;
 
 /// Seed the providers table with default provider configurations.
