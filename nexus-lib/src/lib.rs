@@ -12,6 +12,7 @@ pub mod rootfs_service;
 pub mod store;
 pub mod template;
 pub mod vm;
+pub mod vm_service;
 pub mod workspace;
 pub mod workspace_service;
 
