@@ -1,5 +1,6 @@
 pub mod asset;
 pub mod backend;
+pub mod build_service;
 pub mod client;
 pub mod config;
 pub mod firecracker_service;
