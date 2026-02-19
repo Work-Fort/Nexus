@@ -24,11 +24,31 @@ impl ConfigError {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct FirecrackerConfig {
+    pub binary: String,
+    pub kernel: String,
+}
+
+impl Default for FirecrackerConfig {
+    fn default() -> Self {
+        let data_dir = dirs::data_dir()
+            .expect("cannot determine XDG_DATA_HOME")
+            .join("nexus");
+        FirecrackerConfig {
+            binary: "/usr/bin/firecracker".to_string(),
+            kernel: data_dir.join("images").join("vmlinux").to_string_lossy().to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub api: ApiConfig,
     pub storage: StorageConfig,
+    pub firecracker: FirecrackerConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -93,6 +113,22 @@ pub fn default_assets_dir() -> PathBuf {
         .expect("cannot determine XDG_DATA_HOME")
         .join("nexus");
     data_dir.join("assets")
+}
+
+/// Returns the default runtime path: $XDG_RUNTIME_DIR/nexus
+pub fn default_runtime_path() -> PathBuf {
+    dirs::runtime_dir()
+        .unwrap_or_else(|| {
+            // Fallback: /run/user/$UID or /tmp/nexus-runtime-$UID
+            let uid = nix::unistd::getuid();
+            let run_user = PathBuf::from(format!("/run/user/{}", uid));
+            if run_user.exists() {
+                run_user
+            } else {
+                std::env::temp_dir().join(format!("nexus-runtime-{}", uid))
+            }
+        })
+        .join("nexus")
 }
 
 impl Config {
@@ -177,5 +213,36 @@ storage:
         assert!(result.is_err());
         assert!(!result.unwrap_err().is_not_found());
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn firecracker_config_defaults() {
+        let config = Config::default();
+        assert!(config.firecracker.binary.contains("firecracker"));
+        assert!(config.firecracker.kernel.contains("vmlinux"));
+    }
+
+    #[test]
+    fn default_runtime_path_ends_with_nexus() {
+        let path = default_runtime_path();
+        assert!(
+            path.to_string_lossy().contains("nexus"),
+            "expected path containing nexus, got: {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn config_with_firecracker_section_deserializes() {
+        let yaml = r#"
+api:
+  listen: "127.0.0.1:8080"
+firecracker:
+  binary: "/usr/local/bin/firecracker"
+  kernel: "/opt/kernels/vmlinux"
+"#;
+        let config: Config = serde_norway::from_str(yaml).unwrap();
+        assert_eq!(config.firecracker.binary, "/usr/local/bin/firecracker");
+        assert_eq!(config.firecracker.kernel, "/opt/kernels/vmlinux");
     }
 }
