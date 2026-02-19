@@ -1,7 +1,7 @@
 /// Schema version — increment when the schema changes.
 /// Pre-alpha migration strategy: if the stored version doesn't match,
 /// delete the DB and recreate.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Database schema. Executed as a single batch on first start.
 /// Domain tables are added by later steps — each step bumps SCHEMA_VERSION
@@ -74,4 +74,113 @@ CREATE TABLE workspaces (
 
 CREATE INDEX idx_workspaces_vm_id ON workspaces(vm_id);
 CREATE INDEX idx_workspaces_base ON workspaces(master_image_id);
+
+-- Asset download providers (configuration + pipeline stages stored as JSON)
+CREATE TABLE providers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    asset_type TEXT NOT NULL CHECK(asset_type IN ('kernel', 'rootfs', 'firecracker')),
+    provider_type TEXT NOT NULL,  -- 'github_release', 'archive', 'alpine_cdn'
+    config TEXT NOT NULL,         -- JSON: {"repo": "Work-Fort/Anvil"} or {"base_url": "..."}
+    pipeline TEXT NOT NULL,       -- JSON: pipeline stages array
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE INDEX idx_providers_asset_type ON providers(asset_type);
+CREATE UNIQUE INDEX idx_providers_default ON providers(asset_type) WHERE is_default = 1;
+
+-- Downloaded kernels
+CREATE TABLE kernels (
+    id TEXT PRIMARY KEY,
+    version TEXT NOT NULL,
+    architecture TEXT NOT NULL,
+    path_on_host TEXT NOT NULL UNIQUE,
+    sha256 TEXT NOT NULL,
+    pgp_verified INTEGER NOT NULL DEFAULT 0 CHECK(pgp_verified IN (0, 1)),
+    file_size INTEGER NOT NULL,
+    source_url TEXT NOT NULL,
+    downloaded_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE UNIQUE INDEX idx_kernels_version_arch ON kernels(version, architecture);
+
+-- Downloaded rootfs images
+CREATE TABLE rootfs_images (
+    id TEXT PRIMARY KEY,
+    distro TEXT NOT NULL DEFAULT 'alpine',
+    version TEXT NOT NULL,
+    architecture TEXT NOT NULL,
+    path_on_host TEXT NOT NULL UNIQUE,
+    sha256 TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    source_url TEXT NOT NULL,
+    downloaded_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE UNIQUE INDEX idx_rootfs_images_distro_version_arch ON rootfs_images(distro, version, architecture);
+
+-- Downloaded Firecracker binaries
+CREATE TABLE firecracker_versions (
+    id TEXT PRIMARY KEY,
+    version TEXT NOT NULL,
+    architecture TEXT NOT NULL,
+    path_on_host TEXT NOT NULL UNIQUE,
+    sha256 TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    source_url TEXT NOT NULL,
+    downloaded_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE UNIQUE INDEX idx_firecracker_version_arch ON firecracker_versions(version, architecture);
 "#;
+
+/// Seed the providers table with default provider configurations.
+/// Called after schema creation (idempotent -- skips if providers already exist).
+pub fn seed_default_providers(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))?;
+    if count > 0 {
+        return Ok(());
+    }
+
+    conn.execute(
+        "INSERT INTO providers (id, name, asset_type, provider_type, config, pipeline, is_default) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            "provider-anvil",
+            "anvil",
+            "kernel",
+            "github_release",
+            r#"{"repo": "Work-Fort/Anvil"}"#,
+            r#"[{"transport": "http", "credentials": {}, "host": "", "encrypted": true}, {"checksum": "SHA256"}, {"verify": "pgp"}, {"decompress": "xz"}, {"checksum": "SHA256"}]"#,
+            1,
+        ],
+    )?;
+
+    conn.execute(
+        "INSERT INTO providers (id, name, asset_type, provider_type, config, pipeline, is_default) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            "provider-alpine",
+            "alpine",
+            "rootfs",
+            "alpine_cdn",
+            r#"{"cdn_base": "https://dl-cdn.alpinelinux.org"}"#,
+            r#"[{"transport": "http", "credentials": {}, "host": "", "encrypted": true}, {"checksum": "SHA256"}, {"verify": "none"}, {"decompress": "none"}]"#,
+            1,
+        ],
+    )?;
+
+    conn.execute(
+        "INSERT INTO providers (id, name, asset_type, provider_type, config, pipeline, is_default) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            "provider-firecracker",
+            "firecracker",
+            "firecracker",
+            "github_release",
+            r#"{"repo": "firecracker-microvm/firecracker"}"#,
+            r#"[{"transport": "http", "credentials": {}, "host": "", "encrypted": true}, {"checksum": "SHA256"}, {"verify": "none"}, {"decompress": "none"}]"#,
+            1,
+        ],
+    )?;
+
+    Ok(())
+}

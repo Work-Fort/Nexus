@@ -1,4 +1,4 @@
-use crate::store::schema::{SCHEMA_SQL, SCHEMA_VERSION};
+use crate::store::schema::{seed_default_providers, SCHEMA_SQL, SCHEMA_VERSION};
 use crate::store::traits::{DbStatus, ImageStore, StateStore, StoreError, VmStore, WorkspaceStore};
 use crate::vm::{CreateVmParams, Vm, VmState};
 use crate::workspace::{ImportImageParams, MasterImage, Workspace};
@@ -478,6 +478,9 @@ impl StateStore for SqliteStore {
         )
         .map_err(|e| StoreError::Init(format!("cannot insert schema version: {e}")))?;
 
+        seed_default_providers(&conn)
+            .map_err(|e| StoreError::Init(format!("cannot seed default providers: {e}")))?;
+
         Ok(())
     }
 
@@ -580,8 +583,9 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        // Expected tables: schema_meta, settings, vms, master_images, workspaces = 5 tables
-        assert_eq!(status.table_count, 5, "expected 5 tables, got {}", status.table_count);
+        // Expected tables: schema_meta, settings, vms, master_images, workspaces,
+        // providers, kernels, rootfs_images, firecracker_versions = 9 tables
+        assert_eq!(status.table_count, 9, "expected 9 tables, got {}", status.table_count);
     }
 
     #[test]
@@ -595,7 +599,7 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 5);
+        assert_eq!(status.table_count, 9);
     }
 
     #[test]
@@ -659,7 +663,7 @@ mod tests {
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 5, "should have all tables after recreate");
+        assert_eq!(status.table_count, 9, "should have all tables after recreate");
 
         let conn = store.conn.lock().unwrap();
         let version: String = conn
