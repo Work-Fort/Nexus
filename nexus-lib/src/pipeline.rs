@@ -120,6 +120,12 @@ pub struct PipelineExecutor {
     client: reqwest::Client,
 }
 
+impl Default for PipelineExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PipelineExecutor {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()

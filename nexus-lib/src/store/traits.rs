@@ -1,3 +1,7 @@
+use crate::asset::{
+    FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
+    RegisterKernelParams, RegisterRootfsParams, RootfsImage,
+};
 use crate::vm::{CreateVmParams, Vm};
 use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 
@@ -96,12 +100,60 @@ pub trait WorkspaceStore {
     fn delete_workspace(&self, name_or_id: &str) -> Result<bool, StoreError>;
 }
 
+/// Provider and downloaded asset persistence.
+pub trait AssetStore {
+    /// Get a provider by name or ID.
+    fn get_provider(&self, name_or_id: &str) -> Result<Option<Provider>, StoreError>;
+
+    /// Get the default provider for an asset type ("kernel", "rootfs", "firecracker").
+    fn get_default_provider(&self, asset_type: &str) -> Result<Option<Provider>, StoreError>;
+
+    /// List all providers, optionally filtered by asset type.
+    fn list_providers(&self, asset_type: Option<&str>) -> Result<Vec<Provider>, StoreError>;
+
+    /// Register a downloaded kernel. Assigns a unique ID. Returns the created record.
+    fn register_kernel(&self, params: &RegisterKernelParams) -> Result<Kernel, StoreError>;
+
+    /// List all downloaded kernels.
+    fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError>;
+
+    /// Get a kernel by version+arch or by ID.
+    fn get_kernel(&self, id_or_version: &str, arch: Option<&str>) -> Result<Option<Kernel>, StoreError>;
+
+    /// Delete a kernel record by ID. Returns true if deleted.
+    fn delete_kernel(&self, id: &str) -> Result<bool, StoreError>;
+
+    /// Register a downloaded rootfs image. Assigns a unique ID. Returns the created record.
+    fn register_rootfs(&self, params: &RegisterRootfsParams) -> Result<RootfsImage, StoreError>;
+
+    /// List all downloaded rootfs images.
+    fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError>;
+
+    /// Get a rootfs image by distro+version+arch or by ID.
+    fn get_rootfs(&self, id_or_version: &str, arch: Option<&str>) -> Result<Option<RootfsImage>, StoreError>;
+
+    /// Delete a rootfs image record by ID. Returns true if deleted.
+    fn delete_rootfs(&self, id: &str) -> Result<bool, StoreError>;
+
+    /// Register a downloaded Firecracker binary. Assigns a unique ID. Returns the created record.
+    fn register_firecracker(&self, params: &RegisterFirecrackerParams) -> Result<FirecrackerVersion, StoreError>;
+
+    /// List all downloaded Firecracker versions.
+    fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError>;
+
+    /// Get a Firecracker version by version+arch or by ID.
+    fn get_firecracker(&self, id_or_version: &str, arch: Option<&str>) -> Result<Option<FirecrackerVersion>, StoreError>;
+
+    /// Delete a Firecracker version record by ID. Returns true if deleted.
+    fn delete_firecracker(&self, id: &str) -> Result<bool, StoreError>;
+}
+
 /// Convenience super-trait for code that needs the full store.
 ///
 /// All state persistence goes through this trait. The pre-alpha
 /// implementation is SQLite; this trait exists so the backend can
 /// be swapped to Postgres or etcd for clustering later.
-pub trait StateStore: VmStore + ImageStore + WorkspaceStore {
+pub trait StateStore: VmStore + ImageStore + WorkspaceStore + AssetStore {
     /// Initialize the store (create schema if needed, run migrations).
     fn init(&self) -> Result<(), StoreError>;
 

@@ -329,7 +329,11 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use nexus_lib::store::sqlite::SqliteStore;
-    use nexus_lib::store::traits::{ImageStore, StoreError, VmStore, WorkspaceStore};
+    use nexus_lib::asset::{
+        FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
+        RegisterKernelParams, RegisterRootfsParams, RootfsImage,
+    };
+    use nexus_lib::store::traits::{AssetStore, ImageStore, StoreError, VmStore, WorkspaceStore};
     use nexus_lib::vm::{CreateVmParams, Vm};
     use nexus_lib::workspace::{ImportImageParams, MasterImage, Workspace};
     use tower::ServiceExt;
@@ -380,6 +384,24 @@ mod tests {
         fn delete_workspace(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+    }
+
+    impl AssetStore for MockStore {
+        fn get_provider(&self, _name_or_id: &str) -> Result<Option<Provider>, StoreError> { unimplemented!() }
+        fn get_default_provider(&self, _asset_type: &str) -> Result<Option<Provider>, StoreError> { unimplemented!() }
+        fn list_providers(&self, _asset_type: Option<&str>) -> Result<Vec<Provider>, StoreError> { unimplemented!() }
+        fn register_kernel(&self, _params: &RegisterKernelParams) -> Result<Kernel, StoreError> { unimplemented!() }
+        fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError> { unimplemented!() }
+        fn get_kernel(&self, _id: &str, _arch: Option<&str>) -> Result<Option<Kernel>, StoreError> { unimplemented!() }
+        fn delete_kernel(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn register_rootfs(&self, _params: &RegisterRootfsParams) -> Result<RootfsImage, StoreError> { unimplemented!() }
+        fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError> { unimplemented!() }
+        fn get_rootfs(&self, _id: &str, _arch: Option<&str>) -> Result<Option<RootfsImage>, StoreError> { unimplemented!() }
+        fn delete_rootfs(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn register_firecracker(&self, _params: &RegisterFirecrackerParams) -> Result<FirecrackerVersion, StoreError> { unimplemented!() }
+        fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> { unimplemented!() }
+        fn get_firecracker(&self, _id: &str, _arch: Option<&str>) -> Result<Option<FirecrackerVersion>, StoreError> { unimplemented!() }
+        fn delete_firecracker(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
     }
 
     impl StateStore for MockStore {
@@ -439,6 +461,24 @@ mod tests {
         fn delete_workspace(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+    }
+
+    impl AssetStore for FailingStore {
+        fn get_provider(&self, _name_or_id: &str) -> Result<Option<Provider>, StoreError> { unimplemented!() }
+        fn get_default_provider(&self, _asset_type: &str) -> Result<Option<Provider>, StoreError> { unimplemented!() }
+        fn list_providers(&self, _asset_type: Option<&str>) -> Result<Vec<Provider>, StoreError> { unimplemented!() }
+        fn register_kernel(&self, _params: &RegisterKernelParams) -> Result<Kernel, StoreError> { unimplemented!() }
+        fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError> { unimplemented!() }
+        fn get_kernel(&self, _id: &str, _arch: Option<&str>) -> Result<Option<Kernel>, StoreError> { unimplemented!() }
+        fn delete_kernel(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn register_rootfs(&self, _params: &RegisterRootfsParams) -> Result<RootfsImage, StoreError> { unimplemented!() }
+        fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError> { unimplemented!() }
+        fn get_rootfs(&self, _id: &str, _arch: Option<&str>) -> Result<Option<RootfsImage>, StoreError> { unimplemented!() }
+        fn delete_rootfs(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn register_firecracker(&self, _params: &RegisterFirecrackerParams) -> Result<FirecrackerVersion, StoreError> { unimplemented!() }
+        fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> { unimplemented!() }
+        fn get_firecracker(&self, _id: &str, _arch: Option<&str>) -> Result<Option<FirecrackerVersion>, StoreError> { unimplemented!() }
+        fn delete_firecracker(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
     }
 
     impl StateStore for FailingStore {

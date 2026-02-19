@@ -1,8 +1,13 @@
+use crate::asset::{
+    FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
+    RegisterKernelParams, RegisterRootfsParams, RootfsImage,
+};
 use crate::store::schema::{seed_default_providers, SCHEMA_SQL, SCHEMA_VERSION};
-use crate::store::traits::{DbStatus, ImageStore, StateStore, StoreError, VmStore, WorkspaceStore};
+use crate::store::traits::{AssetStore, DbStatus, ImageStore, StateStore, StoreError, VmStore, WorkspaceStore};
 use crate::vm::{CreateVmParams, Vm, VmState};
 use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -505,6 +510,232 @@ impl StateStore for SqliteStore {
     }
 }
 
+impl AssetStore for SqliteStore {
+    fn get_provider(&self, name_or_id: &str) -> Result<Option<Provider>, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, asset_type, provider_type, config, pipeline, is_default, created_at FROM providers WHERE id = ?1 OR name = ?1"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let result = stmt.query_row(rusqlite::params![name_or_id], |row| {
+            Ok(row_to_provider(row))
+        }).optional().map_err(|e| StoreError::Query(e.to_string()))?;
+        match result {
+            Some(p) => Ok(Some(p.map_err(|e| StoreError::Query(e.to_string()))?)),
+            None => Ok(None),
+        }
+    }
+
+    fn get_default_provider(&self, asset_type: &str) -> Result<Option<Provider>, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, asset_type, provider_type, config, pipeline, is_default, created_at FROM providers WHERE asset_type = ?1 AND is_default = 1"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let result = stmt.query_row(rusqlite::params![asset_type], |row| {
+            Ok(row_to_provider(row))
+        }).optional().map_err(|e| StoreError::Query(e.to_string()))?;
+        match result {
+            Some(p) => Ok(Some(p.map_err(|e| StoreError::Query(e.to_string()))?)),
+            None => Ok(None),
+        }
+    }
+
+    fn list_providers(&self, asset_type: Option<&str>) -> Result<Vec<Provider>, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match asset_type {
+            Some(t) => (
+                "SELECT id, name, asset_type, provider_type, config, pipeline, is_default, created_at FROM providers WHERE asset_type = ?1 ORDER BY name",
+                vec![Box::new(t.to_string())],
+            ),
+            None => (
+                "SELECT id, name, asset_type, provider_type, config, pipeline, is_default, created_at FROM providers ORDER BY name",
+                vec![],
+            ),
+        };
+        let mut stmt = conn.prepare(sql).map_err(|e| StoreError::Query(e.to_string()))?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+            Ok(row_to_provider(row))
+        }).map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut providers = Vec::new();
+        for row in rows {
+            let p = row.map_err(|e| StoreError::Query(e.to_string()))?
+                .map_err(|e| StoreError::Query(e.to_string()))?;
+            providers.push(p);
+        }
+        Ok(providers)
+    }
+
+    fn register_kernel(&self, params: &RegisterKernelParams) -> Result<Kernel, StoreError> {
+        let id = format!("k-{}", Uuid::new_v4());
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO kernels (id, version, architecture, path_on_host, sha256, pgp_verified, file_size, source_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                id, params.version, params.architecture, params.path_on_host,
+                params.sha256, params.pgp_verified as i32, params.file_size, params.source_url,
+            ],
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        drop(conn);
+        self.get_kernel(&id, None)?.ok_or_else(|| StoreError::Query("kernel not found after insert".to_string()))
+    }
+
+    fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, version, architecture, path_on_host, sha256, pgp_verified, file_size, source_url, downloaded_at FROM kernels ORDER BY version DESC"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let rows = stmt.query_map([], |row| Ok(row_to_kernel(row)))
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut kernels = Vec::new();
+        for row in rows {
+            kernels.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
+        }
+        Ok(kernels)
+    }
+
+    fn get_kernel(&self, id_or_version: &str, arch: Option<&str>) -> Result<Option<Kernel>, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        // Try by ID first
+        let mut stmt = conn.prepare(
+            "SELECT id, version, architecture, path_on_host, sha256, pgp_verified, file_size, source_url, downloaded_at FROM kernels WHERE id = ?1"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let result = stmt.query_row(rusqlite::params![id_or_version], |row| Ok(row_to_kernel(row)))
+            .optional().map_err(|e| StoreError::Query(e.to_string()))?;
+        if result.is_some() {
+            return Ok(result);
+        }
+        // Try by version + arch
+        if let Some(arch) = arch {
+            let mut stmt = conn.prepare(
+                "SELECT id, version, architecture, path_on_host, sha256, pgp_verified, file_size, source_url, downloaded_at FROM kernels WHERE version = ?1 AND architecture = ?2"
+            ).map_err(|e| StoreError::Query(e.to_string()))?;
+            return stmt.query_row(rusqlite::params![id_or_version, arch], |row| Ok(row_to_kernel(row)))
+                .optional().map_err(|e| StoreError::Query(e.to_string()));
+        }
+        Ok(None)
+    }
+
+    fn delete_kernel(&self, id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        let count = conn.execute("DELETE FROM kernels WHERE id = ?1", rusqlite::params![id])
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(count > 0)
+    }
+
+    fn register_rootfs(&self, params: &RegisterRootfsParams) -> Result<RootfsImage, StoreError> {
+        let id = format!("r-{}", Uuid::new_v4());
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO rootfs_images (id, distro, version, architecture, path_on_host, sha256, file_size, source_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                id, params.distro, params.version, params.architecture,
+                params.path_on_host, params.sha256, params.file_size, params.source_url,
+            ],
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        drop(conn);
+        self.get_rootfs(&id, None)?.ok_or_else(|| StoreError::Query("rootfs not found after insert".to_string()))
+    }
+
+    fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, distro, version, architecture, path_on_host, sha256, file_size, source_url, downloaded_at FROM rootfs_images ORDER BY version DESC"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let rows = stmt.query_map([], |row| Ok(row_to_rootfs(row)))
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut images = Vec::new();
+        for row in rows {
+            images.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
+        }
+        Ok(images)
+    }
+
+    fn get_rootfs(&self, id_or_version: &str, arch: Option<&str>) -> Result<Option<RootfsImage>, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        // Try by ID first
+        let mut stmt = conn.prepare(
+            "SELECT id, distro, version, architecture, path_on_host, sha256, file_size, source_url, downloaded_at FROM rootfs_images WHERE id = ?1"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let result = stmt.query_row(rusqlite::params![id_or_version], |row| Ok(row_to_rootfs(row)))
+            .optional().map_err(|e| StoreError::Query(e.to_string()))?;
+        if result.is_some() {
+            return Ok(result);
+        }
+        // Try by version + arch (assuming alpine distro)
+        if let Some(arch) = arch {
+            let mut stmt = conn.prepare(
+                "SELECT id, distro, version, architecture, path_on_host, sha256, file_size, source_url, downloaded_at FROM rootfs_images WHERE version = ?1 AND architecture = ?2"
+            ).map_err(|e| StoreError::Query(e.to_string()))?;
+            return stmt.query_row(rusqlite::params![id_or_version, arch], |row| Ok(row_to_rootfs(row)))
+                .optional().map_err(|e| StoreError::Query(e.to_string()));
+        }
+        Ok(None)
+    }
+
+    fn delete_rootfs(&self, id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        let count = conn.execute("DELETE FROM rootfs_images WHERE id = ?1", rusqlite::params![id])
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(count > 0)
+    }
+
+    fn register_firecracker(&self, params: &RegisterFirecrackerParams) -> Result<FirecrackerVersion, StoreError> {
+        let id = format!("fc-{}", Uuid::new_v4());
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO firecracker_versions (id, version, architecture, path_on_host, sha256, file_size, source_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                id, params.version, params.architecture,
+                params.path_on_host, params.sha256, params.file_size, params.source_url,
+            ],
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        drop(conn);
+        self.get_firecracker(&id, None)?.ok_or_else(|| StoreError::Query("firecracker not found after insert".to_string()))
+    }
+
+    fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, version, architecture, path_on_host, sha256, file_size, source_url, downloaded_at FROM firecracker_versions ORDER BY version DESC"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let rows = stmt.query_map([], |row| Ok(row_to_firecracker(row)))
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut versions = Vec::new();
+        for row in rows {
+            versions.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
+        }
+        Ok(versions)
+    }
+
+    fn get_firecracker(&self, id_or_version: &str, arch: Option<&str>) -> Result<Option<FirecrackerVersion>, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        // Try by ID first
+        let mut stmt = conn.prepare(
+            "SELECT id, version, architecture, path_on_host, sha256, file_size, source_url, downloaded_at FROM firecracker_versions WHERE id = ?1"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let result = stmt.query_row(rusqlite::params![id_or_version], |row| Ok(row_to_firecracker(row)))
+            .optional().map_err(|e| StoreError::Query(e.to_string()))?;
+        if result.is_some() {
+            return Ok(result);
+        }
+        // Try by version + arch
+        if let Some(arch) = arch {
+            let mut stmt = conn.prepare(
+                "SELECT id, version, architecture, path_on_host, sha256, file_size, source_url, downloaded_at FROM firecracker_versions WHERE version = ?1 AND architecture = ?2"
+            ).map_err(|e| StoreError::Query(e.to_string()))?;
+            return stmt.query_row(rusqlite::params![id_or_version, arch], |row| Ok(row_to_firecracker(row)))
+                .optional().map_err(|e| StoreError::Query(e.to_string()));
+        }
+        Ok(None)
+    }
+
+    fn delete_firecracker(&self, id: &str) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
+        let count = conn.execute("DELETE FROM firecracker_versions WHERE id = ?1", rusqlite::params![id])
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(count > 0)
+    }
+}
+
 /// Map a rusqlite row to a Vm struct.
 /// NOTE: Uses unwrap() throughout -- will panic on invalid data.
 /// Accepted for pre-alpha: CHECK constraints in the schema prevent invalid
@@ -537,6 +768,64 @@ fn row_to_image(row: &rusqlite::Row) -> MasterImage {
         subvolume_path: row.get(2).unwrap(),
         size_bytes: row.get(3).unwrap(),
         created_at: row.get(4).unwrap(),
+    }
+}
+
+fn row_to_provider(row: &rusqlite::Row) -> Result<Provider, rusqlite::Error> {
+    let config_str: String = row.get(4)?;
+    let pipeline_str: String = row.get(5)?;
+    let is_default_int: i32 = row.get(6)?;
+    Ok(Provider {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        asset_type: row.get(2)?,
+        provider_type: row.get(3)?,
+        config: serde_json::from_str(&config_str).unwrap_or(serde_json::Value::Null),
+        pipeline: serde_json::from_str(&pipeline_str).unwrap_or_default(),
+        is_default: is_default_int != 0,
+        created_at: row.get(7)?,
+    })
+}
+
+fn row_to_kernel(row: &rusqlite::Row) -> Kernel {
+    let pgp_int: i32 = row.get(5).unwrap_or(0);
+    Kernel {
+        id: row.get(0).unwrap(),
+        version: row.get(1).unwrap(),
+        architecture: row.get(2).unwrap(),
+        path_on_host: row.get(3).unwrap(),
+        sha256: row.get(4).unwrap(),
+        pgp_verified: pgp_int != 0,
+        file_size: row.get(6).unwrap(),
+        source_url: row.get(7).unwrap(),
+        downloaded_at: row.get(8).unwrap(),
+    }
+}
+
+fn row_to_rootfs(row: &rusqlite::Row) -> RootfsImage {
+    RootfsImage {
+        id: row.get(0).unwrap(),
+        distro: row.get(1).unwrap(),
+        version: row.get(2).unwrap(),
+        architecture: row.get(3).unwrap(),
+        path_on_host: row.get(4).unwrap(),
+        sha256: row.get(5).unwrap(),
+        file_size: row.get(6).unwrap(),
+        source_url: row.get(7).unwrap(),
+        downloaded_at: row.get(8).unwrap(),
+    }
+}
+
+fn row_to_firecracker(row: &rusqlite::Row) -> FirecrackerVersion {
+    FirecrackerVersion {
+        id: row.get(0).unwrap(),
+        version: row.get(1).unwrap(),
+        architecture: row.get(2).unwrap(),
+        path_on_host: row.get(3).unwrap(),
+        sha256: row.get(4).unwrap(),
+        file_size: row.get(5).unwrap(),
+        source_url: row.get(6).unwrap(),
+        downloaded_at: row.get(7).unwrap(),
     }
 }
 
