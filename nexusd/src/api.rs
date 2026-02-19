@@ -769,7 +769,6 @@ mod tests {
         assert!(json.get("database").is_none() || json["database"].is_null());
     }
 
-    use nexus_lib::pipeline::PipelineExecutor;
     use nexus_lib::backend::traits::{BackendError, SubvolumeInfo, WorkspaceBackend};
 
     /// A no-op backend for API unit tests (no real btrfs needed).
