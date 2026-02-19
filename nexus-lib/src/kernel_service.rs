@@ -199,7 +199,7 @@ impl<'a> KernelService<'a> {
             ))?;
 
         let actual = pipeline::compute_sha256_file(Path::new(&kernel.path_on_host))
-            .map_err(|e| KernelServiceError::Pipeline(e))?;
+            .map_err(KernelServiceError::Pipeline)?;
 
         Ok(actual == kernel.sha256)
     }
