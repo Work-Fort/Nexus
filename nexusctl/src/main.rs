@@ -55,6 +55,21 @@ enum Commands {
         #[command(subcommand)]
         action: WsAction,
     },
+    /// Manage kernels
+    Kernel {
+        #[command(subcommand)]
+        action: KernelAction,
+    },
+    /// Manage rootfs images
+    Rootfs {
+        #[command(subcommand)]
+        action: RootfsAction,
+    },
+    /// Manage Firecracker binaries
+    Firecracker {
+        #[command(subcommand)]
+        action: FirecrackerAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -156,6 +171,44 @@ enum WsAction {
     },
 }
 
+#[derive(Subcommand)]
+enum KernelAction {
+    /// List available kernel versions from anvil
+    List,
+    /// Download a specific kernel version
+    Download { version: String },
+    /// List downloaded kernels
+    Installed,
+    /// Remove a downloaded kernel
+    Remove { version: String },
+    /// Verify a downloaded kernel's integrity (re-hash file on disk, compare to DB)
+    Verify { version: String },
+}
+
+#[derive(Subcommand)]
+enum RootfsAction {
+    /// List available rootfs versions for a distro
+    List { distro: String },
+    /// Download a rootfs image
+    Download { distro: String, version: String },
+    /// List downloaded rootfs images
+    Installed,
+    /// Remove a downloaded rootfs image
+    Remove { distro: String, version: String },
+}
+
+#[derive(Subcommand)]
+enum FirecrackerAction {
+    /// List available Firecracker versions
+    List,
+    /// Download a Firecracker binary
+    Download { version: String },
+    /// List downloaded Firecracker binaries
+    Installed,
+    /// Remove a downloaded Firecracker binary
+    Remove { version: String },
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -170,6 +223,9 @@ async fn main() -> ExitCode {
         Commands::Vm { action } => cmd_vm(&daemon_addr, action).await,
         Commands::Image { action } => cmd_image(&daemon_addr, action).await,
         Commands::Ws { action } => cmd_ws(&daemon_addr, action).await,
+        Commands::Kernel { action } => cmd_kernel(&daemon_addr, action).await,
+        Commands::Rootfs { action } => cmd_rootfs(&daemon_addr, action).await,
+        Commands::Firecracker { action } => cmd_firecracker(&daemon_addr, action).await,
     }
 }
 
@@ -563,6 +619,290 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                 Err(e) => {
                     eprintln!("Error: cannot delete workspace \"{}\"\n  {e}", name);
                     ExitCode::from(EXIT_CONFLICT)
+                }
+            }
+        }
+    }
+}
+
+async fn cmd_kernel(daemon_addr: &str, action: KernelAction) -> ExitCode {
+    let client = NexusClient::new(daemon_addr);
+
+    match action {
+        KernelAction::List => {
+            match client.list_kernels().await {
+                Ok(kernels) => {
+                    if kernels.is_empty() {
+                        println!("No kernels installed.");
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<15} {:<10} {:<15} {:<10}", "VERSION", "ARCH", "SIZE", "VERIFIED");
+                    for k in &kernels {
+                        let size = format!("{:.1} MB", k.file_size as f64 / 1_000_000.0);
+                        let verified = if k.pgp_verified { "yes" } else { "no" };
+                        println!("{:<15} {:<10} {:<15} {:<10}", k.version, k.architecture, size, verified);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        KernelAction::Download { version } => {
+            println!("Downloading kernel {version}...");
+            match client.download_kernel(&version).await {
+                Ok(k) => {
+                    println!("Downloaded kernel {} ({})", k.version, k.architecture);
+                    println!("  Path: {}", k.path_on_host);
+                    println!("  SHA256: {}", k.sha256);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot download kernel {version}\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        KernelAction::Installed => {
+            match client.list_kernels().await {
+                Ok(kernels) => {
+                    if kernels.is_empty() {
+                        println!("No kernels installed.");
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<15} {:<10} {:<15}", "VERSION", "ARCH", "SIZE");
+                    for k in &kernels {
+                        let size = format!("{:.1} MB", k.file_size as f64 / 1_000_000.0);
+                        println!("{:<15} {:<10} {:<15}", k.version, k.architecture, size);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        KernelAction::Remove { version } => {
+            match client.remove_kernel(&version).await {
+                Ok(true) => {
+                    println!("Removed kernel {version}");
+                    ExitCode::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!("Error: kernel {version} not found");
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        KernelAction::Verify { version } => {
+            match client.verify_kernel(&version).await {
+                Ok(true) => {
+                    println!("Kernel {version}: integrity OK");
+                    ExitCode::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!("Kernel {version}: integrity FAILED (hash mismatch)");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+    }
+}
+
+async fn cmd_rootfs(daemon_addr: &str, action: RootfsAction) -> ExitCode {
+    let client = NexusClient::new(daemon_addr);
+
+    match action {
+        RootfsAction::List { distro } => {
+            eprintln!("Note: listing available versions for {distro} requires network access");
+            eprintln!("Use 'nexusctl rootfs download {distro} <version>' to download a specific version");
+            ExitCode::SUCCESS
+        }
+        RootfsAction::Download { distro, version } => {
+            println!("Downloading rootfs {distro} {version}...");
+            match client.download_rootfs(&distro, &version).await {
+                Ok(r) => {
+                    println!("Downloaded rootfs {}-{} ({})", r.distro, r.version, r.architecture);
+                    println!("  Path: {}", r.path_on_host);
+                    println!("  SHA256: {}", r.sha256);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot download rootfs {distro} {version}\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        RootfsAction::Installed => {
+            match client.list_rootfs().await {
+                Ok(images) => {
+                    if images.is_empty() {
+                        println!("No rootfs images installed.");
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<12} {:<10} {:<10} {:<15}", "DISTRO", "VERSION", "ARCH", "SIZE");
+                    for r in &images {
+                        let size = format!("{:.1} MB", r.file_size as f64 / 1_000_000.0);
+                        println!("{:<12} {:<10} {:<10} {:<15}", r.distro, r.version, r.architecture, size);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        RootfsAction::Remove { distro, version } => {
+            match client.remove_rootfs(&distro, &version).await {
+                Ok(true) => {
+                    println!("Removed rootfs {distro} {version}");
+                    ExitCode::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!("Error: rootfs {distro} {version} not found");
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+    }
+}
+
+async fn cmd_firecracker(daemon_addr: &str, action: FirecrackerAction) -> ExitCode {
+    let client = NexusClient::new(daemon_addr);
+
+    match action {
+        FirecrackerAction::List => {
+            match client.list_firecracker().await {
+                Ok(versions) => {
+                    if versions.is_empty() {
+                        println!("No Firecracker binaries installed.");
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<12} {:<10} {:<15}", "VERSION", "ARCH", "SIZE");
+                    for fc in &versions {
+                        let size = format!("{:.1} MB", fc.file_size as f64 / 1_000_000.0);
+                        println!("{:<12} {:<10} {:<15}", fc.version, fc.architecture, size);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        FirecrackerAction::Download { version } => {
+            println!("Downloading Firecracker {version}...");
+            match client.download_firecracker(&version).await {
+                Ok(fc) => {
+                    println!("Downloaded Firecracker {} ({})", fc.version, fc.architecture);
+                    println!("  Path: {}", fc.path_on_host);
+                    println!("  SHA256: {}", fc.sha256);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot download Firecracker {version}\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        FirecrackerAction::Installed => {
+            match client.list_firecracker().await {
+                Ok(versions) => {
+                    if versions.is_empty() {
+                        println!("No Firecracker binaries installed.");
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<12} {:<10} {:<15}", "VERSION", "ARCH", "SIZE");
+                    for fc in &versions {
+                        let size = format!("{:.1} MB", fc.file_size as f64 / 1_000_000.0);
+                        println!("{:<12} {:<10} {:<15}", fc.version, fc.architecture, size);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        FirecrackerAction::Remove { version } => {
+            match client.remove_firecracker(&version).await {
+                Ok(true) => {
+                    println!("Removed Firecracker {version}");
+                    ExitCode::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!("Error: Firecracker {version} not found");
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }
         }
