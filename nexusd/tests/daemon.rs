@@ -1,6 +1,47 @@
 use nexus_lib::test_support::TestDaemon;
 
 #[tokio::test]
+async fn kernel_list_returns_empty_initially() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{}/v1/kernels", daemon.addr))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn rootfs_list_returns_empty_initially() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{}/v1/rootfs-images", daemon.addr))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn firecracker_list_returns_empty_initially() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{}/v1/firecracker", daemon.addr))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
 async fn daemon_starts_serves_health_and_stops() {
     let daemon = TestDaemon::start_with_binary(
         env!("CARGO_BIN_EXE_nexusd").into(),
