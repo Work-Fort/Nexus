@@ -1,5 +1,5 @@
 use crate::store::schema::{SCHEMA_SQL, SCHEMA_VERSION};
-use crate::store::traits::{DbStatus, StateStore, StoreError};
+use crate::store::traits::{DbStatus, ImageStore, StateStore, StoreError, VmStore, WorkspaceStore};
 use crate::vm::{CreateVmParams, Vm, VmState};
 use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 use rusqlite::Connection;
@@ -125,56 +125,7 @@ impl SqliteStore {
     }
 }
 
-impl StateStore for SqliteStore {
-    fn init(&self) -> Result<(), StoreError> {
-        // Check if schema already exists with correct version
-        if let Some(version) = self.stored_version() {
-            if version == SCHEMA_VERSION {
-                return Ok(());
-            }
-            // Version mismatch — for pre-alpha, we need to recreate.
-            // The mismatch case is handled by open_and_init() which
-            // calls recreate() then init() again.
-            return Err(StoreError::SchemaMismatch {
-                expected: SCHEMA_VERSION,
-                found: version,
-            });
-        }
-
-        // No schema_meta table — fresh database, create schema
-        let conn = self.conn.lock().unwrap();
-        conn.execute_batch(SCHEMA_SQL)
-            .map_err(|e| StoreError::Init(format!("cannot create schema: {e}")))?;
-
-        conn.execute(
-            "INSERT INTO schema_meta (key, value) VALUES ('version', ?1)",
-            [SCHEMA_VERSION.to_string()],
-        )
-        .map_err(|e| StoreError::Init(format!("cannot insert schema version: {e}")))?;
-
-        Ok(())
-    }
-
-    fn status(&self) -> Result<DbStatus, StoreError> {
-        let table_count = self.table_count()?;
-
-        let size_bytes = std::fs::metadata(&self.db_path)
-            .map(|m| m.len())
-            .ok();
-
-        Ok(DbStatus {
-            path: self.db_path.to_string_lossy().to_string(),
-            table_count,
-            size_bytes,
-        })
-    }
-
-    fn close(&self) -> Result<(), StoreError> {
-        // rusqlite closes the connection on drop. This method exists
-        // for the trait interface — other backends may need explicit cleanup.
-        Ok(())
-    }
-
+impl VmStore for SqliteStore {
     fn create_vm(&self, params: &CreateVmParams) -> Result<Vm, StoreError> {
         let conn = self.conn.lock().unwrap();
 
@@ -293,7 +244,9 @@ impl StateStore for SqliteStore {
 
         Ok(deleted > 0)
     }
+}
 
+impl ImageStore for SqliteStore {
     fn create_image(&self, params: &ImportImageParams, subvolume_path: &str) -> Result<MasterImage, StoreError> {
         let conn = self.conn.lock().unwrap();
         let id = Uuid::new_v4().to_string();
@@ -380,7 +333,9 @@ impl StateStore for SqliteStore {
 
         Ok(deleted > 0)
     }
+}
 
+impl WorkspaceStore for SqliteStore {
     fn create_workspace(
         &self,
         name: Option<&str>,
@@ -493,6 +448,57 @@ impl StateStore for SqliteStore {
             .map_err(|e| StoreError::Query(format!("cannot delete workspace: {e}")))?;
 
         Ok(deleted > 0)
+    }
+}
+
+impl StateStore for SqliteStore {
+    fn init(&self) -> Result<(), StoreError> {
+        // Check if schema already exists with correct version
+        if let Some(version) = self.stored_version() {
+            if version == SCHEMA_VERSION {
+                return Ok(());
+            }
+            // Version mismatch — for pre-alpha, we need to recreate.
+            // The mismatch case is handled by open_and_init() which
+            // calls recreate() then init() again.
+            return Err(StoreError::SchemaMismatch {
+                expected: SCHEMA_VERSION,
+                found: version,
+            });
+        }
+
+        // No schema_meta table — fresh database, create schema
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(SCHEMA_SQL)
+            .map_err(|e| StoreError::Init(format!("cannot create schema: {e}")))?;
+
+        conn.execute(
+            "INSERT INTO schema_meta (key, value) VALUES ('version', ?1)",
+            [SCHEMA_VERSION.to_string()],
+        )
+        .map_err(|e| StoreError::Init(format!("cannot insert schema version: {e}")))?;
+
+        Ok(())
+    }
+
+    fn status(&self) -> Result<DbStatus, StoreError> {
+        let table_count = self.table_count()?;
+
+        let size_bytes = std::fs::metadata(&self.db_path)
+            .map(|m| m.len())
+            .ok();
+
+        Ok(DbStatus {
+            path: self.db_path.to_string_lossy().to_string(),
+            table_count,
+            size_bytes,
+        })
+    }
+
+    fn close(&self) -> Result<(), StoreError> {
+        // rusqlite closes the connection on drop. This method exists
+        // for the trait interface — other backends may need explicit cleanup.
+        Ok(())
     }
 }
 

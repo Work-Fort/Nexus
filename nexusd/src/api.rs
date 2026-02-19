@@ -329,7 +329,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use nexus_lib::store::sqlite::SqliteStore;
-    use nexus_lib::store::traits::StoreError;
+    use nexus_lib::store::traits::{ImageStore, StoreError, VmStore, WorkspaceStore};
     use nexus_lib::vm::{CreateVmParams, Vm};
     use nexus_lib::workspace::{ImportImageParams, MasterImage, Workspace};
     use tower::ServiceExt;
@@ -337,16 +337,7 @@ mod tests {
     /// A mock store for testing the health endpoint without SQLite.
     struct MockStore;
 
-    impl StateStore for MockStore {
-        fn init(&self) -> Result<(), StoreError> { Ok(()) }
-        fn status(&self) -> Result<DbStatus, StoreError> {
-            Ok(DbStatus {
-                path: "/tmp/mock.db".to_string(),
-                table_count: 2,
-                size_bytes: Some(8192),
-            })
-        }
-        fn close(&self) -> Result<(), StoreError> { Ok(()) }
+    impl VmStore for MockStore {
         fn create_vm(&self, _params: &CreateVmParams) -> Result<Vm, StoreError> {
             unimplemented!()
         }
@@ -359,6 +350,9 @@ mod tests {
         fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+    }
+
+    impl ImageStore for MockStore {
         fn create_image(&self, _params: &ImportImageParams, _subvolume_path: &str) -> Result<MasterImage, StoreError> {
             unimplemented!()
         }
@@ -371,6 +365,9 @@ mod tests {
         fn delete_image(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+    }
+
+    impl WorkspaceStore for MockStore {
         fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: &str) -> Result<Workspace, StoreError> {
             unimplemented!()
         }
@@ -385,14 +382,21 @@ mod tests {
         }
     }
 
-    struct FailingStore;
-
-    impl StateStore for FailingStore {
+    impl StateStore for MockStore {
         fn init(&self) -> Result<(), StoreError> { Ok(()) }
         fn status(&self) -> Result<DbStatus, StoreError> {
-            Err(StoreError::Query("disk I/O error".to_string()))
+            Ok(DbStatus {
+                path: "/tmp/mock.db".to_string(),
+                table_count: 2,
+                size_bytes: Some(8192),
+            })
         }
         fn close(&self) -> Result<(), StoreError> { Ok(()) }
+    }
+
+    struct FailingStore;
+
+    impl VmStore for FailingStore {
         fn create_vm(&self, _params: &CreateVmParams) -> Result<Vm, StoreError> {
             unimplemented!()
         }
@@ -405,6 +409,9 @@ mod tests {
         fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+    }
+
+    impl ImageStore for FailingStore {
         fn create_image(&self, _params: &ImportImageParams, _subvolume_path: &str) -> Result<MasterImage, StoreError> {
             unimplemented!()
         }
@@ -417,6 +424,9 @@ mod tests {
         fn delete_image(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+    }
+
+    impl WorkspaceStore for FailingStore {
         fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: &str) -> Result<Workspace, StoreError> {
             unimplemented!()
         }
@@ -429,6 +439,14 @@ mod tests {
         fn delete_workspace(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+    }
+
+    impl StateStore for FailingStore {
+        fn init(&self) -> Result<(), StoreError> { Ok(()) }
+        fn status(&self) -> Result<DbStatus, StoreError> {
+            Err(StoreError::Query("disk I/O error".to_string()))
+        }
+        fn close(&self) -> Result<(), StoreError> { Ok(()) }
     }
 
     fn mock_state_with_store(store: impl StateStore + Send + Sync + 'static) -> Arc<AppState> {

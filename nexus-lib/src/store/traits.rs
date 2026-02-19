@@ -40,21 +40,8 @@ impl std::fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-/// Storage abstraction trait for future backend swaps.
-///
-/// All state persistence goes through this trait. The pre-alpha
-/// implementation is SQLite; this trait exists so the backend can
-/// be swapped to Postgres or etcd for clustering later.
-pub trait StateStore {
-    /// Initialize the store (create schema if needed, run migrations).
-    fn init(&self) -> Result<(), StoreError>;
-
-    /// Return database status information for health/status reporting.
-    fn status(&self) -> Result<DbStatus, StoreError>;
-
-    /// Close the store and release resources.
-    fn close(&self) -> Result<(), StoreError>;
-
+/// VM record persistence.
+pub trait VmStore {
     /// Create a new VM record. Assigns a unique ID and auto-assigns a vsock CID.
     /// Returns the created VM.
     fn create_vm(&self, params: &CreateVmParams) -> Result<Vm, StoreError>;
@@ -68,9 +55,10 @@ pub trait StateStore {
     /// Delete a VM by name or ID. Returns true if a record was deleted.
     /// Refuses to delete VMs in the `running` state (returns StoreError).
     fn delete_vm(&self, name_or_id: &str) -> Result<bool, StoreError>;
+}
 
-    // --- Master Image methods ---
-
+/// Master image record persistence.
+pub trait ImageStore {
     /// Register a master image in the database.
     fn create_image(&self, params: &ImportImageParams, subvolume_path: &str) -> Result<MasterImage, StoreError>;
 
@@ -84,9 +72,10 @@ pub trait StateStore {
     /// Returns true if deleted, false if not found.
     /// Fails with Conflict if workspaces reference this image.
     fn delete_image(&self, name_or_id: &str) -> Result<bool, StoreError>;
+}
 
-    // --- Workspace methods ---
-
+/// Workspace record persistence.
+pub trait WorkspaceStore {
     /// Register a workspace in the database.
     fn create_workspace(
         &self,
@@ -105,6 +94,22 @@ pub trait StateStore {
     /// Returns true if deleted, false if not found.
     /// Fails with Conflict if workspace is attached to a VM.
     fn delete_workspace(&self, name_or_id: &str) -> Result<bool, StoreError>;
+}
+
+/// Convenience super-trait for code that needs the full store.
+///
+/// All state persistence goes through this trait. The pre-alpha
+/// implementation is SQLite; this trait exists so the backend can
+/// be swapped to Postgres or etcd for clustering later.
+pub trait StateStore: VmStore + ImageStore + WorkspaceStore {
+    /// Initialize the store (create schema if needed, run migrations).
+    fn init(&self) -> Result<(), StoreError>;
+
+    /// Return database status information for health/status reporting.
+    fn status(&self) -> Result<DbStatus, StoreError>;
+
+    /// Close the store and release resources.
+    fn close(&self) -> Result<(), StoreError>;
 }
 
 #[cfg(test)]
