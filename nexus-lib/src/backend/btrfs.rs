@@ -57,8 +57,9 @@ impl WorkspaceBackend for BtrfsBackend {
 
         // Copy contents from source into the new subvolume
         copy_dir_contents(source, dest).map_err(|e| {
-            // Clean up the subvolume on failure
-            let _ = libbtrfsutil::delete_subvolume(dest);
+            // Clean up the subvolume on failure (VFS path)
+            let _ = remove_subvolume_contents(dest);
+            let _ = std::fs::remove_dir(dest);
             BackendError::Io(format!(
                 "cannot copy contents from {} to {}: {e}",
                 source.display(),
@@ -124,7 +125,7 @@ impl WorkspaceBackend for BtrfsBackend {
             )));
         }
 
-        // If read-only, make writable first (required for deletion)
+        // If read-only, make writable first (required to remove contents)
         if libbtrfsutil::subvolume_read_only(path).unwrap_or(false) {
             libbtrfsutil::set_subvolume_read_only(path, false).map_err(|e| {
                 BackendError::Io(format!(
@@ -134,9 +135,20 @@ impl WorkspaceBackend for BtrfsBackend {
             })?;
         }
 
-        libbtrfsutil::delete_subvolume(path).map_err(|e| {
+        // Delete via VFS (rm contents + rmdir) instead of the btrfs ioctl.
+        // The BTRFS_IOC_SNAP_DESTROY ioctl always requires CAP_SYS_ADMIN,
+        // but rmdir(2) on an empty subvolume works unprivileged since kernel 4.18.
+        // This is the same approach used by containers/storage (Docker/Podman).
+        remove_subvolume_contents(path).map_err(|e| {
             BackendError::Io(format!(
-                "cannot delete subvolume {}: {e}",
+                "cannot remove contents of subvolume {}: {e}",
+                path.display()
+            ))
+        })?;
+
+        std::fs::remove_dir(path).map_err(|e| {
+            BackendError::Io(format!(
+                "cannot rmdir subvolume {}: {e}",
                 path.display()
             ))
         })
@@ -191,6 +203,21 @@ fn copy_dir_contents(src: &Path, dest: &Path) -> std::io::Result<()> {
             copy_dir_contents(&src_path, &dest_path)?;
         } else {
             std::fs::copy(&src_path, &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove all contents inside a subvolume without removing the subvolume directory itself.
+/// After this, the subvolume is empty and can be deleted with `std::fs::remove_dir`.
+fn remove_subvolume_contents(path: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let p = entry.path();
+        if p.is_dir() {
+            std::fs::remove_dir_all(&p)?;
+        } else {
+            std::fs::remove_file(&p)?;
         }
     }
     Ok(())

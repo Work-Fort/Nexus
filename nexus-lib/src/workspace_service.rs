@@ -123,40 +123,43 @@ impl<'a> WorkspaceService<'a> {
         Ok(workspace)
     }
 
-    /// Delete a workspace: remove from DB, then delete the subvolume.
+    /// Delete a workspace: delete the subvolume first, then remove from DB.
+    /// Filesystem-first ordering ensures no orphaned subvolumes if the DB
+    /// delete were to succeed but the filesystem delete fails.
     pub fn delete_workspace(&self, name_or_id: &str) -> Result<bool, WorkspaceServiceError> {
         let ws = match self.store.get_workspace(name_or_id)? {
             Some(ws) => ws,
             None => return Ok(false),
         };
 
-        // Delete from DB first (validates constraints like attached-to-VM)
-        self.store.delete_workspace(&ws.id)?;
-
-        // Delete from filesystem
+        // Delete from filesystem first
         let path = PathBuf::from(&ws.subvolume_path);
         if path.exists() {
             self.backend.delete_subvolume(&path)?;
         }
 
+        // Then remove the DB record
+        self.store.delete_workspace(&ws.id)?;
+
         Ok(true)
     }
 
     /// Delete a master image: ensure no workspaces reference it, then remove.
+    /// Filesystem-first ordering ensures no orphaned subvolumes.
     pub fn delete_image(&self, name_or_id: &str) -> Result<bool, WorkspaceServiceError> {
         let image = match self.store.get_image(name_or_id)? {
             Some(img) => img,
             None => return Ok(false),
         };
 
-        // Delete from DB first (validates constraints like workspace references)
-        self.store.delete_image(&image.id)?;
-
-        // Delete from filesystem
+        // Delete from filesystem first
         let path = PathBuf::from(&image.subvolume_path);
         if path.exists() {
             self.backend.delete_subvolume(&path)?;
         }
+
+        // Then remove the DB record (validates constraints like workspace references)
+        self.store.delete_image(&image.id)?;
 
         Ok(true)
     }
