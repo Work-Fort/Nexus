@@ -735,6 +735,13 @@ mod tests {
         fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+        fn start_vm(&self, _: &str, _: u32, _: &str, _: &str, _: &str, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn stop_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn crash_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn fail_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn list_running_vms(&self) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
+        fn record_boot_start(&self, _: &str, _: &str) -> Result<String, StoreError> { unimplemented!() }
+        fn record_boot_stop(&self, _: &str, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
     }
 
     impl ImageStore for MockStore {
@@ -823,6 +830,13 @@ mod tests {
         fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+        fn start_vm(&self, _: &str, _: u32, _: &str, _: &str, _: &str, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn stop_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn crash_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn fail_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn list_running_vms(&self) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
+        fn record_boot_start(&self, _: &str, _: &str) -> Result<String, StoreError> { unimplemented!() }
+        fn record_boot_stop(&self, _: &str, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
     }
 
     impl ImageStore for FailingStore {

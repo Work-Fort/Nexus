@@ -60,6 +60,42 @@ pub trait VmStore {
     /// Delete a VM by name or ID. Returns true if a record was deleted.
     /// Refuses to delete VMs in the `running` state (returns StoreError).
     fn delete_vm(&self, name_or_id: &str) -> Result<bool, StoreError>;
+
+    /// Update VM state and runtime fields when starting.
+    /// Sets state to `running`, records pid, socket_path, uds_path,
+    /// console_log_path, config_json, started_at, and updated_at.
+    fn start_vm(
+        &self,
+        name_or_id: &str,
+        pid: u32,
+        socket_path: &str,
+        uds_path: &str,
+        console_log_path: &str,
+        config_json: &str,
+    ) -> Result<Vm, StoreError>;
+
+    /// Update VM state to `stopped`. Clears pid, sets stopped_at and updated_at.
+    fn stop_vm(&self, name_or_id: &str) -> Result<Vm, StoreError>;
+
+    /// Update VM state to `crashed`. Clears pid, sets stopped_at and updated_at.
+    fn crash_vm(&self, name_or_id: &str) -> Result<Vm, StoreError>;
+
+    /// Update VM state to `failed`. Clears pid, sets stopped_at and updated_at.
+    fn fail_vm(&self, name_or_id: &str) -> Result<Vm, StoreError>;
+
+    /// List all VMs in the `running` state.
+    fn list_running_vms(&self) -> Result<Vec<Vm>, StoreError>;
+
+    /// Record a boot event in vm_boot_history. Returns the boot record ID.
+    fn record_boot_start(&self, vm_id: &str, console_log_path: &str) -> Result<String, StoreError>;
+
+    /// Complete a boot history record with exit details.
+    fn record_boot_stop(
+        &self,
+        boot_id: &str,
+        exit_code: Option<i32>,
+        error_message: Option<&str>,
+    ) -> Result<(), StoreError>;
 }
 
 /// Master image record persistence.

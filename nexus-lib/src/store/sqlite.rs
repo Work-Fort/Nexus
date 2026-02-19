@@ -250,6 +250,148 @@ impl VmStore for SqliteStore {
 
         Ok(deleted > 0)
     }
+
+    fn start_vm(
+        &self,
+        name_or_id: &str,
+        pid: u32,
+        socket_path: &str,
+        uds_path: &str,
+        console_log_path: &str,
+        config_json: &str,
+    ) -> Result<Vm, StoreError> {
+        let vm = self.get_vm(name_or_id)?
+            .ok_or_else(|| StoreError::Query(format!("VM '{}' not found", name_or_id)))?;
+
+        if vm.state == VmState::Running {
+            return Err(StoreError::Conflict(format!(
+                "VM '{}' is already running (PID: {})",
+                vm.name, vm.pid.unwrap_or(0)
+            )));
+        }
+
+        // Only allow start from created, stopped, or crashed
+        match vm.state {
+            VmState::Created | VmState::Stopped | VmState::Crashed => {}
+            VmState::Failed => {
+                return Err(StoreError::Conflict(format!(
+                    "VM '{}' is in failed state, delete and recreate it",
+                    vm.name
+                )));
+            }
+            VmState::Running => unreachable!(),
+        }
+
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE vms SET state = 'running', pid = ?1, socket_path = ?2, \
+             uds_path = ?3, console_log_path = ?4, config_json = ?5, \
+             started_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now') \
+             WHERE id = ?6",
+            rusqlite::params![pid, socket_path, uds_path, console_log_path, config_json, vm.id],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
+
+        drop(conn);
+        self.get_vm(&vm.id)?
+            .ok_or_else(|| StoreError::Query("VM not found after update".to_string()))
+    }
+
+    fn stop_vm(&self, name_or_id: &str) -> Result<Vm, StoreError> {
+        let vm = self.get_vm(name_or_id)?
+            .ok_or_else(|| StoreError::Query(format!("VM '{}' not found", name_or_id)))?;
+
+        if vm.state != VmState::Running {
+            return Err(StoreError::Conflict(format!(
+                "VM '{}' is not running (state: {})",
+                vm.name, vm.state
+            )));
+        }
+
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE vms SET state = 'stopped', pid = NULL, \
+             stopped_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now') \
+             WHERE id = ?1",
+            [&vm.id],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
+
+        drop(conn);
+        self.get_vm(&vm.id)?
+            .ok_or_else(|| StoreError::Query("VM not found after update".to_string()))
+    }
+
+    fn crash_vm(&self, name_or_id: &str) -> Result<Vm, StoreError> {
+        let vm = self.get_vm(name_or_id)?
+            .ok_or_else(|| StoreError::Query(format!("VM '{}' not found", name_or_id)))?;
+
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE vms SET state = 'crashed', pid = NULL, \
+             stopped_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now') \
+             WHERE id = ?1",
+            [&vm.id],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
+
+        drop(conn);
+        self.get_vm(&vm.id)?
+            .ok_or_else(|| StoreError::Query("VM not found after update".to_string()))
+    }
+
+    fn fail_vm(&self, name_or_id: &str) -> Result<Vm, StoreError> {
+        let vm = self.get_vm(name_or_id)?
+            .ok_or_else(|| StoreError::Query(format!("VM '{}' not found", name_or_id)))?;
+
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE vms SET state = 'failed', pid = NULL, \
+             stopped_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now') \
+             WHERE id = ?1",
+            [&vm.id],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
+
+        drop(conn);
+        self.get_vm(&vm.id)?
+            .ok_or_else(|| StoreError::Query("VM not found after update".to_string()))
+    }
+
+    fn list_running_vms(&self) -> Result<Vec<Vm>, StoreError> {
+        self.list_vms(None, Some("running"))
+    }
+
+    fn record_boot_start(&self, vm_id: &str, console_log_path: &str) -> Result<String, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let id = Uuid::new_v4().to_string();
+
+        conn.execute(
+            "INSERT INTO vm_boot_history (id, vm_id, console_log_path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, vm_id, console_log_path],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot insert boot history: {e}")))?;
+
+        Ok(id)
+    }
+
+    fn record_boot_stop(
+        &self,
+        boot_id: &str,
+        exit_code: Option<i32>,
+        error_message: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            "UPDATE vm_boot_history SET boot_stopped_at = strftime('%s', 'now'), \
+             exit_code = ?1, error_message = ?2 WHERE id = ?3",
+            rusqlite::params![exit_code, error_message, boot_id],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot update boot history: {e}")))?;
+
+        Ok(())
+    }
 }
 
 impl ImageStore for SqliteStore {
@@ -1848,5 +1990,155 @@ mod tests {
         let loaded_overlays = loaded.overlays.unwrap();
         assert_eq!(loaded_overlays.get("/etc/hostname").unwrap(), "nexus-vm");
         assert_eq!(loaded_overlays.get("/etc/resolv.conf").unwrap(), "nameserver 8.8.8.8");
+    }
+
+    #[test]
+    fn start_vm_transitions_to_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let vm = store.create_vm(&CreateVmParams {
+            name: "start-me".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+        assert_eq!(vm.state, VmState::Created);
+
+        let running = store.start_vm(
+            "start-me",
+            1234,
+            "/run/nexus/vms/abc/firecracker.sock",
+            "/run/nexus/vms/abc/firecracker.vsock",
+            "/run/nexus/vms/abc/console.log",
+            r#"{"boot-source":{}}"#,
+        ).unwrap();
+
+        assert_eq!(running.state, VmState::Running);
+        assert_eq!(running.pid, Some(1234));
+        assert!(running.socket_path.is_some());
+        assert!(running.started_at.is_some());
+    }
+
+    #[test]
+    fn stop_vm_transitions_to_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        store.create_vm(&CreateVmParams {
+            name: "stop-me".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        store.start_vm(
+            "stop-me", 5678,
+            "/run/sock", "/run/vsock", "/run/console.log", "{}",
+        ).unwrap();
+
+        let stopped = store.stop_vm("stop-me").unwrap();
+        assert_eq!(stopped.state, VmState::Stopped);
+        assert!(stopped.pid.is_none());
+        assert!(stopped.stopped_at.is_some());
+    }
+
+    #[test]
+    fn crash_vm_transitions_to_crashed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        store.create_vm(&CreateVmParams {
+            name: "crash-me".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        store.start_vm(
+            "crash-me", 9999,
+            "/run/sock", "/run/vsock", "/run/console.log", "{}",
+        ).unwrap();
+
+        let crashed = store.crash_vm("crash-me").unwrap();
+        assert_eq!(crashed.state, VmState::Crashed);
+        assert!(crashed.pid.is_none());
+    }
+
+    #[test]
+    fn start_vm_rejects_already_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        store.create_vm(&CreateVmParams {
+            name: "busy".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        store.start_vm(
+            "busy", 1111,
+            "/run/sock", "/run/vsock", "/run/console.log", "{}",
+        ).unwrap();
+
+        let result = store.start_vm(
+            "busy", 2222,
+            "/run/sock2", "/run/vsock2", "/run/console2.log", "{}",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_running_vms_returns_only_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        store.create_vm(&CreateVmParams {
+            name: "idle".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        store.create_vm(&CreateVmParams {
+            name: "active".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        store.start_vm(
+            "active", 3333,
+            "/run/sock", "/run/vsock", "/run/console.log", "{}",
+        ).unwrap();
+
+        let running = store.list_running_vms().unwrap();
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].name, "active");
+    }
+
+    #[test]
+    fn boot_history_records_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let vm = store.create_vm(&CreateVmParams {
+            name: "history-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let boot_id = store.record_boot_start(&vm.id, "/run/console.log").unwrap();
+        assert!(!boot_id.is_empty());
+
+        store.record_boot_stop(&boot_id, Some(0), None).unwrap();
     }
 }
