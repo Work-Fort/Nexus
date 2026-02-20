@@ -26,6 +26,9 @@ tracing = "0.1"
 nix = { version = "0.30", features = ["signal", "process", "user"] }
 tempfile = { version = "3", optional = true }
 tokio = { version = "1", features = ["rt", "macros", "time"], optional = true }
+data-encoding = "2.6"
+rand = "0.10"
+thiserror = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
