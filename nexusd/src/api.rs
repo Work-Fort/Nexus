@@ -1078,6 +1078,33 @@ async fn vm_logs_handler(
     }
 }
 
+async fn vm_history_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Resolve VM name/ID to VM
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    // Get state history
+    match state.store.get_state_history(vm.id) {
+        Ok(history) => (StatusCode::OK, Json(serde_json::to_value(history).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
@@ -1086,6 +1113,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/vms/{name_or_id}/start", post(start_vm_handler))
         .route("/v1/vms/{name_or_id}/stop", post(stop_vm_handler))
         .route("/v1/vms/{name_or_id}/logs", get(vm_logs_handler))
+        .route("/v1/vms/{name_or_id}/history", get(vm_history_handler))
         .route("/v1/images", post(import_image).get(list_images))
         .route("/v1/images/{name_or_id}", get(get_image).delete(delete_image_handler))
         .route("/v1/workspaces", post(create_workspace_handler).get(list_workspaces))
@@ -1856,5 +1884,58 @@ mod tests {
         let ws: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(ws["vm_id"].is_null());
         assert_eq!(ws["is_root_device"], false);
+    }
+
+    #[tokio::test]
+    async fn vm_history_endpoint() {
+        let state = test_state();
+
+        // Create a VM
+        let params = CreateVmParams {
+            name: "test-vm".to_string(),
+            role: nexus_lib::vm::VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        };
+        let vm = state.store.create_vm(&params).unwrap();
+
+        // Trigger state transitions
+        state.store.update_vm_state(vm.id, "running", Some("started")).unwrap();
+        state.store.update_vm_state(vm.id, "ready", Some("agent connected")).unwrap();
+
+        let app = router(state);
+
+        let req = Request::builder()
+            .uri("/v1/vms/test-vm/history")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let history: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0]["from_state"], "running");
+        assert_eq!(history[0]["to_state"], "ready");
+        assert_eq!(history[1]["from_state"], "created");
+        assert_eq!(history[1]["to_state"], "running");
+    }
+
+    #[tokio::test]
+    async fn vm_history_not_found() {
+        let state = test_state();
+        let app = router(state);
+
+        let req = Request::builder()
+            .uri("/v1/vms/nonexistent/history")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
