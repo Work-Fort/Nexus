@@ -134,6 +134,9 @@ impl SqliteStore {
 
 impl VmStore for SqliteStore {
     fn create_vm(&self, params: &CreateVmParams) -> Result<Vm, StoreError> {
+        // Validate that name is not a valid base32 ID
+        params.validate().map_err(StoreError::InvalidInput)?;
+
         let conn = self.conn.lock().unwrap();
 
         let id = Id::generate();
@@ -432,6 +435,9 @@ impl VmStore for SqliteStore {
 
 impl ImageStore for SqliteStore {
     fn create_image(&self, params: &ImportImageParams, subvolume_path: &str) -> Result<MasterImage, StoreError> {
+        // Validate that name is not a valid base32 ID
+        params.validate().map_err(StoreError::InvalidInput)?;
+
         let conn = self.conn.lock().unwrap();
         let id = Id::generate();
 
@@ -555,6 +561,16 @@ impl WorkspaceStore for SqliteStore {
         subvolume_path: &str,
         master_image_id: Id,
     ) -> Result<Workspace, StoreError> {
+        // Validate that name (if provided) is not a valid base32 ID
+        if let Some(name_str) = name {
+            if Id::is_valid_base32(name_str) {
+                return Err(StoreError::InvalidInput(format!(
+                    "Workspace name '{}' cannot be a valid base32 ID (reserved for resource IDs)",
+                    name_str
+                )));
+            }
+        }
+
         let conn = self.conn.lock().unwrap();
         let id = Id::generate();
 
@@ -1162,6 +1178,9 @@ fn row_to_build(row: &rusqlite::Row) -> Result<Build, rusqlite::Error> {
 
 impl BuildStore for SqliteStore {
     fn create_template(&self, params: &CreateTemplateParams) -> Result<Template, StoreError> {
+        // Validate that name is not a valid base32 ID
+        params.validate().map_err(StoreError::InvalidInput)?;
+
         let id = Id::generate();
         let overlays_json = params.overlays.as_ref().map(|o| serde_json::to_string(o).unwrap());
         let conn = self.conn.lock().unwrap();

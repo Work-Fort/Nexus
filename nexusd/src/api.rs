@@ -88,6 +88,10 @@ async fn create_vm(
 ) -> (StatusCode, Json<serde_json::Value>) {
     match state.store.create_vm(&params) {
         Ok(vm) => (StatusCode::CREATED, Json(serde_json::to_value(vm).unwrap())),
+        Err(StoreError::InvalidInput(msg)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": msg})),
+        ),
         Err(StoreError::Conflict(msg)) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),
@@ -177,6 +181,10 @@ async fn import_image(
     );
     match svc.import_image(&params) {
         Ok(img) => (StatusCode::CREATED, Json(serde_json::to_value(img).unwrap())),
+        Err(WorkspaceServiceError::Store(StoreError::InvalidInput(msg))) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": msg})),
+        ),
         Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),
@@ -286,6 +294,10 @@ async fn create_workspace_handler(
         Ok(ws) => (StatusCode::CREATED, Json(serde_json::to_value(ws).unwrap())),
         Err(WorkspaceServiceError::NotFound(msg)) => (
             StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(WorkspaceServiceError::Store(StoreError::InvalidInput(msg))) => (
+            StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": msg})),
         ),
         Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
@@ -686,6 +698,10 @@ async fn create_template(
 ) -> (StatusCode, Json<serde_json::Value>) {
     match state.store.create_template(&params) {
         Ok(tpl) => (StatusCode::CREATED, Json(serde_json::to_value(tpl).unwrap())),
+        Err(StoreError::InvalidInput(msg)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": msg})),
+        ),
         Err(StoreError::Conflict(msg)) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),

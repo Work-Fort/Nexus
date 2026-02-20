@@ -30,6 +30,8 @@ pub enum StoreError {
     SchemaMismatch { expected: u32, found: u32 },
     /// Operation not allowed in current state
     Conflict(String),
+    /// Invalid input (e.g., name validation failed)
+    InvalidInput(String),
 }
 
 impl std::fmt::Display for StoreError {
@@ -41,6 +43,7 @@ impl std::fmt::Display for StoreError {
                 write!(f, "schema version mismatch: expected {expected}, found {found}")
             }
             StoreError::Conflict(e) => write!(f, "conflict: {e}"),
+            StoreError::InvalidInput(e) => write!(f, "invalid input: {e}"),
         }
     }
 }

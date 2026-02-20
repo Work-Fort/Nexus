@@ -45,7 +45,7 @@ async fn check_processes(state: &AppState) {
                     exit_code = ?exit_code,
                     "Firecracker process exited unexpectedly"
                 );
-                exited.push((vm_id.clone(), exit_code));
+                exited.push((*vm_id, exit_code));
             }
             Ok(None) => {
                 // Process is still running — nothing to do

@@ -210,3 +210,36 @@ async fn template_crud_lifecycle() {
     let templates: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert_eq!(templates.len(), 0);
 }
+
+#[tokio::test]
+async fn create_vm_rejects_base32_name() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    )
+    .await;
+
+    let client = reqwest::Client::new();
+    let base = format!("http://{}", daemon.addr);
+
+    // Try to create VM with a 13-char base32-parsable name
+    let resp = client
+        .post(format!("{base}/v1/vms"))
+        .json(&serde_json::json!({
+            "name": "aaaaaaaaaaaaa",  // Valid base32, 13 chars
+            "role": "work",
+            "vcpu_count": 1,
+            "mem_size_mib": 128
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // Should return 400 Bad Request
+    assert_eq!(resp.status(), 400);
+    let error: serde_json::Value = resp.json().await.unwrap();
+    let error_msg = error["error"].as_str().unwrap();
+    assert!(
+        error_msg.contains("cannot be a valid base32 ID"),
+        "Expected error message about base32 ID, got: {}", error_msg
+    );
+}
