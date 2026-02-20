@@ -84,8 +84,8 @@ pub fn firecracker_config(
 }
 
 /// Returns the runtime directory for a VM: $XDG_RUNTIME_DIR/nexus/vms/<id>
-pub fn vm_runtime_dir(vm_id: &str) -> PathBuf {
-    config::default_runtime_path().join("vms").join(vm_id)
+pub fn vm_runtime_dir(vm_id: &crate::id::Id) -> PathBuf {
+    config::default_runtime_path().join("vms").join(vm_id.encode())
 }
 
 /// Spawn a Firecracker process for a VM.
@@ -103,7 +103,7 @@ pub fn spawn_firecracker(
     kernel_path: &str,
     rootfs_path: &str,
 ) -> Result<(std::process::Child, PathBuf), VmServiceError> {
-    let runtime_dir = vm_runtime_dir(&vm.id.to_string());
+    let runtime_dir = vm_runtime_dir(&vm.id);
     fs::create_dir_all(&runtime_dir)?;
 
     let api_sock = runtime_dir.join("firecracker.sock");
@@ -140,7 +140,7 @@ pub fn spawn_firecracker(
 }
 
 /// Clean up a VM's runtime directory (sockets, logs, config).
-pub fn cleanup_runtime_dir(vm_id: &str) {
+pub fn cleanup_runtime_dir(vm_id: &crate::id::Id) {
     let runtime_dir = vm_runtime_dir(vm_id);
     let _ = fs::remove_dir_all(&runtime_dir);
 }
@@ -152,7 +152,7 @@ mod tests {
 
     fn test_vm() -> Vm {
         Vm {
-            id: "test-id".to_string(),
+            id: crate::id::Id::from_i64(1),
             name: "test-vm".to_string(),
             role: VmRole::Work,
             state: VmState::Created,
@@ -189,8 +189,10 @@ mod tests {
 
     #[test]
     fn vm_runtime_dir_includes_vm_id() {
-        let dir = vm_runtime_dir("abc-123");
-        assert!(dir.to_string_lossy().contains("nexus/vms/abc-123"));
+        let id = crate::id::Id::from_i64(123);
+        let dir = vm_runtime_dir(&id);
+        assert!(dir.to_string_lossy().contains("nexus/vms/"));
+        assert!(dir.to_string_lossy().contains(&id.encode()));
     }
 
     #[test]

@@ -1483,7 +1483,7 @@ mod tests {
         };
         let vm = store.create_vm(&params).unwrap();
 
-        assert!(!vm.id.is_empty());
+        assert!(vm.id.as_i64() > 0);
         assert_eq!(vm.name, "test-vm");
         assert_eq!(vm.role, VmRole::Work);
         assert_eq!(vm.state, VmState::Created);
@@ -1611,7 +1611,7 @@ mod tests {
             mem_size_mib: 128,
         }).unwrap();
 
-        let found = store.get_vm(&created.id).unwrap().unwrap();
+        let found = store.get_vm(&created.id.encode()).unwrap().unwrap();
         assert_eq!(found.name, "id-test");
     }
 
@@ -1638,7 +1638,8 @@ mod tests {
             mem_size_mib: 128,
         }).unwrap();
 
-        let deleted = store.delete_vm("delete-me").unwrap();
+        let vm_to_delete = store.get_vm("delete-me").unwrap().unwrap();
+        let deleted = store.delete_vm(vm_to_delete.id).unwrap();
         assert!(deleted);
 
         let found = store.get_vm("delete-me").unwrap();
@@ -1651,7 +1652,8 @@ mod tests {
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
-        let deleted = store.delete_vm("ghost").unwrap();
+        // Try to delete with a non-existent ID
+        let deleted = store.delete_vm(crate::id::Id::from_i64(99999)).unwrap();
         assert!(!deleted);
     }
 
@@ -1668,7 +1670,7 @@ mod tests {
             mem_size_mib: 128,
         }).unwrap();
 
-        let deleted = store.delete_vm(&created.id).unwrap();
+        let deleted = store.delete_vm(created.id).unwrap();
         assert!(deleted);
     }
 
@@ -1686,7 +1688,8 @@ mod tests {
         }).unwrap();
         assert_eq!(vm1.cid, 3);
 
-        store.delete_vm("first").unwrap();
+        let first = store.get_vm("first").unwrap().unwrap();
+        store.delete_vm(first.id).unwrap();
 
         // Next VM should get CID 3 again (lowest available)
         // Implementation may choose CID 4 if using max+1 strategy.
@@ -1712,7 +1715,7 @@ mod tests {
         };
         let img = store.create_image(&params, "/data/workspaces/@base-agent").unwrap();
 
-        assert!(!img.id.is_empty());
+        assert!(img.id.as_i64() > 0);
         assert_eq!(img.name, "base-agent");
         assert_eq!(img.subvolume_path, "/data/workspaces/@base-agent");
 
@@ -1765,7 +1768,8 @@ mod tests {
             "/data/del-me",
         ).unwrap();
 
-        let deleted = store.delete_image("del-me").unwrap();
+        let img_to_delete = store.get_image("del-me").unwrap().unwrap();
+        let deleted = store.delete_image(img_to_delete.id).unwrap();
         assert!(deleted);
         assert!(store.get_image("del-me").unwrap().is_none());
     }
@@ -1776,7 +1780,7 @@ mod tests {
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
-        assert!(!store.delete_image("ghost").unwrap());
+        assert!(!store.delete_image(crate::id::Id::from_i64(99999)).unwrap());
     }
 
     #[test]
@@ -1790,9 +1794,10 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        store.create_workspace(Some("ws-1"), "/data/ws-1", &img.id).unwrap();
+        store.create_workspace(Some("ws-1"), "/data/ws-1", img.id).unwrap();
 
-        let result = store.delete_image("base");
+        let base_img = store.get_image("base").unwrap().unwrap();
+        let result = store.delete_image(base_img.id);
         assert!(result.is_err());
     }
 
@@ -1807,9 +1812,9 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        let ws = store.create_workspace(Some("my-ws"), "/data/my-ws", &img.id).unwrap();
+        let ws = store.create_workspace(Some("my-ws"), "/data/my-ws", img.id).unwrap();
 
-        assert!(!ws.id.is_empty());
+        assert!(ws.id.as_i64() != 0);
         assert_eq!(ws.name, Some("my-ws".to_string()));
         assert_eq!(ws.master_image_id, Some(img.id.clone()));
 
@@ -1828,7 +1833,7 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        let ws = store.create_workspace(None, "/data/anon-ws", &img.id).unwrap();
+        let ws = store.create_workspace(None, "/data/anon-ws", img.id).unwrap();
         assert!(ws.name.is_none());
     }
 
@@ -1843,8 +1848,8 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        store.create_workspace(Some("ws-a"), "/data/ws-a", &img.id).unwrap();
-        store.create_workspace(Some("ws-b"), "/data/ws-b", &img.id).unwrap();
+        store.create_workspace(Some("ws-a"), "/data/ws-a", img.id).unwrap();
+        store.create_workspace(Some("ws-b"), "/data/ws-b", img.id).unwrap();
 
         let wss = store.list_workspaces(None).unwrap();
         assert_eq!(wss.len(), 2);
@@ -1865,8 +1870,8 @@ mod tests {
             "/data/base-b",
         ).unwrap();
 
-        store.create_workspace(Some("ws-a"), "/data/ws-a", &img_a.id).unwrap();
-        store.create_workspace(Some("ws-b"), "/data/ws-b", &img_b.id).unwrap();
+        store.create_workspace(Some("ws-a"), "/data/ws-a", img_a.id).unwrap();
+        store.create_workspace(Some("ws-b"), "/data/ws-b", img_b.id).unwrap();
 
         let wss = store.list_workspaces(Some("base-a")).unwrap();
         assert_eq!(wss.len(), 1);
@@ -1884,9 +1889,10 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        store.create_workspace(Some("del-ws"), "/data/del-ws", &img.id).unwrap();
+        store.create_workspace(Some("del-ws"), "/data/del-ws", img.id).unwrap();
 
-        let deleted = store.delete_workspace("del-ws").unwrap();
+        let ws_to_delete = store.get_workspace("del-ws").unwrap().unwrap();
+        let deleted = store.delete_workspace(ws_to_delete.id).unwrap();
         assert!(deleted);
         assert!(store.get_workspace("del-ws").unwrap().is_none());
     }
@@ -1897,7 +1903,7 @@ mod tests {
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
-        assert!(!store.delete_workspace("ghost").unwrap());
+        assert!(!store.delete_workspace(crate::id::Id::from_i64(99999)).unwrap());
     }
 
     #[test]
@@ -1910,7 +1916,7 @@ mod tests {
             overlays: None,
         };
         let tpl = store.create_template(&params).unwrap();
-        assert!(!tpl.id.is_empty());
+        assert!(tpl.id.as_i64() != 0);
         assert_eq!(tpl.name, "base-agent");
         assert_eq!(tpl.version, 1);
         assert_eq!(tpl.source_type, "rootfs");
@@ -1965,7 +1971,7 @@ mod tests {
         let by_name = store.get_template("find-me").unwrap().unwrap();
         assert_eq!(by_name.id, tpl.id);
 
-        let by_id = store.get_template(&tpl.id).unwrap().unwrap();
+        let by_id = store.get_template(&tpl.id.encode()).unwrap().unwrap();
         assert_eq!(by_id.name, "find-me");
 
         assert!(store.get_template("nonexistent").unwrap().is_none());
@@ -1981,14 +1987,15 @@ mod tests {
             overlays: None,
         };
         store.create_template(&params).unwrap();
-        assert!(store.delete_template("doomed").unwrap());
+        let tpl_to_delete = store.get_template("doomed").unwrap().unwrap();
+        assert!(store.delete_template(tpl_to_delete.id).unwrap());
         assert!(store.get_template("doomed").unwrap().is_none());
     }
 
     #[test]
     fn delete_nonexistent_template_returns_false() {
         let store = test_store();
-        assert!(!store.delete_template("ghost").unwrap());
+        assert!(!store.delete_template(crate::id::Id::from_i64(99999)).unwrap());
     }
 
     #[test]
@@ -2003,7 +2010,7 @@ mod tests {
         let tpl = store.create_template(&params).unwrap();
         let build = store.create_build(&tpl).unwrap();
 
-        assert!(!build.id.is_empty());
+        assert!(build.id.as_i64() != 0);
         assert_eq!(build.template_id, tpl.id);
         assert_eq!(build.template_version, tpl.version);
         assert_eq!(build.name, tpl.name);
@@ -2032,9 +2039,9 @@ mod tests {
         let build = store.create_build(&tpl).unwrap();
 
         let updated = store.update_build_status(
-            &build.id,
+            build.id,
             BuildStatus::Success,
-            Some(&img.id),
+            Some(img.id),
             Some("/tmp/build.log"),
         ).unwrap();
 
@@ -2057,7 +2064,7 @@ mod tests {
         let build = store.create_build(&tpl).unwrap();
 
         let updated = store.update_build_status(
-            &build.id,
+            build.id,
             BuildStatus::Failed,
             None,
             Some("/tmp/build.log"),
@@ -2109,10 +2116,11 @@ mod tests {
         let tpl = store.create_template(&params).unwrap();
         let build = store.create_build(&tpl).unwrap();
 
-        let found = store.get_build(&build.id).unwrap().unwrap();
+        let found = store.get_build(build.id).unwrap().unwrap();
         assert_eq!(found.id, build.id);
 
-        assert!(store.get_build("nonexistent").unwrap().is_none());
+        // get_build takes Id, so use a nonexistent ID
+        assert!(store.get_build(crate::id::Id::from_i64(99999)).unwrap().is_none());
     }
 
     #[test]
@@ -2127,8 +2135,9 @@ mod tests {
         let tpl = store.create_template(&params).unwrap();
         let build = store.create_build(&tpl).unwrap();
 
-        store.delete_template("cascade-tpl").unwrap();
-        assert!(store.get_build(&build.id).unwrap().is_none());
+        let tpl = store.get_template("cascade-tpl").unwrap().unwrap();
+        store.delete_template(tpl.id).unwrap();
+        assert!(store.get_build(build.id).unwrap().is_none());
     }
 
     #[test]
@@ -2145,7 +2154,7 @@ mod tests {
             overlays: Some(overlays.clone()),
         };
         let tpl = store.create_template(&params).unwrap();
-        let loaded = store.get_template(&tpl.id).unwrap().unwrap();
+        let loaded = store.get_template(&tpl.id.encode()).unwrap().unwrap();
 
         let loaded_overlays = loaded.overlays.unwrap();
         assert_eq!(loaded_overlays.get("/etc/hostname").unwrap(), "nexus-vm");
@@ -2167,7 +2176,7 @@ mod tests {
         assert_eq!(vm.state, VmState::Created);
 
         let running = store.start_vm(
-            "start-me",
+            vm.id,
             1234,
             "/run/nexus/vms/abc/firecracker.sock",
             "/run/nexus/vms/abc/firecracker.vsock",
@@ -2194,12 +2203,12 @@ mod tests {
             mem_size_mib: 128,
         }).unwrap();
 
+        let vm_to_stop = store.get_vm("stop-me").unwrap().unwrap();
         store.start_vm(
-            "stop-me", 5678,
+            vm_to_stop.id, 5678,
             "/run/sock", "/run/vsock", "/run/console.log", "{}",
         ).unwrap();
-
-        let stopped = store.stop_vm("stop-me").unwrap();
+        let stopped = store.stop_vm(vm_to_stop.id).unwrap();
         assert_eq!(stopped.state, VmState::Stopped);
         assert!(stopped.pid.is_none());
         assert!(stopped.stopped_at.is_some());
@@ -2218,12 +2227,13 @@ mod tests {
             mem_size_mib: 128,
         }).unwrap();
 
+        let vm = store.get_vm("crash-me").unwrap().unwrap();
         store.start_vm(
-            "crash-me", 9999,
+            vm.id, 9999,
             "/run/sock", "/run/vsock", "/run/console.log", "{}",
         ).unwrap();
 
-        let crashed = store.crash_vm("crash-me").unwrap();
+        let crashed = store.crash_vm(vm.id).unwrap();
         assert_eq!(crashed.state, VmState::Crashed);
         assert!(crashed.pid.is_none());
     }
@@ -2241,13 +2251,14 @@ mod tests {
             mem_size_mib: 128,
         }).unwrap();
 
+        let vm = store.get_vm("busy").unwrap().unwrap();
         store.start_vm(
-            "busy", 1111,
+            vm.id, 1111,
             "/run/sock", "/run/vsock", "/run/console.log", "{}",
         ).unwrap();
 
         let result = store.start_vm(
-            "busy", 2222,
+            vm.id, 2222,
             "/run/sock2", "/run/vsock2", "/run/console2.log", "{}",
         );
         assert!(result.is_err());
@@ -2273,8 +2284,9 @@ mod tests {
             mem_size_mib: 128,
         }).unwrap();
 
+        let active_vm = store.get_vm("active").unwrap().unwrap();
         store.start_vm(
-            "active", 3333,
+            active_vm.id, 3333,
             "/run/sock", "/run/vsock", "/run/console.log", "{}",
         ).unwrap();
 
@@ -2296,10 +2308,10 @@ mod tests {
             mem_size_mib: 128,
         }).unwrap();
 
-        let boot_id = store.record_boot_start(&vm.id, "/run/console.log").unwrap();
-        assert!(!boot_id.is_empty());
+        let boot_id = store.record_boot_start(vm.id, "/run/console.log").unwrap();
+        assert!(boot_id.as_i64() > 0);
 
-        store.record_boot_stop(&boot_id, Some(0), None).unwrap();
+        store.record_boot_stop(boot_id, Some(0), None).unwrap();
     }
 
     #[test]
@@ -2320,11 +2332,11 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        let ws = store.create_workspace(Some("ws-for-vm"), "/data/ws-for-vm", &img.id).unwrap();
+        let ws = store.create_workspace(Some("ws-for-vm"), "/data/ws-for-vm", img.id).unwrap();
         assert!(ws.vm_id.is_none());
 
-        let attached = store.attach_workspace(&ws.id, &vm.id, true).unwrap();
-        assert_eq!(attached.vm_id, Some(vm.id.clone()));
+        let attached = store.attach_workspace(ws.id, vm.id, true).unwrap();
+        assert_eq!(attached.vm_id, Some(vm.id));
         assert!(attached.is_root_device);
         assert!(attached.attached_at.is_some());
     }
@@ -2347,10 +2359,10 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        let ws = store.create_workspace(Some("ws-detach"), "/data/ws-detach", &img.id).unwrap();
-        store.attach_workspace(&ws.id, &vm.id, true).unwrap();
+        let ws = store.create_workspace(Some("ws-detach"), "/data/ws-detach", img.id).unwrap();
+        store.attach_workspace(ws.id, vm.id, true).unwrap();
 
-        let detached = store.detach_workspace(&ws.id).unwrap();
+        let detached = store.detach_workspace(ws.id).unwrap();
         assert!(detached.vm_id.is_none());
         assert!(!detached.is_root_device);
         assert!(detached.detached_at.is_some());

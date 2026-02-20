@@ -80,8 +80,8 @@ impl<'a> BuildService<'a> {
     /// 5. Import into btrfs subvolume and register as master image
     /// 6. Update build status
     pub async fn execute_build(&self, build: &Build) {
-        let build_dir = self.builds_dir.join(build.id.to_string());
-        let log_path = self.builds_dir.join(format!("{}.log", build.id));
+        let build_dir = self.builds_dir.join(build.id.encode());
+        let log_path = self.builds_dir.join(format!("{}.log", build.id.encode()));
 
         let result = self.run_build_steps(build, &build_dir, &log_path).await;
 
@@ -182,7 +182,7 @@ impl<'a> BuildService<'a> {
         writeln!(log, "ext4 packaging complete").ok();
 
         // Step 5: Import as master image (create btrfs subvolume with ext4 inside)
-        let build_id_suffix = build.id.encode().chars().take(8).collect::<String>();
+        let build_id_suffix = build.id.encode();
         let image_name = format!("{}-build-{}", build.name, build_id_suffix);
         writeln!(log, "Creating master image: {}", image_name).ok();
 
