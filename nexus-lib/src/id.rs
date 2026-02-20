@@ -86,6 +86,19 @@ impl<'de> serde::Deserialize<'de> for Id {
     }
 }
 
+// rusqlite ToSql/FromSql implementations for SQLite INTEGER storage
+impl rusqlite::types::ToSql for Id {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.0))
+    }
+}
+
+impl rusqlite::types::FromSql for Id {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        value.as_i64().map(Id::from_i64)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum IdError {
     #[error("invalid base32 encoding")]
