@@ -3,7 +3,10 @@ rust = { version = "latest", targets = "x86_64-unknown-linux-musl" }
 
 [tasks.build]
 description = "Build all crates (debug)"
-run = "cargo build"
+run = """
+cargo build -p guest-agent --target x86_64-unknown-linux-musl --release
+cargo build
+"""
 
 [tasks."build:release"]
 description = "Build all crates (release)"

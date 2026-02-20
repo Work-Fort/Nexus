@@ -4,6 +4,7 @@ pub mod backend;
 pub mod build_service;
 pub mod client;
 pub mod config;
+pub mod embedded;
 pub mod firecracker_service;
 pub mod github;
 pub mod id;

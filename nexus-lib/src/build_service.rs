@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 use crate::backend::traits::WorkspaceBackend;
+use crate::embedded::{GUEST_AGENT_BINARY, GUEST_AGENT_SYSTEMD_UNIT, PLACEHOLDER_IMAGE_YAML};
 use crate::pipeline::{ChecksumSet, PipelineExecutor, PipelineStage};
 use crate::store::traits::StoreError;
 use crate::template::{Build, BuildStatus};
@@ -174,6 +175,71 @@ impl<'a> BuildService<'a> {
                 writeln!(log, "  overlay: {}", path).ok();
             }
         }
+
+        // Write embedded guest-agent binary to rootfs (programmatic, no shell scripts)
+        writeln!(log, "Writing embedded guest-agent binary to rootfs").ok();
+        let agent_path = rootfs_dir.join("usr/local/bin/guest-agent");
+        std::fs::create_dir_all(agent_path.parent().unwrap())
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to create /usr/local/bin directory: {e}")
+            ))?;
+        std::fs::write(&agent_path, GUEST_AGENT_BINARY)
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to write guest-agent binary: {e}")
+            ))?;
+
+        // Set executable permissions (0o755 = rwxr-xr-x)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&agent_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| BuildServiceError::BuildFailed(
+                    format!("failed to set guest-agent executable permissions: {e}")
+                ))?;
+        }
+
+        // Write systemd service unit (programmatic string write)
+        writeln!(log, "Writing guest-agent systemd service unit").ok();
+        let service_path = rootfs_dir.join("etc/systemd/system/nexus-guest-agent.service");
+        std::fs::create_dir_all(service_path.parent().unwrap())
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to create /etc/systemd/system directory: {e}")
+            ))?;
+        std::fs::write(&service_path, GUEST_AGENT_SYSTEMD_UNIT)
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to write guest-agent systemd unit: {e}")
+            ))?;
+
+        // Enable service by creating symlink (programmatic symlink creation)
+        writeln!(log, "Enabling guest-agent systemd service").ok();
+        let wants_dir = rootfs_dir.join("etc/systemd/system/multi-user.target.wants");
+        std::fs::create_dir_all(&wants_dir)
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to create multi-user.target.wants directory: {e}")
+            ))?;
+        let symlink_path = wants_dir.join("nexus-guest-agent.service");
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc/systemd/system/nexus-guest-agent.service", &symlink_path)
+                .map_err(|e| BuildServiceError::BuildFailed(
+                    format!("failed to create systemd service symlink: {e}")
+                ))?;
+        }
+
+        // Write placeholder image metadata (programmatic file write)
+        writeln!(log, "Writing placeholder image metadata").ok();
+        let metadata_path = rootfs_dir.join("etc/nexus/image.yaml");
+        std::fs::create_dir_all(metadata_path.parent().unwrap())
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to create /etc/nexus directory: {e}")
+            ))?;
+        std::fs::write(&metadata_path, PLACEHOLDER_IMAGE_YAML)
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to write image metadata: {e}")
+            ))?;
+
+        // All rootfs modifications complete - fully automated, no user intervention required
 
         // Step 4: Package as ext4 via mke2fs -d
         let ext4_path = build_dir.join("rootfs.ext4");
