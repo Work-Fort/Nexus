@@ -463,6 +463,34 @@ impl VmStore for SqliteStore {
         Ok(())
     }
 
+    fn get_state_history(&self, vm_id: Id) -> Result<Vec<crate::vm::StateHistory>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, vm_id, from_state, to_state, reason, transitioned_at
+                 FROM vm_state_history
+                 WHERE vm_id = ?
+                 ORDER BY transitioned_at DESC, id DESC"
+            )
+            .map_err(|e| StoreError::Query(format!("cannot prepare query: {e}")))?;
+
+        let rows = stmt
+            .query_map([vm_id], |row| {
+                Ok(crate::vm::StateHistory {
+                    id: row.get(0)?,
+                    vm_id: row.get(1)?,
+                    from_state: row.get(2)?,
+                    to_state: row.get(3)?,
+                    reason: row.get(4)?,
+                    transitioned_at: row.get(5)?,
+                })
+            })
+            .map_err(|e| StoreError::Query(format!("cannot execute query: {e}")))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Query(format!("cannot collect results: {e}")))
+    }
+
     fn set_vm_agent_connected_at(&self, id: Id, timestamp: i64) -> Result<(), StoreError> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -2482,5 +2510,62 @@ mod tests {
         assert!(detached.vm_id.is_none());
         assert!(!detached.is_root_device);
         assert!(detached.detached_at.is_some());
+    }
+
+    #[test]
+    fn get_state_history_returns_ordered_transitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        // Create a VM
+        let params = CreateVmParams {
+            name: "test-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        };
+        let vm = store.create_vm(&params).unwrap();
+
+        // Trigger state transitions
+        store.update_vm_state(vm.id, "running", Some("started")).unwrap();
+        store.update_vm_state(vm.id, "ready", Some("agent connected")).unwrap();
+        store.update_vm_state(vm.id, "stopped", Some("user stopped")).unwrap();
+
+        // Get history
+        let history = store.get_state_history(vm.id).unwrap();
+
+        assert_eq!(history.len(), 3);
+        // Newest first
+        assert_eq!(history[0].from_state, "ready");
+        assert_eq!(history[0].to_state, "stopped");
+        assert_eq!(history[0].reason, Some("user stopped".to_string()));
+
+        assert_eq!(history[1].from_state, "running");
+        assert_eq!(history[1].to_state, "ready");
+        assert_eq!(history[1].reason, Some("agent connected".to_string()));
+
+        assert_eq!(history[2].from_state, "created");
+        assert_eq!(history[2].to_state, "running");
+        assert_eq!(history[2].reason, Some("started".to_string()));
+    }
+
+    #[test]
+    fn get_state_history_empty_for_vm_with_no_transitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        // Create a VM but don't transition it
+        let params = CreateVmParams {
+            name: "test-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        };
+        let vm = store.create_vm(&params).unwrap();
+
+        let history = store.get_state_history(vm.id).unwrap();
+        assert_eq!(history.len(), 0);
     }
 }

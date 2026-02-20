@@ -1152,6 +1152,7 @@ mod tests {
         fn record_boot_start(&self, _: nexus_lib::id::Id, _: &str) -> Result<nexus_lib::id::Id, StoreError> { unimplemented!() }
         fn record_boot_stop(&self, _: nexus_lib::id::Id, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
         fn update_vm_state(&self, _: nexus_lib::id::Id, _: &str, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
+        fn get_state_history(&self, _: nexus_lib::id::Id) -> Result<Vec<nexus_lib::vm::StateHistory>, StoreError> { unimplemented!() }
         fn set_vm_agent_connected_at(&self, _: nexus_lib::id::Id, _: i64) -> Result<(), StoreError> { unimplemented!() }
         fn list_vms_by_state(&self, _: &str) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
     }
@@ -1265,6 +1266,7 @@ mod tests {
         fn record_boot_start(&self, _: nexus_lib::id::Id, _: &str) -> Result<nexus_lib::id::Id, StoreError> { unimplemented!() }
         fn record_boot_stop(&self, _: nexus_lib::id::Id, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
         fn update_vm_state(&self, _: nexus_lib::id::Id, _: &str, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
+        fn get_state_history(&self, _: nexus_lib::id::Id) -> Result<Vec<nexus_lib::vm::StateHistory>, StoreError> { unimplemented!() }
         fn set_vm_agent_connected_at(&self, _: nexus_lib::id::Id, _: i64) -> Result<(), StoreError> { unimplemented!() }
         fn list_vms_by_state(&self, _: &str) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
     }
