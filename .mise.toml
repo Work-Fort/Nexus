@@ -1,5 +1,5 @@
 [tools]
-rust = "latest"
+rust = { version = "latest", targets = "x86_64-unknown-linux-musl" }
 
 [tasks.build]
 description = "Build all crates (debug)"
