@@ -168,6 +168,7 @@ mod tests {
             uds_path: None,
             console_log_path: None,
             config_json: None,
+            agent_connected_at: None,
         }
     }
 

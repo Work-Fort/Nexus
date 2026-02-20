@@ -180,7 +180,7 @@ impl VmStore for SqliteStore {
 
         let mut sql = "SELECT id, name, role, state, cid, vcpu_count, mem_size_mib, \
                         created_at, updated_at, started_at, stopped_at, pid, \
-                        socket_path, uds_path, console_log_path, config_json \
+                        socket_path, uds_path, console_log_path, config_json, agent_connected_at \
                         FROM vms WHERE 1=1".to_string();
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -215,7 +215,7 @@ impl VmStore for SqliteStore {
             .prepare(
                 "SELECT id, name, role, state, cid, vcpu_count, mem_size_mib, \
                  created_at, updated_at, started_at, stopped_at, pid, \
-                 socket_path, uds_path, console_log_path, config_json \
+                 socket_path, uds_path, console_log_path, config_json, agent_connected_at \
                  FROM vms WHERE id = ?1",
             )
             .map_err(|e| StoreError::Query(format!("cannot prepare get query: {e}")))?;
@@ -238,7 +238,7 @@ impl VmStore for SqliteStore {
             .prepare(
                 "SELECT id, name, role, state, cid, vcpu_count, mem_size_mib, \
                  created_at, updated_at, started_at, stopped_at, pid, \
-                 socket_path, uds_path, console_log_path, config_json \
+                 socket_path, uds_path, console_log_path, config_json, agent_connected_at \
                  FROM vms WHERE name = ?1",
             )
             .map_err(|e| StoreError::Query(format!("cannot prepare get query: {e}")))?;
@@ -318,7 +318,10 @@ impl VmStore for SqliteStore {
                     vm.name
                 )));
             }
-            VmState::Running => unreachable!(),
+            VmState::Running | VmState::Ready => unreachable!(),
+            VmState::Unreachable => {
+                // Allow restart from unreachable state
+            }
         }
 
         let conn = self.conn.lock().unwrap();
@@ -1052,6 +1055,7 @@ fn row_to_vm(row: &rusqlite::Row) -> Vm {
         uds_path: row.get(13).unwrap(),
         console_log_path: row.get(14).unwrap(),
         config_json: row.get(15).unwrap(),
+        agent_connected_at: row.get(16).unwrap(),
     }
 }
 
@@ -1366,8 +1370,9 @@ mod tests {
 
         let status = store.status().unwrap();
         // Expected tables: schema_meta, settings, vms, master_images, workspaces,
-        // providers, kernels, rootfs_images, firecracker_versions, templates, builds, vm_boot_history = 12 tables
-        assert_eq!(status.table_count, 12, "expected 12 tables, got {}", status.table_count);
+        // providers, kernels, rootfs_images, firecracker_versions, templates, builds,
+        // vm_boot_history, vm_state_history = 13 tables
+        assert_eq!(status.table_count, 13, "expected 13 tables, got {}", status.table_count);
     }
 
     #[test]
@@ -1381,7 +1386,7 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 12);
+        assert_eq!(status.table_count, 13);
     }
 
     #[test]
@@ -1445,7 +1450,7 @@ mod tests {
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 12, "should have all tables after recreate");
+        assert_eq!(status.table_count, 13, "should have all tables after recreate");
 
         let conn = store.conn.lock().unwrap();
         let version: String = conn

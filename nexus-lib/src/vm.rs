@@ -48,9 +48,11 @@ impl std::str::FromStr for VmRole {
 pub enum VmState {
     Created,
     Running,
+    Ready,
     Stopped,
     Crashed,
     Failed,
+    Unreachable,
 }
 
 impl VmState {
@@ -58,9 +60,11 @@ impl VmState {
         match self {
             VmState::Created => "created",
             VmState::Running => "running",
+            VmState::Ready => "ready",
             VmState::Stopped => "stopped",
             VmState::Crashed => "crashed",
             VmState::Failed => "failed",
+            VmState::Unreachable => "unreachable",
         }
     }
 }
@@ -78,9 +82,11 @@ impl std::str::FromStr for VmState {
         match s {
             "created" => Ok(VmState::Created),
             "running" => Ok(VmState::Running),
+            "ready" => Ok(VmState::Ready),
             "stopped" => Ok(VmState::Stopped),
             "crashed" => Ok(VmState::Crashed),
             "failed" => Ok(VmState::Failed),
+            "unreachable" => Ok(VmState::Unreachable),
             _ => Err(format!("invalid VM state: '{s}'")),
         }
     }
@@ -128,6 +134,8 @@ pub struct Vm {
     pub console_log_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_connected_at: Option<i64>,
 }
 
 impl CreateVmParams {
@@ -158,9 +166,11 @@ mod tests {
     fn state_roundtrip() {
         assert_eq!("created".parse::<VmState>().unwrap(), VmState::Created);
         assert_eq!("running".parse::<VmState>().unwrap(), VmState::Running);
+        assert_eq!("ready".parse::<VmState>().unwrap(), VmState::Ready);
         assert_eq!("stopped".parse::<VmState>().unwrap(), VmState::Stopped);
         assert_eq!("crashed".parse::<VmState>().unwrap(), VmState::Crashed);
         assert_eq!("failed".parse::<VmState>().unwrap(), VmState::Failed);
+        assert_eq!("unreachable".parse::<VmState>().unwrap(), VmState::Unreachable);
         assert!("bogus".parse::<VmState>().is_err());
     }
 
@@ -210,6 +220,7 @@ mod tests {
             uds_path: None,
             console_log_path: None,
             config_json: None,
+            agent_connected_at: None,
         };
         let json = serde_json::to_string(&vm).unwrap();
         assert!(!json.contains("started_at"));

@@ -2,7 +2,7 @@
 /// Schema version — increment when the schema changes.
 /// Pre-alpha migration strategy: if the stored version doesn't match,
 /// delete the DB and recreate.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// Database schema. Executed as a single batch on first start.
 /// Domain tables are added by later steps — each step bumps SCHEMA_VERSION
@@ -27,7 +27,7 @@ CREATE TABLE vms (
     id INTEGER PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('portal', 'work', 'service')),
-    state TEXT NOT NULL CHECK(state IN ('created', 'running', 'stopped', 'crashed', 'failed')),
+    state TEXT NOT NULL CHECK(state IN ('created', 'running', 'ready', 'stopped', 'crashed', 'failed', 'unreachable')),
     cid INTEGER NOT NULL UNIQUE,
     vcpu_count INTEGER NOT NULL DEFAULT 1,
     mem_size_mib INTEGER NOT NULL DEFAULT 128,
@@ -36,6 +36,7 @@ CREATE TABLE vms (
     socket_path TEXT,
     uds_path TEXT,
     console_log_path TEXT,
+    agent_connected_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     started_at INTEGER,
@@ -184,6 +185,19 @@ CREATE TABLE vm_boot_history (
 );
 
 CREATE INDEX idx_vm_boot_history_vm_id ON vm_boot_history(vm_id);
+
+-- VM state history: tracks state transitions
+CREATE TABLE vm_state_history (
+    id INTEGER PRIMARY KEY,
+    vm_id INTEGER NOT NULL,
+    from_state TEXT NOT NULL,
+    to_state TEXT NOT NULL,
+    reason TEXT,
+    transitioned_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    FOREIGN KEY (vm_id) REFERENCES vms(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_vm_state_history_vm_id ON vm_state_history(vm_id);
 "#;
 
 /// Seed the providers table with default provider configurations.
