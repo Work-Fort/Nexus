@@ -121,6 +121,27 @@ enum VmAction {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Start a VM
+    Start {
+        /// VM name or ID
+        name: String,
+    },
+    /// Stop a running VM
+    Stop {
+        /// VM name or ID
+        name: String,
+        /// Force stop (SIGKILL instead of SIGTERM)
+        #[arg(long)]
+        force: bool,
+    },
+    /// View VM console logs
+    Logs {
+        /// VM name or ID
+        name: String,
+        /// Number of lines to show from the end
+        #[arg(long, default_value = "100")]
+        tail: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -460,6 +481,61 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                 Err(e) => {
                     eprintln!("Error: cannot delete VM \"{}\"\n  {e}", name);
                     ExitCode::from(EXIT_CONFLICT)
+                }
+            }
+        }
+        VmAction::Start { name } => {
+            match client.start_vm(&name).await {
+                Ok(vm) => {
+                    println!("Started VM \"{}\" (state: {}, PID: {})",
+                        vm.name, vm.state, vm.pid.unwrap_or(0));
+                    println!("\n  View logs:     nexusctl vm logs {}", vm.name);
+                    println!("  Stop it:       nexusctl vm stop {}", vm.name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot start VM \"{name}\"\n  {e}");
+                    ExitCode::from(EXIT_CONFLICT)
+                }
+            }
+        }
+        VmAction::Stop { name, force: _ } => {
+            match client.stop_vm(&name).await {
+                Ok(vm) => {
+                    println!("Stopped VM \"{}\" (state: {})", vm.name, vm.state);
+                    println!("\n  Restart it: nexusctl vm start {}", vm.name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot stop VM \"{name}\"\n  {e}");
+                    ExitCode::from(EXIT_CONFLICT)
+                }
+            }
+        }
+        VmAction::Logs { name, tail } => {
+            match client.vm_logs(&name, Some(tail)).await {
+                Ok(logs) => {
+                    print!("{logs}");
+                    if !logs.ends_with('\n') {
+                        println!();
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot get logs for VM \"{name}\"\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }
         }
