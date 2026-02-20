@@ -433,6 +433,18 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                     println!("CID:        {}", vm.cid);
                     println!("vCPUs:      {}", vm.vcpu_count);
                     println!("Memory:     {} MiB", vm.mem_size_mib);
+                    if let Some(pid) = vm.pid {
+                        println!("PID:        {}", pid);
+                    }
+                    if let Some(ref sock) = vm.socket_path {
+                        println!("API Socket: {}", sock);
+                    }
+                    if let Some(ref uds) = vm.uds_path {
+                        println!("vsock UDS:  {}", uds);
+                    }
+                    if let Some(ref log) = vm.console_log_path {
+                        println!("Console:    {}", log);
+                    }
                     println!("Created:    {}", format_timestamp(vm.created_at));
                     if let Some(ts) = vm.started_at {
                         println!("Started:    {}", format_timestamp(ts));
