@@ -3,6 +3,7 @@ use crate::asset::{
     FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
     RegisterKernelParams, RegisterRootfsParams, RootfsImage,
 };
+use crate::id::Id;
 use crate::store::schema::{seed_default_providers, SCHEMA_SQL, SCHEMA_VERSION};
 use crate::store::traits::{AssetStore, BuildStore, DbStatus, ImageStore, StateStore, StoreError, VmStore, WorkspaceStore};
 use crate::template::{Build, BuildStatus, CreateTemplateParams, Template};
@@ -11,7 +12,6 @@ use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
 pub struct SqliteStore {
     conn: std::sync::Mutex<Connection>,
@@ -136,7 +136,7 @@ impl VmStore for SqliteStore {
     fn create_vm(&self, params: &CreateVmParams) -> Result<Vm, StoreError> {
         let conn = self.conn.lock().unwrap();
 
-        let id = Uuid::new_v4().to_string();
+        let id = Id::generate();
 
         // Auto-assign CID: find the max CID in use, start from 3
         let max_cid: Option<u32> = conn
@@ -165,10 +165,10 @@ impl VmStore for SqliteStore {
             StoreError::Query(format!("cannot insert VM: {e}"))
         })?;
 
-        // Release the lock before calling get_vm which will re-acquire it
+        // Release the lock before calling get_vm_by_id which will re-acquire it
         drop(conn);
 
-        self.get_vm(&id)?
+        self.get_vm_by_id(id)?
             .ok_or_else(|| StoreError::Query("VM not found after insert".to_string()))
     }
 
@@ -205,7 +205,7 @@ impl VmStore for SqliteStore {
         Ok(vms)
     }
 
-    fn get_vm(&self, name_or_id: &str) -> Result<Option<Vm>, StoreError> {
+    fn get_vm_by_id(&self, id: Id) -> Result<Option<Vm>, StoreError> {
         let conn = self.conn.lock().unwrap();
 
         let mut stmt = conn
@@ -213,12 +213,12 @@ impl VmStore for SqliteStore {
                 "SELECT id, name, role, state, cid, vcpu_count, mem_size_mib, \
                  created_at, updated_at, started_at, stopped_at, pid, \
                  socket_path, uds_path, console_log_path, config_json \
-                 FROM vms WHERE id = ?1 OR name = ?1",
+                 FROM vms WHERE id = ?1",
             )
             .map_err(|e| StoreError::Query(format!("cannot prepare get query: {e}")))?;
 
         let mut rows = stmt
-            .query_map([name_or_id], |row| Ok(row_to_vm(row)))
+            .query_map([id], |row| Ok(row_to_vm(row)))
             .map_err(|e| StoreError::Query(format!("cannot get VM: {e}")))?;
 
         match rows.next() {
@@ -228,9 +228,44 @@ impl VmStore for SqliteStore {
         }
     }
 
-    fn delete_vm(&self, name_or_id: &str) -> Result<bool, StoreError> {
+    fn get_vm_by_name(&self, name: &str) -> Result<Option<Vm>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, role, state, cid, vcpu_count, mem_size_mib, \
+                 created_at, updated_at, started_at, stopped_at, pid, \
+                 socket_path, uds_path, console_log_path, config_json \
+                 FROM vms WHERE name = ?1",
+            )
+            .map_err(|e| StoreError::Query(format!("cannot prepare get query: {e}")))?;
+
+        let mut rows = stmt
+            .query_map([name], |row| Ok(row_to_vm(row)))
+            .map_err(|e| StoreError::Query(format!("cannot get VM: {e}")))?;
+
+        match rows.next() {
+            Some(Ok(vm)) => Ok(Some(vm)),
+            Some(Err(e)) => Err(StoreError::Query(format!("cannot read VM row: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    fn get_vm(&self, name_or_id: &str) -> Result<Option<Vm>, StoreError> {
+        // Try decoding as base32 ID first
+        if let Ok(id) = Id::decode(name_or_id) {
+            if let Some(vm) = self.get_vm_by_id(id)? {
+                return Ok(Some(vm));
+            }
+        }
+
+        // Fall back to name lookup
+        self.get_vm_by_name(name_or_id)
+    }
+
+    fn delete_vm(&self, id: Id) -> Result<bool, StoreError> {
         // Check if VM exists and is not running
-        if let Some(vm) = self.get_vm(name_or_id)? {
+        if let Some(vm) = self.get_vm_by_id(id)? {
             if vm.state == VmState::Running {
                 return Err(StoreError::Conflict(format!(
                     "cannot delete VM '{}': VM is running, stop it first",
@@ -244,8 +279,8 @@ impl VmStore for SqliteStore {
         let conn = self.conn.lock().unwrap();
         let deleted = conn
             .execute(
-                "DELETE FROM vms WHERE id = ?1 OR name = ?1",
-                [name_or_id],
+                "DELETE FROM vms WHERE id = ?1",
+                [id],
             )
             .map_err(|e| StoreError::Query(format!("cannot delete VM: {e}")))?;
 
@@ -254,15 +289,15 @@ impl VmStore for SqliteStore {
 
     fn start_vm(
         &self,
-        name_or_id: &str,
+        id: Id,
         pid: u32,
         socket_path: &str,
         uds_path: &str,
         console_log_path: &str,
         config_json: &str,
     ) -> Result<Vm, StoreError> {
-        let vm = self.get_vm(name_or_id)?
-            .ok_or_else(|| StoreError::Query(format!("VM '{}' not found", name_or_id)))?;
+        let vm = self.get_vm_by_id(id)?
+            .ok_or_else(|| StoreError::Query(format!("VM with ID '{}' not found", id)))?;
 
         if vm.state == VmState::Running {
             return Err(StoreError::Conflict(format!(
@@ -294,13 +329,13 @@ impl VmStore for SqliteStore {
         .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
 
         drop(conn);
-        self.get_vm(&vm.id)?
+        self.get_vm_by_id(vm.id)?
             .ok_or_else(|| StoreError::Query("VM not found after update".to_string()))
     }
 
-    fn stop_vm(&self, name_or_id: &str) -> Result<Vm, StoreError> {
-        let vm = self.get_vm(name_or_id)?
-            .ok_or_else(|| StoreError::Query(format!("VM '{}' not found", name_or_id)))?;
+    fn stop_vm(&self, id: Id) -> Result<Vm, StoreError> {
+        let vm = self.get_vm_by_id(id)?
+            .ok_or_else(|| StoreError::Query(format!("VM with ID '{}' not found", id)))?;
 
         if vm.state != VmState::Running {
             return Err(StoreError::Conflict(format!(
@@ -314,48 +349,48 @@ impl VmStore for SqliteStore {
             "UPDATE vms SET state = 'stopped', pid = NULL, \
              stopped_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now') \
              WHERE id = ?1",
-            [&vm.id],
+            [vm.id],
         )
         .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
 
         drop(conn);
-        self.get_vm(&vm.id)?
+        self.get_vm_by_id(vm.id)?
             .ok_or_else(|| StoreError::Query("VM not found after update".to_string()))
     }
 
-    fn crash_vm(&self, name_or_id: &str) -> Result<Vm, StoreError> {
-        let vm = self.get_vm(name_or_id)?
-            .ok_or_else(|| StoreError::Query(format!("VM '{}' not found", name_or_id)))?;
+    fn crash_vm(&self, id: Id) -> Result<Vm, StoreError> {
+        let vm = self.get_vm_by_id(id)?
+            .ok_or_else(|| StoreError::Query(format!("VM with ID '{}' not found", id)))?;
 
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE vms SET state = 'crashed', pid = NULL, \
              stopped_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now') \
              WHERE id = ?1",
-            [&vm.id],
+            [vm.id],
         )
         .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
 
         drop(conn);
-        self.get_vm(&vm.id)?
+        self.get_vm_by_id(vm.id)?
             .ok_or_else(|| StoreError::Query("VM not found after update".to_string()))
     }
 
-    fn fail_vm(&self, name_or_id: &str) -> Result<Vm, StoreError> {
-        let vm = self.get_vm(name_or_id)?
-            .ok_or_else(|| StoreError::Query(format!("VM '{}' not found", name_or_id)))?;
+    fn fail_vm(&self, id: Id) -> Result<Vm, StoreError> {
+        let vm = self.get_vm_by_id(id)?
+            .ok_or_else(|| StoreError::Query(format!("VM with ID '{}' not found", id)))?;
 
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE vms SET state = 'failed', pid = NULL, \
              stopped_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now') \
              WHERE id = ?1",
-            [&vm.id],
+            [vm.id],
         )
         .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
 
         drop(conn);
-        self.get_vm(&vm.id)?
+        self.get_vm_by_id(vm.id)?
             .ok_or_else(|| StoreError::Query("VM not found after update".to_string()))
     }
 
@@ -363,9 +398,9 @@ impl VmStore for SqliteStore {
         self.list_vms(None, Some("running"))
     }
 
-    fn record_boot_start(&self, vm_id: &str, console_log_path: &str) -> Result<String, StoreError> {
+    fn record_boot_start(&self, vm_id: Id, console_log_path: &str) -> Result<Id, StoreError> {
         let conn = self.conn.lock().unwrap();
-        let id = Uuid::new_v4().to_string();
+        let id = Id::generate();
 
         conn.execute(
             "INSERT INTO vm_boot_history (id, vm_id, console_log_path) VALUES (?1, ?2, ?3)",
@@ -378,7 +413,7 @@ impl VmStore for SqliteStore {
 
     fn record_boot_stop(
         &self,
-        boot_id: &str,
+        boot_id: Id,
         exit_code: Option<i32>,
         error_message: Option<&str>,
     ) -> Result<(), StoreError> {
@@ -398,7 +433,7 @@ impl VmStore for SqliteStore {
 impl ImageStore for SqliteStore {
     fn create_image(&self, params: &ImportImageParams, subvolume_path: &str) -> Result<MasterImage, StoreError> {
         let conn = self.conn.lock().unwrap();
-        let id = Uuid::new_v4().to_string();
+        let id = Id::generate();
 
         conn.execute(
             "INSERT INTO master_images (id, name, subvolume_path) VALUES (?1, ?2, ?3)",
@@ -414,7 +449,7 @@ impl ImageStore for SqliteStore {
         })?;
 
         drop(conn);
-        self.get_image(&id)?
+        self.get_image_by_id(id)?
             .ok_or_else(|| StoreError::Query("image not found after insert".to_string()))
     }
 
@@ -433,14 +468,14 @@ impl ImageStore for SqliteStore {
         Ok(images)
     }
 
-    fn get_image(&self, name_or_id: &str) -> Result<Option<MasterImage>, StoreError> {
+    fn get_image_by_id(&self, id: Id) -> Result<Option<MasterImage>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, name, subvolume_path, size_bytes, created_at FROM master_images WHERE id = ?1 OR name = ?1")
+            .prepare("SELECT id, name, subvolume_path, size_bytes, created_at FROM master_images WHERE id = ?1")
             .map_err(|e| StoreError::Query(format!("cannot prepare image get query: {e}")))?;
 
         let mut rows = stmt
-            .query_map([name_or_id], |row| Ok(row_to_image(row)))
+            .query_map([id], |row| Ok(row_to_image(row)))
             .map_err(|e| StoreError::Query(format!("cannot get image: {e}")))?;
 
         match rows.next() {
@@ -450,8 +485,37 @@ impl ImageStore for SqliteStore {
         }
     }
 
-    fn delete_image(&self, name_or_id: &str) -> Result<bool, StoreError> {
-        let image = match self.get_image(name_or_id)? {
+    fn get_image_by_name(&self, name: &str) -> Result<Option<MasterImage>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, subvolume_path, size_bytes, created_at FROM master_images WHERE name = ?1")
+            .map_err(|e| StoreError::Query(format!("cannot prepare image get query: {e}")))?;
+
+        let mut rows = stmt
+            .query_map([name], |row| Ok(row_to_image(row)))
+            .map_err(|e| StoreError::Query(format!("cannot get image: {e}")))?;
+
+        match rows.next() {
+            Some(Ok(img)) => Ok(Some(img)),
+            Some(Err(e)) => Err(StoreError::Query(format!("cannot read image row: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    fn get_image(&self, name_or_id: &str) -> Result<Option<MasterImage>, StoreError> {
+        // Try decoding as base32 ID first
+        if let Ok(id) = Id::decode(name_or_id) {
+            if let Some(img) = self.get_image_by_id(id)? {
+                return Ok(Some(img));
+            }
+        }
+
+        // Fall back to name lookup
+        self.get_image_by_name(name_or_id)
+    }
+
+    fn delete_image(&self, id: Id) -> Result<bool, StoreError> {
+        let image = match self.get_image_by_id(id)? {
             Some(img) => img,
             None => return Ok(false),
         };
@@ -461,7 +525,7 @@ impl ImageStore for SqliteStore {
         let ws_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM workspaces WHERE master_image_id = ?1",
-                [&image.id],
+                [image.id],
                 |row| row.get(0),
             )
             .map_err(|e| StoreError::Query(format!("cannot check workspace references: {e}")))?;
@@ -476,7 +540,7 @@ impl ImageStore for SqliteStore {
         let deleted = conn
             .execute(
                 "DELETE FROM master_images WHERE id = ?1",
-                [&image.id],
+                [image.id],
             )
             .map_err(|e| StoreError::Query(format!("cannot delete image: {e}")))?;
 
@@ -489,10 +553,10 @@ impl WorkspaceStore for SqliteStore {
         &self,
         name: Option<&str>,
         subvolume_path: &str,
-        master_image_id: &str,
+        master_image_id: Id,
     ) -> Result<Workspace, StoreError> {
         let conn = self.conn.lock().unwrap();
-        let id = Uuid::new_v4().to_string();
+        let id = Id::generate();
 
         conn.execute(
             "INSERT INTO workspaces (id, name, subvolume_path, master_image_id) VALUES (?1, ?2, ?3, ?4)",
@@ -511,7 +575,7 @@ impl WorkspaceStore for SqliteStore {
         })?;
 
         drop(conn);
-        self.get_workspace(&id)?
+        self.get_workspace_by_id(id)?
             .ok_or_else(|| StoreError::Query("workspace not found after insert".to_string()))
     }
 
@@ -555,19 +619,19 @@ impl WorkspaceStore for SqliteStore {
         Ok(workspaces)
     }
 
-    fn get_workspace(&self, name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
+    fn get_workspace_by_id(&self, id: Id) -> Result<Option<Workspace>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, vm_id, subvolume_path, master_image_id, \
                  parent_workspace_id, size_bytes, is_root_device, is_read_only, \
                  attached_at, detached_at, created_at \
-                 FROM workspaces WHERE id = ?1 OR name = ?1",
+                 FROM workspaces WHERE id = ?1",
             )
             .map_err(|e| StoreError::Query(format!("cannot prepare workspace get query: {e}")))?;
 
         let mut rows = stmt
-            .query_map([name_or_id], |row| Ok(row_to_workspace(row)))
+            .query_map([id], |row| Ok(row_to_workspace(row)))
             .map_err(|e| StoreError::Query(format!("cannot get workspace: {e}")))?;
 
         match rows.next() {
@@ -577,8 +641,42 @@ impl WorkspaceStore for SqliteStore {
         }
     }
 
-    fn delete_workspace(&self, name_or_id: &str) -> Result<bool, StoreError> {
-        let ws = match self.get_workspace(name_or_id)? {
+    fn get_workspace_by_name(&self, name: &str) -> Result<Option<Workspace>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, vm_id, subvolume_path, master_image_id, \
+                 parent_workspace_id, size_bytes, is_root_device, is_read_only, \
+                 attached_at, detached_at, created_at \
+                 FROM workspaces WHERE name = ?1",
+            )
+            .map_err(|e| StoreError::Query(format!("cannot prepare workspace get query: {e}")))?;
+
+        let mut rows = stmt
+            .query_map([name], |row| Ok(row_to_workspace(row)))
+            .map_err(|e| StoreError::Query(format!("cannot get workspace: {e}")))?;
+
+        match rows.next() {
+            Some(Ok(ws)) => Ok(Some(ws)),
+            Some(Err(e)) => Err(StoreError::Query(format!("cannot read workspace row: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    fn get_workspace(&self, name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
+        // Try decoding as base32 ID first
+        if let Ok(id) = Id::decode(name_or_id) {
+            if let Some(ws) = self.get_workspace_by_id(id)? {
+                return Ok(Some(ws));
+            }
+        }
+
+        // Fall back to name lookup
+        self.get_workspace_by_name(name_or_id)
+    }
+
+    fn delete_workspace(&self, id: Id) -> Result<bool, StoreError> {
+        let ws = match self.get_workspace_by_id(id)? {
             Some(ws) => ws,
             None => return Ok(false),
         };
@@ -587,19 +685,19 @@ impl WorkspaceStore for SqliteStore {
         if ws.vm_id.is_some() {
             return Err(StoreError::Conflict(format!(
                 "cannot delete workspace '{}': attached to VM, detach it first",
-                ws.name.as_deref().unwrap_or(&ws.id)
+                ws.name.as_deref().unwrap_or(&ws.id.to_string())
             )));
         }
 
         let conn = self.conn.lock().unwrap();
         let deleted = conn
-            .execute("DELETE FROM workspaces WHERE id = ?1", [&ws.id])
+            .execute("DELETE FROM workspaces WHERE id = ?1", [ws.id])
             .map_err(|e| StoreError::Query(format!("cannot delete workspace: {e}")))?;
 
         Ok(deleted > 0)
     }
 
-    fn attach_workspace(&self, workspace_id: &str, vm_id: &str, is_root_device: bool) -> Result<Workspace, StoreError> {
+    fn attach_workspace(&self, workspace_id: Id, vm_id: Id, is_root_device: bool) -> Result<Workspace, StoreError> {
         let conn = self.conn.lock().unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -613,11 +711,11 @@ impl WorkspaceStore for SqliteStore {
         .map_err(|e| StoreError::Query(format!("cannot attach workspace: {e}")))?;
 
         drop(conn);
-        self.get_workspace(workspace_id)?
+        self.get_workspace_by_id(workspace_id)?
             .ok_or_else(|| StoreError::Query("workspace not found after attach".to_string()))
     }
 
-    fn detach_workspace(&self, workspace_id: &str) -> Result<Workspace, StoreError> {
+    fn detach_workspace(&self, workspace_id: Id) -> Result<Workspace, StoreError> {
         let conn = self.conn.lock().unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -631,7 +729,7 @@ impl WorkspaceStore for SqliteStore {
         .map_err(|e| StoreError::Query(format!("cannot detach workspace: {e}")))?;
 
         drop(conn);
-        self.get_workspace(workspace_id)?
+        self.get_workspace_by_id(workspace_id)?
             .ok_or_else(|| StoreError::Query("workspace not found after detach".to_string()))
     }
 }
@@ -745,7 +843,7 @@ impl AssetStore for SqliteStore {
     }
 
     fn register_kernel(&self, params: &RegisterKernelParams) -> Result<Kernel, StoreError> {
-        let id = format!("k-{}", Uuid::new_v4());
+        let id = Id::generate();
         let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
         conn.execute(
             "INSERT INTO kernels (id, version, architecture, path_on_host, sha256, pgp_verified, file_size, source_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -755,7 +853,7 @@ impl AssetStore for SqliteStore {
             ],
         ).map_err(|e| StoreError::Query(e.to_string()))?;
         drop(conn);
-        self.get_kernel(&id, None)?.ok_or_else(|| StoreError::Query("kernel not found after insert".to_string()))
+        self.get_kernel(&id.encode(), None)?.ok_or_else(|| StoreError::Query("kernel not found after insert".to_string()))
     }
 
     fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError> {
@@ -794,7 +892,7 @@ impl AssetStore for SqliteStore {
         Ok(None)
     }
 
-    fn delete_kernel(&self, id: &str) -> Result<bool, StoreError> {
+    fn delete_kernel(&self, id: Id) -> Result<bool, StoreError> {
         let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
         let count = conn.execute("DELETE FROM kernels WHERE id = ?1", rusqlite::params![id])
             .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -802,7 +900,7 @@ impl AssetStore for SqliteStore {
     }
 
     fn register_rootfs(&self, params: &RegisterRootfsParams) -> Result<RootfsImage, StoreError> {
-        let id = format!("r-{}", Uuid::new_v4());
+        let id = Id::generate();
         let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
         conn.execute(
             "INSERT INTO rootfs_images (id, distro, version, architecture, path_on_host, sha256, file_size, source_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -812,7 +910,7 @@ impl AssetStore for SqliteStore {
             ],
         ).map_err(|e| StoreError::Query(e.to_string()))?;
         drop(conn);
-        self.get_rootfs(&id, None)?.ok_or_else(|| StoreError::Query("rootfs not found after insert".to_string()))
+        self.get_rootfs(&id.encode(), None)?.ok_or_else(|| StoreError::Query("rootfs not found after insert".to_string()))
     }
 
     fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError> {
@@ -851,7 +949,7 @@ impl AssetStore for SqliteStore {
         Ok(None)
     }
 
-    fn delete_rootfs(&self, id: &str) -> Result<bool, StoreError> {
+    fn delete_rootfs(&self, id: Id) -> Result<bool, StoreError> {
         let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
         let count = conn.execute("DELETE FROM rootfs_images WHERE id = ?1", rusqlite::params![id])
             .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -859,7 +957,7 @@ impl AssetStore for SqliteStore {
     }
 
     fn register_firecracker(&self, params: &RegisterFirecrackerParams) -> Result<FirecrackerVersion, StoreError> {
-        let id = format!("fc-{}", Uuid::new_v4());
+        let id = Id::generate();
         let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
         conn.execute(
             "INSERT INTO firecracker_versions (id, version, architecture, path_on_host, sha256, file_size, source_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -869,7 +967,7 @@ impl AssetStore for SqliteStore {
             ],
         ).map_err(|e| StoreError::Query(e.to_string()))?;
         drop(conn);
-        self.get_firecracker(&id, None)?.ok_or_else(|| StoreError::Query("firecracker not found after insert".to_string()))
+        self.get_firecracker(&id.encode(), None)?.ok_or_else(|| StoreError::Query("firecracker not found after insert".to_string()))
     }
 
     fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> {
@@ -908,7 +1006,7 @@ impl AssetStore for SqliteStore {
         Ok(None)
     }
 
-    fn delete_firecracker(&self, id: &str) -> Result<bool, StoreError> {
+    fn delete_firecracker(&self, id: Id) -> Result<bool, StoreError> {
         let conn = self.conn.lock().map_err(|e| StoreError::Query(e.to_string()))?;
         let count = conn.execute("DELETE FROM firecracker_versions WHERE id = ?1", rusqlite::params![id])
             .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -1064,7 +1162,7 @@ fn row_to_build(row: &rusqlite::Row) -> Result<Build, rusqlite::Error> {
 
 impl BuildStore for SqliteStore {
     fn create_template(&self, params: &CreateTemplateParams) -> Result<Template, StoreError> {
-        let id = Uuid::new_v4().to_string();
+        let id = Id::generate();
         let overlays_json = params.overlays.as_ref().map(|o| serde_json::to_string(o).unwrap());
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -1078,7 +1176,7 @@ impl BuildStore for SqliteStore {
             }
         })?;
         drop(conn);
-        self.get_template(&id)?.ok_or_else(|| StoreError::Query("failed to read back template".to_string()))
+        self.get_template_by_id(id)?.ok_or_else(|| StoreError::Query("failed to read back template".to_string()))
     }
 
     fn list_templates(&self) -> Result<Vec<Template>, StoreError> {
@@ -1092,11 +1190,11 @@ impl BuildStore for SqliteStore {
         Ok(templates)
     }
 
-    fn get_template(&self, name_or_id: &str) -> Result<Option<Template>, StoreError> {
+    fn get_template_by_id(&self, id: Id) -> Result<Option<Template>, StoreError> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT * FROM templates WHERE name = ?1 OR id = ?1")
+        let mut stmt = conn.prepare("SELECT * FROM templates WHERE id = ?1")
             .map_err(|e| StoreError::Query(e.to_string()))?;
-        let mut rows = stmt.query_map(rusqlite::params![name_or_id], row_to_template)
+        let mut rows = stmt.query_map(rusqlite::params![id], row_to_template)
             .map_err(|e| StoreError::Query(e.to_string()))?;
         match rows.next() {
             Some(Ok(tpl)) => Ok(Some(tpl)),
@@ -1105,17 +1203,42 @@ impl BuildStore for SqliteStore {
         }
     }
 
-    fn delete_template(&self, name_or_id: &str) -> Result<bool, StoreError> {
+    fn get_template_by_name(&self, name: &str) -> Result<Option<Template>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT * FROM templates WHERE name = ?1")
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut rows = stmt.query_map(rusqlite::params![name], row_to_template)
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        match rows.next() {
+            Some(Ok(tpl)) => Ok(Some(tpl)),
+            Some(Err(e)) => Err(StoreError::Query(e.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    fn get_template(&self, name_or_id: &str) -> Result<Option<Template>, StoreError> {
+        // Try decoding as base32 ID first
+        if let Ok(id) = Id::decode(name_or_id) {
+            if let Some(tpl) = self.get_template_by_id(id)? {
+                return Ok(Some(tpl));
+            }
+        }
+
+        // Fall back to name lookup
+        self.get_template_by_name(name_or_id)
+    }
+
+    fn delete_template(&self, id: Id) -> Result<bool, StoreError> {
         let conn = self.conn.lock().unwrap();
         let deleted = conn.execute(
-            "DELETE FROM templates WHERE name = ?1 OR id = ?1",
-            rusqlite::params![name_or_id],
+            "DELETE FROM templates WHERE id = ?1",
+            rusqlite::params![id],
         ).map_err(|e| StoreError::Query(e.to_string()))?;
         Ok(deleted > 0)
     }
 
     fn create_build(&self, template: &Template) -> Result<Build, StoreError> {
-        let id = Uuid::new_v4().to_string();
+        let id = Id::generate();
         let overlays_json = template.overlays.as_ref().map(|o| serde_json::to_string(o).unwrap());
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -1123,7 +1246,7 @@ impl BuildStore for SqliteStore {
             rusqlite::params![id, template.id, template.version, template.name, template.source_type, template.source_identifier, overlays_json],
         ).map_err(|e| StoreError::Query(e.to_string()))?;
         drop(conn);
-        self.get_build(&id)?.ok_or_else(|| StoreError::Query("failed to read back build".to_string()))
+        self.get_build(id)?.ok_or_else(|| StoreError::Query("failed to read back build".to_string()))
     }
 
     fn list_builds(&self, template: Option<&str>) -> Result<Vec<Build>, StoreError> {
@@ -1148,7 +1271,7 @@ impl BuildStore for SqliteStore {
         }
     }
 
-    fn get_build(&self, id: &str) -> Result<Option<Build>, StoreError> {
+    fn get_build(&self, id: Id) -> Result<Option<Build>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT * FROM builds WHERE id = ?1")
             .map_err(|e| StoreError::Query(e.to_string()))?;
@@ -1163,9 +1286,9 @@ impl BuildStore for SqliteStore {
 
     fn update_build_status(
         &self,
-        id: &str,
+        id: Id,
         status: BuildStatus,
-        master_image_id: Option<&str>,
+        master_image_id: Option<Id>,
         build_log_path: Option<&str>,
     ) -> Result<Build, StoreError> {
         let conn = self.conn.lock().unwrap();
@@ -1183,7 +1306,7 @@ impl BuildStore for SqliteStore {
             ).map_err(|e| StoreError::Query(e.to_string()))?;
         }
         drop(conn);
-        self.get_build(id)?.ok_or_else(|| StoreError::Query(format!("build '{id}' not found")))
+        self.get_build(id)?.ok_or_else(|| StoreError::Query(format!("build '{}' not found", id)))
     }
 }
 
