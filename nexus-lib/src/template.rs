@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
+use crate::id::Id;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A template: a blueprint for building rootfs images.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Template {
-    pub id: String,
+    pub id: Id,
     pub name: String,
     pub version: i64,
     pub source_type: String,
@@ -62,8 +63,8 @@ impl std::str::FromStr for BuildStatus {
 /// A build: an immutable snapshot of a template at build time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Build {
-    pub id: String,
-    pub template_id: String,
+    pub id: Id,
+    pub template_id: Id,
     pub template_version: i64,
     pub name: String,
     pub source_type: String,
@@ -74,10 +75,22 @@ pub struct Build {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build_log_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub master_image_id: Option<String>,
+    pub master_image_id: Option<Id>,
     pub created_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<i64>,
+}
+
+impl CreateTemplateParams {
+    pub fn validate(&self) -> Result<(), String> {
+        if Id::is_valid_base32(&self.name) {
+            return Err(format!(
+                "Template name '{}' cannot be a valid base32 ID (reserved for resource IDs)",
+                self.name
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -87,7 +100,7 @@ mod tests {
     #[test]
     fn template_serializes() {
         let tpl = Template {
-            id: "tpl-1".to_string(),
+            id: Id::from_i64(1),
             name: "base-agent".to_string(),
             version: 1,
             source_type: "rootfs".to_string(),
@@ -106,7 +119,7 @@ mod tests {
         let mut overlays = HashMap::new();
         overlays.insert("/etc/hostname".to_string(), "nexus-vm".to_string());
         let tpl = Template {
-            id: "tpl-2".to_string(),
+            id: Id::from_i64(2),
             name: "with-overlays".to_string(),
             version: 1,
             source_type: "rootfs".to_string(),
@@ -140,8 +153,8 @@ mod tests {
     #[test]
     fn build_serializes() {
         let build = Build {
-            id: "bld-1".to_string(),
-            template_id: "tpl-1".to_string(),
+            id: Id::from_i64(1),
+            template_id: Id::from_i64(2),
             template_version: 1,
             name: "base-agent".to_string(),
             source_type: "rootfs".to_string(),

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // nexus/nexus-lib/src/asset.rs
 
+use crate::id::Id;
 use serde::{Deserialize, Serialize};
 
 // Re-export pipeline stage types for consumers that think of them as "asset" types.
@@ -13,7 +14,7 @@ pub use crate::pipeline::{ChecksumSet, PipelineStage};
 /// A provider configuration record from the database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
-    pub id: String,
+    pub id: Id,
     pub name: String,
     pub asset_type: String,        // "kernel", "rootfs", "firecracker"
     pub provider_type: String,     // "github_release", "archive", "alpine_cdn"
@@ -30,7 +31,7 @@ pub struct Provider {
 /// A downloaded kernel binary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Kernel {
-    pub id: String,
+    pub id: Id,
     pub version: String,
     pub architecture: String,
     pub path_on_host: String,
@@ -56,7 +57,7 @@ pub struct RegisterKernelParams {
 /// A downloaded rootfs image (tarball).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RootfsImage {
-    pub id: String,
+    pub id: Id,
     pub distro: String,
     pub version: String,
     pub architecture: String,
@@ -82,7 +83,7 @@ pub struct RegisterRootfsParams {
 /// A downloaded Firecracker binary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FirecrackerVersion {
-    pub id: String,
+    pub id: Id,
     pub version: String,
     pub architecture: String,
     pub path_on_host: String,
@@ -362,7 +363,7 @@ mod tests {
     #[test]
     fn kernel_serializes() {
         let kernel = Kernel {
-            id: "k-1".to_string(),
+            id: Id::from_i64(1),
             version: "6.18.9".to_string(),
             architecture: "x86_64".to_string(),
             path_on_host: "/home/user/.local/share/nexus/assets/kernels/vmlinux-6.18.9-x86_64".to_string(),
@@ -380,7 +381,7 @@ mod tests {
     #[test]
     fn rootfs_image_serializes() {
         let rootfs = RootfsImage {
-            id: "r-1".to_string(),
+            id: Id::from_i64(1),
             distro: "alpine".to_string(),
             version: "3.21.3".to_string(),
             architecture: "x86_64".to_string(),
@@ -398,7 +399,7 @@ mod tests {
     #[test]
     fn firecracker_version_serializes() {
         let fc = FirecrackerVersion {
-            id: "fc-1".to_string(),
+            id: Id::from_i64(1),
             version: "1.12.0".to_string(),
             architecture: "x86_64".to_string(),
             path_on_host: "/home/user/.local/share/nexus/assets/firecracker/firecracker-v1.12.0-x86_64".to_string(),
@@ -414,8 +415,9 @@ mod tests {
 
     #[test]
     fn kernel_deserializes() {
-        let json = r#"{"id":"k-1","version":"6.18.9","architecture":"x86_64","path_on_host":"/tmp/k","sha256":"abc","pgp_verified":true,"file_size":100,"source_url":"https://example.com/k","downloaded_at":1000}"#;
-        let kernel: Kernel = serde_json::from_str(json).unwrap();
+        let id = Id::from_i64(123);
+        let json = format!(r#"{{"id":"{}","version":"6.18.9","architecture":"x86_64","path_on_host":"/tmp/k","sha256":"abc","pgp_verified":true,"file_size":100,"source_url":"https://example.com/k","downloaded_at":1000}}"#, id.encode());
+        let kernel: Kernel = serde_json::from_str(&json).unwrap();
         assert_eq!(kernel.version, "6.18.9");
         assert!(kernel.pgp_verified);
     }

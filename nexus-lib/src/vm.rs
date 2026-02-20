@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
+use crate::id::Id;
 use serde::{Deserialize, Serialize};
 
 /// VM role determines the VM's function in the system.
@@ -104,7 +105,7 @@ fn default_mem() -> u32 { 128 }
 /// A VM record as stored in the database and returned by the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Vm {
-    pub id: String,
+    pub id: Id,
     pub name: String,
     pub role: VmRole,
     pub state: VmState,
@@ -127,6 +128,18 @@ pub struct Vm {
     pub console_log_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_json: Option<String>,
+}
+
+impl CreateVmParams {
+    pub fn validate(&self) -> Result<(), String> {
+        if Id::is_valid_base32(&self.name) {
+            return Err(format!(
+                "VM name '{}' cannot be a valid base32 ID (reserved for resource IDs)",
+                self.name
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -181,7 +194,7 @@ mod tests {
     #[test]
     fn vm_serializes_without_none_fields() {
         let vm = Vm {
-            id: "abc".to_string(),
+            id: Id::from_i64(1),
             name: "test".to_string(),
             role: VmRole::Work,
             state: VmState::Created,
@@ -202,5 +215,27 @@ mod tests {
         assert!(!json.contains("started_at"));
         assert!(!json.contains("pid"));
         assert!(json.contains("\"cid\":3"));
+    }
+
+    #[test]
+    fn create_vm_params_rejects_base32_name() {
+        let params = CreateVmParams {
+            name: "aaaaaaaaaaaaa".to_string(), // Valid base32, 13 chars
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        };
+        assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn create_vm_params_accepts_normal_name() {
+        let params = CreateVmParams {
+            name: "my-dev-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        };
+        assert!(params.validate().is_ok());
     }
 }
