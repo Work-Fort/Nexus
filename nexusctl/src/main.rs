@@ -143,6 +143,11 @@ enum VmAction {
         #[arg(long, default_value = "100")]
         tail: usize,
     },
+    /// View VM state transition history
+    History {
+        /// VM name or ID
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -587,6 +592,39 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("Error: cannot get logs for VM \"{name}\"\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        VmAction::History { name } => {
+            match client.get_vm_history(&name).await {
+                Ok(history) => {
+                    if history.is_empty() {
+                        println!("No state transitions recorded for VM '{}'", name);
+                        return ExitCode::SUCCESS;
+                    }
+
+                    // Print table header
+                    println!("{:<20} {:<12} {:<12} {}", "TIMESTAMP", "FROM", "TO", "REASON");
+
+                    for record in history {
+                        // Convert Unix timestamp to human-readable format
+                        // chrono is already a dependency (nexusctl/Cargo.toml line 13)
+                        let dt = chrono::DateTime::from_timestamp(record.transitioned_at, 0)
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .unwrap_or_else(|| record.transitioned_at.to_string());
+
+                        let reason = record.reason.as_deref().unwrap_or("-");
+                        println!("{:<20} {:<12} {:<12} {}", dt, record.from_state, record.to_state, reason);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
                     ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }
