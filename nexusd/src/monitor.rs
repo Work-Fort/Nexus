@@ -62,13 +62,13 @@ async fn check_processes(state: &AppState) {
             // Record boot stop with exit details
             let error_msg = exit_code.map(|c| format!("process exited with code {c}"));
             let _ = state.store.record_boot_stop(
-                &tracked.boot_id,
+                tracked.boot_id,
                 *exit_code,
                 error_msg.as_deref(),
             );
         }
 
-        if let Err(e) = state.store.crash_vm(vm_id) {
+        if let Err(e) = state.store.crash_vm(*vm_id) {
             warn!(vm_id = %vm_id, error = %e, "failed to transition VM to crashed");
         } else {
             info!(vm_id = %vm_id, "VM transitioned to crashed state");

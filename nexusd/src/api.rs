@@ -47,7 +47,7 @@ impl From<DbStatus> for DatabaseInfo {
 /// Tracks a running Firecracker process and its boot history record ID.
 pub struct TrackedProcess {
     pub child: std::process::Child,
-    pub boot_id: String,
+    pub boot_id: nexus_lib::id::Id,
 }
 
 /// Application state shared across handlers.
@@ -60,7 +60,7 @@ pub struct AppState {
     pub firecracker: FirecrackerConfig,
     /// Map of VM ID -> tracked Firecracker process (child + boot_id).
     /// Protected by a tokio Mutex for async access.
-    pub processes: TokioMutex<HashMap<String, TrackedProcess>>,
+    pub processes: TokioMutex<HashMap<nexus_lib::id::Id, TrackedProcess>>,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
@@ -136,7 +136,20 @@ async fn delete_vm(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.store.delete_vm(&name_or_id) {
+    // Resolve to VM first to get the ID
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    match state.store.delete_vm(vm.id) {
         Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
         Ok(false) => (
             StatusCode::NOT_FOUND,
@@ -218,18 +231,38 @@ async fn delete_image_handler(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let svc = WorkspaceService::new(
-        state.store.as_ref(),
-        state.backend.as_ref(),
-        state.workspaces_root.clone(),
-    );
-    match svc.delete_image(&name_or_id) {
+    // Resolve to image first to get the ID
+    let image = match state.store.get_image(&name_or_id) {
+        Ok(Some(img)) => img,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("image '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    // Delete from filesystem first
+    let path = PathBuf::from(&image.subvolume_path);
+    if path.exists() {
+        if let Err(e) = state.backend.delete_subvolume(&path) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("failed to delete subvolume: {e}")})),
+            );
+        }
+    }
+
+    // Then remove from database
+    match state.store.delete_image(image.id) {
         Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": format!("image '{}' not found", name_or_id)})),
         ),
-        Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
+        Err(StoreError::Conflict(msg)) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),
         ),
@@ -311,18 +344,38 @@ async fn delete_workspace_handler(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let svc = WorkspaceService::new(
-        state.store.as_ref(),
-        state.backend.as_ref(),
-        state.workspaces_root.clone(),
-    );
-    match svc.delete_workspace(&name_or_id) {
+    // Resolve to workspace first to get the ID
+    let ws = match state.store.get_workspace(&name_or_id) {
+        Ok(Some(ws)) => ws,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    // Delete from filesystem first
+    let path = PathBuf::from(&ws.subvolume_path);
+    if path.exists() {
+        if let Err(e) = state.backend.delete_subvolume(&path) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("failed to delete subvolume: {e}")})),
+            );
+        }
+    }
+
+    // Then remove from database
+    match state.store.delete_workspace(ws.id) {
         Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
         ),
-        Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
+        Err(StoreError::Conflict(msg)) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),
         ),
@@ -358,7 +411,20 @@ async fn attach_workspace_handler(
         ),
     };
 
-    match state.store.attach_workspace(&ws.id, &req.vm_id, req.is_root_device) {
+    // Resolve VM by name or ID
+    let vm = match state.store.get_vm(&req.vm_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", req.vm_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    match state.store.attach_workspace(ws.id, vm.id, req.is_root_device) {
         Ok(ws) => (StatusCode::OK, Json(serde_json::to_value(ws).unwrap())),
         Err(StoreError::Conflict(msg)) => (
             StatusCode::CONFLICT,
@@ -387,7 +453,7 @@ async fn detach_workspace_handler(
         ),
     };
 
-    match state.store.detach_workspace(&ws.id) {
+    match state.store.detach_workspace(ws.id) {
         Ok(ws) => (StatusCode::OK, Json(serde_json::to_value(ws).unwrap())),
         Err(StoreError::Conflict(msg)) => (
             StatusCode::CONFLICT,
@@ -664,7 +730,20 @@ async fn delete_template_handler(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.store.delete_template(&name_or_id) {
+    // Resolve to template first to get the ID
+    let template = match state.store.get_template(&name_or_id) {
+        Ok(Some(tpl)) => tpl,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("template '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    match state.store.delete_template(template.id) {
         Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
         Ok(false) => (
             StatusCode::NOT_FOUND,
@@ -743,13 +822,22 @@ async fn list_builds_handler(
 
 async fn get_build_handler(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(id_str): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.store.get_build(&id) {
+    // Builds are ID-only (no names), so parse as base32
+    let id = match nexus_lib::id::Id::decode(&id_str) {
+        Ok(id) => id,
+        Err(_) => return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("invalid build ID: '{}'", id_str)})),
+        ),
+    };
+
+    match state.store.get_build(id) {
         Ok(Some(build)) => (StatusCode::OK, Json(serde_json::to_value(build).unwrap())),
         Ok(None) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("build '{}' not found", id)})),
+            Json(serde_json::json!({"error": format!("build '{}' not found", id_str)})),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -795,7 +883,7 @@ async fn start_vm_handler(
         Ok(result) => result,
         Err(e) => {
             // Mark VM as failed
-            let _ = state.store.fail_vm(&vm.id);
+            let _ = state.store.fail_vm(vm.id);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": e.to_string()})),
@@ -815,14 +903,14 @@ async fn start_vm_handler(
     let config_str = serde_json::to_string(&config).unwrap_or_default();
 
     // Update store
-    match state.store.start_vm(&vm.id, pid, &api_sock, &vsock_uds, &console_log, &config_str) {
+    match state.store.start_vm(vm.id, pid, &api_sock, &vsock_uds, &console_log, &config_str) {
         Ok(updated_vm) => {
             // Record boot history and capture boot_id for the monitor
-            let boot_id = state.store.record_boot_start(&vm.id, &console_log)
-                .unwrap_or_default();
+            let boot_id = state.store.record_boot_start(vm.id, &console_log)
+                .unwrap_or_else(|_| nexus_lib::id::Id::from_i64(0));
 
             // Store the child process + boot_id for monitoring
-            state.processes.lock().await.insert(vm.id.clone(), TrackedProcess {
+            state.processes.lock().await.insert(vm.id, TrackedProcess {
                 child,
                 boot_id,
             });
@@ -844,13 +932,13 @@ async fn start_vm_handler(
 }
 
 /// Find the rootfs ext4 image for a VM by looking for an attached root-device workspace.
-fn find_rootfs_for_vm(state: &AppState, vm_id: &str) -> Result<String, String> {
+fn find_rootfs_for_vm(state: &AppState, vm_id: &nexus_lib::id::Id) -> Result<String, String> {
     // Look for a workspace attached to this VM as root device
     let workspaces = state.store.list_workspaces(None)
         .map_err(|e| format!("cannot list workspaces: {e}"))?;
 
     for ws in &workspaces {
-        if ws.vm_id.as_deref() == Some(vm_id) && ws.is_root_device {
+        if ws.vm_id.as_ref() == Some(vm_id) && ws.is_root_device {
             // The rootfs.ext4 file lives inside the workspace subvolume
             let rootfs = PathBuf::from(&ws.subvolume_path).join("rootfs.ext4");
             if rootfs.exists() {
@@ -858,7 +946,7 @@ fn find_rootfs_for_vm(state: &AppState, vm_id: &str) -> Result<String, String> {
             }
             return Err(format!(
                 "workspace '{}' is attached as root device but rootfs.ext4 not found at {}",
-                ws.name.as_deref().unwrap_or(&ws.id),
+                ws.name.as_deref().unwrap_or(&ws.id.encode()),
                 rootfs.display()
             ));
         }
@@ -867,7 +955,7 @@ fn find_rootfs_for_vm(state: &AppState, vm_id: &str) -> Result<String, String> {
     Err(format!(
         "VM '{}' has no workspace attached as root device. Attach one with: \
          nexusctl ws create --base <image> --name <ws> (then attach to VM)",
-        vm_id
+        vm_id.encode()
     ))
 }
 
@@ -911,11 +999,11 @@ async fn stop_vm_handler(
     {
         let mut processes = state.processes.lock().await;
         if let Some(tracked) = processes.remove(&vm.id) {
-            let _ = state.store.record_boot_stop(&tracked.boot_id, None, None);
+            let _ = state.store.record_boot_stop(tracked.boot_id, None, None);
         }
     }
 
-    match state.store.stop_vm(&vm.id) {
+    match state.store.stop_vm(vm.id) {
         Ok(stopped) => (StatusCode::OK, Json(serde_json::to_value(stopped).unwrap())),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1019,19 +1107,21 @@ mod tests {
         fn list_vms(&self, _role: Option<&str>, _state: Option<&str>) -> Result<Vec<Vm>, StoreError> {
             unimplemented!()
         }
+        fn get_vm_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Vm>, StoreError> { unimplemented!() }
+        fn get_vm_by_name(&self, _name: &str) -> Result<Option<Vm>, StoreError> { unimplemented!() }
         fn get_vm(&self, _name_or_id: &str) -> Result<Option<Vm>, StoreError> {
             unimplemented!()
         }
-        fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+        fn delete_vm(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        fn start_vm(&self, _: &str, _: u32, _: &str, _: &str, _: &str, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
-        fn stop_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
-        fn crash_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
-        fn fail_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn start_vm(&self, _: nexus_lib::id::Id, _: u32, _: &str, _: &str, _: &str, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn stop_vm(&self, _: nexus_lib::id::Id) -> Result<Vm, StoreError> { unimplemented!() }
+        fn crash_vm(&self, _: nexus_lib::id::Id) -> Result<Vm, StoreError> { unimplemented!() }
+        fn fail_vm(&self, _: nexus_lib::id::Id) -> Result<Vm, StoreError> { unimplemented!() }
         fn list_running_vms(&self) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
-        fn record_boot_start(&self, _: &str, _: &str) -> Result<String, StoreError> { unimplemented!() }
-        fn record_boot_stop(&self, _: &str, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
+        fn record_boot_start(&self, _: nexus_lib::id::Id, _: &str) -> Result<nexus_lib::id::Id, StoreError> { unimplemented!() }
+        fn record_boot_stop(&self, _: nexus_lib::id::Id, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
     }
 
     impl ImageStore for MockStore {
@@ -1041,31 +1131,35 @@ mod tests {
         fn list_images(&self) -> Result<Vec<MasterImage>, StoreError> {
             unimplemented!()
         }
+        fn get_image_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<MasterImage>, StoreError> { unimplemented!() }
+        fn get_image_by_name(&self, _name: &str) -> Result<Option<MasterImage>, StoreError> { unimplemented!() }
         fn get_image(&self, _name_or_id: &str) -> Result<Option<MasterImage>, StoreError> {
             unimplemented!()
         }
-        fn delete_image(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+        fn delete_image(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
             unimplemented!()
         }
     }
 
     impl WorkspaceStore for MockStore {
-        fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: &str) -> Result<Workspace, StoreError> {
+        fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: nexus_lib::id::Id) -> Result<Workspace, StoreError> {
             unimplemented!()
         }
         fn list_workspaces(&self, _base: Option<&str>) -> Result<Vec<Workspace>, StoreError> {
             unimplemented!()
         }
+        fn get_workspace_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Workspace>, StoreError> { unimplemented!() }
+        fn get_workspace_by_name(&self, _name: &str) -> Result<Option<Workspace>, StoreError> { unimplemented!() }
         fn get_workspace(&self, _name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
             unimplemented!()
         }
-        fn delete_workspace(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+        fn delete_workspace(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        fn attach_workspace(&self, _workspace_id: &str, _vm_id: &str, _is_root_device: bool) -> Result<Workspace, StoreError> {
+        fn attach_workspace(&self, _workspace_id: nexus_lib::id::Id, _vm_id: nexus_lib::id::Id, _is_root_device: bool) -> Result<Workspace, StoreError> {
             unimplemented!()
         }
-        fn detach_workspace(&self, _workspace_id: &str) -> Result<Workspace, StoreError> {
+        fn detach_workspace(&self, _workspace_id: nexus_lib::id::Id) -> Result<Workspace, StoreError> {
             unimplemented!()
         }
     }
@@ -1077,26 +1171,28 @@ mod tests {
         fn register_kernel(&self, _params: &RegisterKernelParams) -> Result<Kernel, StoreError> { unimplemented!() }
         fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError> { Ok(vec![]) }
         fn get_kernel(&self, _id: &str, _arch: Option<&str>) -> Result<Option<Kernel>, StoreError> { unimplemented!() }
-        fn delete_kernel(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn delete_kernel(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> { unimplemented!() }
         fn register_rootfs(&self, _params: &RegisterRootfsParams) -> Result<RootfsImage, StoreError> { unimplemented!() }
         fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError> { Ok(vec![]) }
         fn get_rootfs(&self, _id: &str, _arch: Option<&str>) -> Result<Option<RootfsImage>, StoreError> { unimplemented!() }
-        fn delete_rootfs(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn delete_rootfs(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> { unimplemented!() }
         fn register_firecracker(&self, _params: &RegisterFirecrackerParams) -> Result<FirecrackerVersion, StoreError> { unimplemented!() }
         fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> { Ok(vec![]) }
         fn get_firecracker(&self, _id: &str, _arch: Option<&str>) -> Result<Option<FirecrackerVersion>, StoreError> { unimplemented!() }
-        fn delete_firecracker(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn delete_firecracker(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> { unimplemented!() }
     }
 
     impl BuildStore for MockStore {
         fn create_template(&self, _params: &CreateTemplateParams) -> Result<Template, StoreError> { unimplemented!() }
         fn list_templates(&self) -> Result<Vec<Template>, StoreError> { unimplemented!() }
+        fn get_template_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Template>, StoreError> { unimplemented!() }
+        fn get_template_by_name(&self, _name: &str) -> Result<Option<Template>, StoreError> { unimplemented!() }
         fn get_template(&self, _name_or_id: &str) -> Result<Option<Template>, StoreError> { unimplemented!() }
-        fn delete_template(&self, _name_or_id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn delete_template(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> { unimplemented!() }
         fn create_build(&self, _template: &Template) -> Result<Build, StoreError> { unimplemented!() }
         fn list_builds(&self, _template: Option<&str>) -> Result<Vec<Build>, StoreError> { unimplemented!() }
-        fn get_build(&self, _id: &str) -> Result<Option<Build>, StoreError> { unimplemented!() }
-        fn update_build_status(&self, _id: &str, _status: BuildStatus, _master_image_id: Option<&str>, _build_log_path: Option<&str>) -> Result<Build, StoreError> { unimplemented!() }
+        fn get_build(&self, _id: nexus_lib::id::Id) -> Result<Option<Build>, StoreError> { unimplemented!() }
+        fn update_build_status(&self, _id: nexus_lib::id::Id, _status: BuildStatus, _master_image_id: Option<nexus_lib::id::Id>, _build_log_path: Option<&str>) -> Result<Build, StoreError> { unimplemented!() }
     }
 
     impl StateStore for MockStore {
@@ -1120,19 +1216,21 @@ mod tests {
         fn list_vms(&self, _role: Option<&str>, _state: Option<&str>) -> Result<Vec<Vm>, StoreError> {
             unimplemented!()
         }
+        fn get_vm_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Vm>, StoreError> { unimplemented!() }
+        fn get_vm_by_name(&self, _name: &str) -> Result<Option<Vm>, StoreError> { unimplemented!() }
         fn get_vm(&self, _name_or_id: &str) -> Result<Option<Vm>, StoreError> {
             unimplemented!()
         }
-        fn delete_vm(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+        fn delete_vm(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        fn start_vm(&self, _: &str, _: u32, _: &str, _: &str, _: &str, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
-        fn stop_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
-        fn crash_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
-        fn fail_vm(&self, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn start_vm(&self, _: nexus_lib::id::Id, _: u32, _: &str, _: &str, _: &str, _: &str) -> Result<Vm, StoreError> { unimplemented!() }
+        fn stop_vm(&self, _: nexus_lib::id::Id) -> Result<Vm, StoreError> { unimplemented!() }
+        fn crash_vm(&self, _: nexus_lib::id::Id) -> Result<Vm, StoreError> { unimplemented!() }
+        fn fail_vm(&self, _: nexus_lib::id::Id) -> Result<Vm, StoreError> { unimplemented!() }
         fn list_running_vms(&self) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
-        fn record_boot_start(&self, _: &str, _: &str) -> Result<String, StoreError> { unimplemented!() }
-        fn record_boot_stop(&self, _: &str, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
+        fn record_boot_start(&self, _: nexus_lib::id::Id, _: &str) -> Result<nexus_lib::id::Id, StoreError> { unimplemented!() }
+        fn record_boot_stop(&self, _: nexus_lib::id::Id, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
     }
 
     impl ImageStore for FailingStore {
@@ -1142,31 +1240,35 @@ mod tests {
         fn list_images(&self) -> Result<Vec<MasterImage>, StoreError> {
             unimplemented!()
         }
+        fn get_image_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<MasterImage>, StoreError> { unimplemented!() }
+        fn get_image_by_name(&self, _name: &str) -> Result<Option<MasterImage>, StoreError> { unimplemented!() }
         fn get_image(&self, _name_or_id: &str) -> Result<Option<MasterImage>, StoreError> {
             unimplemented!()
         }
-        fn delete_image(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+        fn delete_image(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
             unimplemented!()
         }
     }
 
     impl WorkspaceStore for FailingStore {
-        fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: &str) -> Result<Workspace, StoreError> {
+        fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: nexus_lib::id::Id) -> Result<Workspace, StoreError> {
             unimplemented!()
         }
         fn list_workspaces(&self, _base: Option<&str>) -> Result<Vec<Workspace>, StoreError> {
             unimplemented!()
         }
+        fn get_workspace_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Workspace>, StoreError> { unimplemented!() }
+        fn get_workspace_by_name(&self, _name: &str) -> Result<Option<Workspace>, StoreError> { unimplemented!() }
         fn get_workspace(&self, _name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
             unimplemented!()
         }
-        fn delete_workspace(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+        fn delete_workspace(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        fn attach_workspace(&self, _workspace_id: &str, _vm_id: &str, _is_root_device: bool) -> Result<Workspace, StoreError> {
+        fn attach_workspace(&self, _workspace_id: nexus_lib::id::Id, _vm_id: nexus_lib::id::Id, _is_root_device: bool) -> Result<Workspace, StoreError> {
             unimplemented!()
         }
-        fn detach_workspace(&self, _workspace_id: &str) -> Result<Workspace, StoreError> {
+        fn detach_workspace(&self, _workspace_id: nexus_lib::id::Id) -> Result<Workspace, StoreError> {
             unimplemented!()
         }
     }
@@ -1178,26 +1280,28 @@ mod tests {
         fn register_kernel(&self, _params: &RegisterKernelParams) -> Result<Kernel, StoreError> { unimplemented!() }
         fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError> { unimplemented!() }
         fn get_kernel(&self, _id: &str, _arch: Option<&str>) -> Result<Option<Kernel>, StoreError> { unimplemented!() }
-        fn delete_kernel(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn delete_kernel(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> { unimplemented!() }
         fn register_rootfs(&self, _params: &RegisterRootfsParams) -> Result<RootfsImage, StoreError> { unimplemented!() }
         fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError> { unimplemented!() }
         fn get_rootfs(&self, _id: &str, _arch: Option<&str>) -> Result<Option<RootfsImage>, StoreError> { unimplemented!() }
-        fn delete_rootfs(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn delete_rootfs(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> { unimplemented!() }
         fn register_firecracker(&self, _params: &RegisterFirecrackerParams) -> Result<FirecrackerVersion, StoreError> { unimplemented!() }
         fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> { unimplemented!() }
         fn get_firecracker(&self, _id: &str, _arch: Option<&str>) -> Result<Option<FirecrackerVersion>, StoreError> { unimplemented!() }
-        fn delete_firecracker(&self, _id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn delete_firecracker(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> { unimplemented!() }
     }
 
     impl BuildStore for FailingStore {
         fn create_template(&self, _params: &CreateTemplateParams) -> Result<Template, StoreError> { unimplemented!() }
         fn list_templates(&self) -> Result<Vec<Template>, StoreError> { unimplemented!() }
+        fn get_template_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Template>, StoreError> { unimplemented!() }
+        fn get_template_by_name(&self, _name: &str) -> Result<Option<Template>, StoreError> { unimplemented!() }
         fn get_template(&self, _name_or_id: &str) -> Result<Option<Template>, StoreError> { unimplemented!() }
-        fn delete_template(&self, _name_or_id: &str) -> Result<bool, StoreError> { unimplemented!() }
+        fn delete_template(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> { unimplemented!() }
         fn create_build(&self, _template: &Template) -> Result<Build, StoreError> { unimplemented!() }
         fn list_builds(&self, _template: Option<&str>) -> Result<Vec<Build>, StoreError> { unimplemented!() }
-        fn get_build(&self, _id: &str) -> Result<Option<Build>, StoreError> { unimplemented!() }
-        fn update_build_status(&self, _id: &str, _status: BuildStatus, _master_image_id: Option<&str>, _build_log_path: Option<&str>) -> Result<Build, StoreError> { unimplemented!() }
+        fn get_build(&self, _id: nexus_lib::id::Id) -> Result<Option<Build>, StoreError> { unimplemented!() }
+        fn update_build_status(&self, _id: nexus_lib::id::Id, _status: BuildStatus, _master_image_id: Option<nexus_lib::id::Id>, _build_log_path: Option<&str>) -> Result<Build, StoreError> { unimplemented!() }
     }
 
     impl StateStore for FailingStore {

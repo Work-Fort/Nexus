@@ -39,7 +39,7 @@ fn recover_stale_vms(store: &dyn nexus_lib::store::traits::StateStore) {
                     vm_id = %vm.id,
                     "recovering stale running VM from previous daemon instance"
                 );
-                if let Err(e) = store.crash_vm(&vm.id) {
+                if let Err(e) = store.crash_vm(vm.id) {
                     tracing::error!(
                         vm_name = %vm.name,
                         error = %e,
