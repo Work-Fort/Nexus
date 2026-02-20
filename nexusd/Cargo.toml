@@ -13,7 +13,6 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 nix = { version = "0.30", features = ["signal", "process", "user"] }
-guest-agent = { path = "../guest-agent" }  # Build dependency for embedded binary
 
 [dev-dependencies]
 nexus-lib = { path = "../nexus-lib", features = ["test-support"] }

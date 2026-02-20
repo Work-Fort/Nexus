@@ -49,6 +49,7 @@ pub struct VsockManager {
     connections: Arc<Mutex<HashMap<crate::id::Id, VsockConnection>>>,
 }
 
+#[allow(dead_code)]
 struct VsockConnection {
     stream: UnixStream,
     metadata: Option<ImageMetadata>,
