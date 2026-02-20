@@ -89,6 +89,8 @@ async fn main() {
         workspaces_root,
         assets_dir,
         executor,
+        firecracker: config.firecracker.clone(),
+        processes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     info!("nexusd starting");

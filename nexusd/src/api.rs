@@ -2,18 +2,22 @@ use axum::{Json, Router, routing::{delete, get, post}};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use nexus_lib::backend::traits::WorkspaceBackend;
+use nexus_lib::config::FirecrackerConfig;
 use nexus_lib::firecracker_service::FirecrackerService;
 use nexus_lib::kernel_service::KernelService;
 use nexus_lib::pipeline::PipelineExecutor;
 use nexus_lib::rootfs_service::RootfsService;
 use nexus_lib::store::traits::{DbStatus, StateStore, StoreError};
 use nexus_lib::template::CreateTemplateParams;
-use nexus_lib::vm::CreateVmParams;
+use nexus_lib::vm::{CreateVmParams, VmState};
+use nexus_lib::vm_service;
 use nexus_lib::workspace::{ImportImageParams, CreateWorkspaceParams};
 use nexus_lib::workspace_service::{WorkspaceService, WorkspaceServiceError};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -39,6 +43,12 @@ impl From<DbStatus> for DatabaseInfo {
     }
 }
 
+/// Tracks a running Firecracker process and its boot history record ID.
+pub struct TrackedProcess {
+    pub child: std::process::Child,
+    pub boot_id: String,
+}
+
 /// Application state shared across handlers.
 pub struct AppState {
     pub store: Box<dyn StateStore + Send + Sync>,
@@ -46,6 +56,10 @@ pub struct AppState {
     pub workspaces_root: PathBuf,
     pub assets_dir: PathBuf,
     pub executor: PipelineExecutor,
+    pub firecracker: FirecrackerConfig,
+    /// Map of VM ID -> tracked Firecracker process (child + boot_id).
+    /// Protected by a tokio Mutex for async access.
+    pub processes: TokioMutex<HashMap<String, TrackedProcess>>,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> (StatusCode, Json<HealthResponse>) {
@@ -676,11 +690,217 @@ async fn get_build_handler(
     }
 }
 
+async fn start_vm_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Look up the VM
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    // Resolve rootfs path: look for an attached workspace or use a default
+    // For now, require a workspace attached as root device
+    let rootfs_path = match find_rootfs_for_vm(&state, &vm.id) {
+        Ok(path) => path,
+        Err(msg) => return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": msg})),
+        ),
+    };
+
+    // Spawn Firecracker
+    let (child, runtime_dir) = match vm_service::spawn_firecracker(
+        &state.firecracker.binary,
+        &vm,
+        &state.firecracker.kernel,
+        &rootfs_path,
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            // Mark VM as failed
+            let _ = state.store.fail_vm(&vm.id);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            );
+        }
+    };
+
+    let pid = child.id();
+    let api_sock = runtime_dir.join("firecracker.sock").to_string_lossy().to_string();
+    let vsock_uds = runtime_dir.join("firecracker.vsock").to_string_lossy().to_string();
+    let console_log = runtime_dir.join("console.log").to_string_lossy().to_string();
+
+    // Generate config JSON for recording
+    let config = vm_service::firecracker_config(
+        &vm, &state.firecracker.kernel, &rootfs_path, &vsock_uds,
+    );
+    let config_str = serde_json::to_string(&config).unwrap_or_default();
+
+    // Update store
+    match state.store.start_vm(&vm.id, pid, &api_sock, &vsock_uds, &console_log, &config_str) {
+        Ok(updated_vm) => {
+            // Record boot history and capture boot_id for the monitor
+            let boot_id = state.store.record_boot_start(&vm.id, &console_log)
+                .unwrap_or_default();
+
+            // Store the child process + boot_id for monitoring
+            state.processes.lock().await.insert(vm.id.clone(), TrackedProcess {
+                child,
+                boot_id,
+            });
+
+            (StatusCode::OK, Json(serde_json::to_value(updated_vm).unwrap()))
+        }
+        Err(e) => {
+            // Kill the just-spawned process
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        }
+    }
+}
+
+/// Find the rootfs ext4 image for a VM by looking for an attached root-device workspace.
+fn find_rootfs_for_vm(state: &AppState, vm_id: &str) -> Result<String, String> {
+    // Look for a workspace attached to this VM as root device
+    let workspaces = state.store.list_workspaces(None)
+        .map_err(|e| format!("cannot list workspaces: {e}"))?;
+
+    for ws in &workspaces {
+        if ws.vm_id.as_deref() == Some(vm_id) && ws.is_root_device {
+            // The rootfs.ext4 file lives inside the workspace subvolume
+            let rootfs = PathBuf::from(&ws.subvolume_path).join("rootfs.ext4");
+            if rootfs.exists() {
+                return Ok(rootfs.to_string_lossy().to_string());
+            }
+            return Err(format!(
+                "workspace '{}' is attached as root device but rootfs.ext4 not found at {}",
+                ws.name.as_deref().unwrap_or(&ws.id),
+                rootfs.display()
+            ));
+        }
+    }
+
+    Err(format!(
+        "VM '{}' has no workspace attached as root device. Attach one with: \
+         nexusctl ws create --base <image> --name <ws> (then attach to VM)",
+        vm_id
+    ))
+}
+
+async fn stop_vm_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    if vm.state != VmState::Running {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": format!("VM '{}' is not running (state: {})", vm.name, vm.state)})),
+        );
+    }
+
+    // Send SIGTERM to the Firecracker process.
+    // Do NOT call blocking child.wait() while holding the tokio Mutex.
+    // Instead, just signal and remove from the process map — the monitor
+    // will detect the exit via try_wait() and transition state to `stopped`.
+    if let Some(pid) = vm.pid {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGTERM,
+        );
+    }
+
+    // Remove from the process map so the monitor knows this was
+    // a deliberate stop, not a crash. Record boot stop with the
+    // tracked boot_id before removing.
+    {
+        let mut processes = state.processes.lock().await;
+        if let Some(tracked) = processes.remove(&vm.id) {
+            let _ = state.store.record_boot_stop(&tracked.boot_id, None, None);
+        }
+    }
+
+    match state.store.stop_vm(&vm.id) {
+        Ok(stopped) => (StatusCode::OK, Json(serde_json::to_value(stopped).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn vm_logs_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> (StatusCode, String) {
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (StatusCode::NOT_FOUND, format!("VM '{}' not found", name_or_id)),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+
+    let log_path = match &vm.console_log_path {
+        Some(p) => p.clone(),
+        None => return (StatusCode::NOT_FOUND, format!("no console log for VM '{}'", vm.name)),
+    };
+
+    let tail: usize = query
+        .get("tail")
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(100);
+
+    match std::fs::read_to_string(&log_path) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(tail);
+            let output = lines[start..].join("\n");
+            (StatusCode::OK, output)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, format!("console log not found at {}", log_path))
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("cannot read console log: {e}"))
+        }
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/vms", post(create_vm).get(list_vms))
         .route("/v1/vms/{name_or_id}", get(get_vm).delete(delete_vm))
+        .route("/v1/vms/{name_or_id}/start", post(start_vm_handler))
+        .route("/v1/vms/{name_or_id}/stop", post(stop_vm_handler))
+        .route("/v1/vms/{name_or_id}/logs", get(vm_logs_handler))
         .route("/v1/images", post(import_image).get(list_images))
         .route("/v1/images/{name_or_id}", get(get_image).delete(delete_image_handler))
         .route("/v1/workspaces", post(create_workspace_handler).get(list_workspaces))
@@ -913,6 +1133,8 @@ mod tests {
             workspaces_root: std::path::PathBuf::from("/tmp/mock-ws"),
             assets_dir: std::path::PathBuf::from("/tmp/mock-assets"),
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
+            firecracker: nexus_lib::config::FirecrackerConfig::default(),
+            processes: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -996,6 +1218,8 @@ mod tests {
             workspaces_root: ws_root,
             assets_dir,
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
+            firecracker: nexus_lib::config::FirecrackerConfig::default(),
+            processes: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
 

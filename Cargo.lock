@@ -1828,6 +1828,7 @@ dependencies = [
  "axum",
  "clap",
  "nexus-lib",
+ "nix",
  "reqwest",
  "serde",
  "serde_json",
