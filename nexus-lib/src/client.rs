@@ -168,6 +168,74 @@ impl NexusClient {
         }
     }
 
+    pub async fn start_vm(&self, name_or_id: &str) -> Result<crate::vm::Vm, ClientError> {
+        let url = format!("{}/v1/vms/{name_or_id}/start", self.base_url);
+        let resp = self.http.post(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(ClientError::Api(format!("VM '{}' not found", name_or_id)));
+        }
+        if status == reqwest::StatusCode::CONFLICT {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("conflict").to_string()));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status {status}: {body}")));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn stop_vm(&self, name_or_id: &str) -> Result<crate::vm::Vm, ClientError> {
+        let url = format!("{}/v1/vms/{name_or_id}/stop", self.base_url);
+        let resp = self.http.post(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(ClientError::Api(format!("VM '{}' not found", name_or_id)));
+        }
+        if status == reqwest::StatusCode::CONFLICT {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("conflict").to_string()));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status {status}: {body}")));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn vm_logs(&self, name_or_id: &str, tail: Option<usize>) -> Result<String, ClientError> {
+        let mut url = format!("{}/v1/vms/{name_or_id}/logs", self.base_url);
+        if let Some(n) = tail {
+            url.push_str(&format!("?tail={n}"));
+        }
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(ClientError::Api(format!("VM '{}' not found or no logs available", name_or_id)));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status {status}: {body}")));
+        }
+
+        resp.text().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
     // --- Image methods ---
 
     pub async fn import_image(&self, params: &crate::workspace::ImportImageParams) -> Result<crate::workspace::MasterImage, ClientError> {
@@ -634,5 +702,13 @@ mod tests {
         let json = r#"{"id":"bld-1","template_id":"tpl-1","template_version":1,"name":"base","source_type":"rootfs","source_identifier":"https://example.com/rootfs.tar.gz","status":"building","created_at":1000}"#;
         let build: crate::template::Build = serde_json::from_str(json).unwrap();
         assert_eq!(build.status, crate::template::BuildStatus::Building);
+    }
+
+    #[test]
+    fn start_vm_response_deserializes() {
+        let json = r#"{"id":"abc","name":"test","role":"work","state":"running","cid":3,"vcpu_count":1,"mem_size_mib":128,"created_at":1000,"updated_at":1000,"pid":1234,"socket_path":"/run/sock","uds_path":"/run/vsock","console_log_path":"/run/console.log"}"#;
+        let vm: crate::vm::Vm = serde_json::from_str(json).unwrap();
+        assert_eq!(vm.state, crate::vm::VmState::Running);
+        assert_eq!(vm.pid, Some(1234));
     }
 }
