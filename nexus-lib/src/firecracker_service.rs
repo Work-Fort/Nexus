@@ -176,6 +176,30 @@ impl<'a> FirecrackerService<'a> {
                 .map_err(|e| PipelineError::Io(e.to_string()))?;
         }
 
+        // Validate the extracted binary runs (catches wrong-arch or debug-only builds)
+        let version_check = std::process::Command::new(&dest)
+            .arg("--version")
+            .output();
+        match version_check {
+            Ok(output) if output.status.success() => {
+                let version = String::from_utf8_lossy(&output.stdout);
+                tracing::info!("Firecracker binary validated: {}", version.trim());
+            }
+            Ok(output) => {
+                let _ = std::fs::remove_file(&dest);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(PipelineError::Io(
+                    format!("extracted firecracker binary failed --version check: {stderr}")
+                ).into());
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&dest);
+                return Err(PipelineError::Io(
+                    format!("cannot execute extracted firecracker binary: {e}")
+                ).into());
+            }
+        }
+
         // Compute SHA256 of the extracted binary
         let binary_sha256 = pipeline::compute_sha256_file(&dest)?;
         let binary_size = std::fs::metadata(&dest)
@@ -208,7 +232,7 @@ impl<'a> FirecrackerService<'a> {
             let mut entry = entry.map_err(|e| PipelineError::Decompression(e.to_string()))?;
             let path = entry.path().map_err(|e| PipelineError::Decompression(e.to_string()))?;
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with("firecracker-v") && !name.contains("jailer") {
+            if name.starts_with("firecracker-v") && !name.contains("jailer") && !name.ends_with(".debug") {
                 let mut out = std::fs::File::create(dest)
                     .map_err(|e| PipelineError::Io(format!("cannot create output: {e}")))?;
                 std::io::copy(&mut entry, &mut out)
@@ -261,5 +285,48 @@ mod tests {
             expected,
             "https://github.com/firecracker-microvm/firecracker/releases/download/v1.12.0/firecracker-v1.12.0-x86_64.tgz"
         );
+    }
+
+    #[test]
+    fn extract_skips_debug_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let tgz_path = dir.path().join("test.tgz");
+        let dest = dir.path().join("firecracker");
+
+        // Build a tgz with debug file first, then the real binary
+        let file = std::fs::File::create(&tgz_path).unwrap();
+        let gz = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut ar = tar::Builder::new(gz);
+
+        // Add debug binary first (should be skipped)
+        let debug_content = b"debug-symbols-not-a-real-binary";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(debug_content.len() as u64);
+        header.set_cksum();
+        ar.append_data(
+            &mut header,
+            "release-v1.12.0-x86_64/firecracker-v1.12.0-x86_64.debug",
+            &debug_content[..],
+        ).unwrap();
+
+        // Add real binary second (should be extracted)
+        let real_content = b"real-firecracker-binary";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(real_content.len() as u64);
+        header.set_cksum();
+        ar.append_data(
+            &mut header,
+            "release-v1.12.0-x86_64/firecracker-v1.12.0-x86_64",
+            &real_content[..],
+        ).unwrap();
+
+        ar.into_inner().unwrap().finish().unwrap();
+
+        // Extract
+        FirecrackerService::extract_firecracker_from_tgz(&tgz_path, &dest).unwrap();
+
+        // Verify we got the real binary, not the debug one
+        let extracted = std::fs::read(&dest).unwrap();
+        assert_eq!(extracted, b"real-firecracker-binary");
     }
 }
