@@ -25,6 +25,35 @@ struct Cli {
     db: Option<String>,
 }
 
+/// Recover from stale VM state after daemon restart.
+/// VMs marked as `running` from a previous daemon instance have no
+/// managed Firecracker process — transition them to `crashed`.
+fn recover_stale_vms(store: &dyn nexus_lib::store::traits::StateStore) {
+    match store.list_running_vms() {
+        Ok(vms) if vms.is_empty() => {}
+        Ok(vms) => {
+            for vm in &vms {
+                tracing::warn!(
+                    vm_name = %vm.name,
+                    vm_id = %vm.id,
+                    "recovering stale running VM from previous daemon instance"
+                );
+                if let Err(e) = store.crash_vm(&vm.id) {
+                    tracing::error!(
+                        vm_name = %vm.name,
+                        error = %e,
+                        "failed to recover stale VM"
+                    );
+                }
+            }
+            tracing::info!(count = vms.len(), "recovered stale VMs");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to query running VMs during recovery");
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -67,6 +96,9 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // Recover stale VMs from previous daemon instance
+    recover_stale_vms(&store);
 
     let workspaces_root = std::path::PathBuf::from(&config.storage.workspaces);
 
