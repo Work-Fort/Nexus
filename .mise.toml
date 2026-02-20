@@ -29,6 +29,14 @@ run = "cargo test -p nexusd"
 description = "Run tests for nexusctl"
 run = "cargo test -p nexusctl"
 
+[tasks."test:guest-agent"]
+description = "Run tests for guest-agent"
+run = "cargo test -p guest-agent"
+
+[tasks."build:guest-agent"]
+description = "Build guest-agent binary (requires: rustup target add x86_64-unknown-linux-musl)"
+run = "cargo build -p guest-agent --target x86_64-unknown-linux-musl --release"
+
 [tasks.run]
 description = "Run nexusd (debug build)"
 run = "cargo run -p nexusd --"
