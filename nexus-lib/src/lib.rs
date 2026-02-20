@@ -6,6 +6,7 @@ pub mod client;
 pub mod config;
 pub mod firecracker_service;
 pub mod github;
+pub mod id;
 pub mod kernel_service;
 pub mod pgp;
 pub mod pipeline;
