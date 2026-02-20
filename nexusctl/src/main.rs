@@ -473,7 +473,7 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                     // Look up attached workspace and base image
                     if let Ok(workspaces) = client.list_workspaces(None).await {
                         let attached: Vec<_> = workspaces.iter()
-                            .filter(|ws| ws.vm_id.as_deref() == Some(&vm.id))
+                            .filter(|ws| ws.vm_id.as_ref() == Some(&vm.id))
                             .collect();
                         if !attached.is_empty() {
                             println!();
@@ -483,7 +483,7 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                                 print!("Workspace:  {} ({})", ws_name, device_type);
                                 // Resolve base image name
                                 if let Some(ref img_id) = ws.master_image_id {
-                                    if let Ok(Some(img)) = client.get_image(img_id).await {
+                                    if let Ok(Some(img)) = client.get_image(&img_id.encode()).await {
                                         print!(" from image \"{}\"", img.name);
                                     }
                                 }
@@ -736,7 +736,8 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
             };
             match client.create_workspace(&params).await {
                 Ok(ws) => {
-                    let ws_name = ws.name.as_deref().unwrap_or(&ws.id);
+                    let id_fallback = ws.id.encode();
+                    let ws_name = ws.name.as_deref().unwrap_or(&id_fallback);
                     println!("Created workspace \"{}\" from base \"{}\"", ws_name, base);
                     println!("  Path: {}", ws.subvolume_path);
                     println!("\n  Inspect it: nexusctl ws inspect {}", ws_name);
@@ -835,9 +836,10 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                 }
             };
 
-            match client.attach_workspace(&name, &vm_id, root).await {
+            match client.attach_workspace(&name, &vm_id.encode(), root).await {
                 Ok(ws) => {
-                    let ws_name = ws.name.as_deref().unwrap_or(&ws.id);
+                    let id_fallback = ws.id.encode();
+                    let ws_name = ws.name.as_deref().unwrap_or(&id_fallback);
                     println!("Attached workspace \"{}\" to VM \"{}\"", ws_name, vm);
                     if root {
                         println!("  Root device: yes");
@@ -857,7 +859,8 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
         WsAction::Detach { name } => {
             match client.detach_workspace(&name).await {
                 Ok(ws) => {
-                    let ws_name = ws.name.as_deref().unwrap_or(&ws.id);
+                    let id_fallback = ws.id.encode();
+                    let ws_name = ws.name.as_deref().unwrap_or(&id_fallback);
                     println!("Detached workspace \"{}\"", ws_name);
                     ExitCode::SUCCESS
                 }
@@ -1296,10 +1299,12 @@ async fn cmd_build(daemon_addr: &str, action: BuildAction) -> ExitCode {
         BuildAction::Trigger { template } => {
             match client.trigger_build(&template).await {
                 Ok(build) => {
-                    println!("Build triggered (ID: {})", &build.id[..8]);
+                    let id_str = build.id.encode();
+                    let short_id = &id_str[..std::cmp::min(8, id_str.len())];
+                    println!("Build triggered (ID: {})", short_id);
                     println!("  Template: {} (version {})", build.name, build.template_version);
                     println!("  Status:   {}", build.status);
-                    println!("\n  Check progress: nexusctl build inspect {}", build.id);
+                    println!("\n  Check progress: nexusctl build inspect {}", id_str);
                     ExitCode::SUCCESS
                 }
                 Err(e) if e.is_connect() => {
@@ -1321,7 +1326,8 @@ async fn cmd_build(daemon_addr: &str, action: BuildAction) -> ExitCode {
                     }
                     println!("{:<10} {:<20} {:<10} {:<20}", "ID", "TEMPLATE", "STATUS", "CREATED");
                     for build in &builds {
-                        let short_id = &build.id[..std::cmp::min(8, build.id.len())];
+                        let id_str = build.id.encode();
+                        let short_id = &id_str[..std::cmp::min(8, id_str.len())];
                         println!(
                             "{:<10} {:<20} {:<10} {:<20}",
                             short_id, build.name, build.status, format_timestamp(build.created_at),
