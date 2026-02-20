@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 mod api;
 mod logging;
+mod monitor;
 mod server;
 
 #[derive(Parser)]
@@ -93,10 +94,17 @@ async fn main() {
         processes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
+    // Start process monitor
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    monitor::spawn(state.clone(), shutdown_rx);
+
     info!("nexusd starting");
 
     if let Err(e) = server::run(&config, state).await {
         error!(error = %e, "daemon failed");
         std::process::exit(1);
     }
+
+    // Signal the monitor to stop
+    let _ = shutdown_tx.send(true);
 }
