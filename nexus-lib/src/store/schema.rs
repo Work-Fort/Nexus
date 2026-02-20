@@ -2,7 +2,7 @@
 /// Schema version — increment when the schema changes.
 /// Pre-alpha migration strategy: if the stored version doesn't match,
 /// delete the DB and recreate.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Database schema. Executed as a single batch on first start.
 /// Domain tables are added by later steps — each step bumps SCHEMA_VERSION
@@ -24,7 +24,7 @@ CREATE TABLE settings (
 
 -- VMs: Firecracker microVM instances
 CREATE TABLE vms (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('portal', 'work', 'service')),
     state TEXT NOT NULL CHECK(state IN ('created', 'running', 'stopped', 'crashed', 'failed')),
@@ -47,7 +47,7 @@ CREATE INDEX idx_vms_state ON vms(state);
 
 -- Master images: read-only btrfs subvolumes
 CREATE TABLE master_images (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     subvolume_path TEXT NOT NULL UNIQUE,
     size_bytes INTEGER,
@@ -56,12 +56,12 @@ CREATE TABLE master_images (
 
 -- Workspaces: btrfs subvolume snapshots
 CREATE TABLE workspaces (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     name TEXT UNIQUE,
-    vm_id TEXT,
+    vm_id INTEGER,
     subvolume_path TEXT NOT NULL UNIQUE,
-    master_image_id TEXT,
-    parent_workspace_id TEXT,
+    master_image_id INTEGER,
+    parent_workspace_id INTEGER,
     size_bytes INTEGER,
     is_root_device INTEGER NOT NULL DEFAULT 0 CHECK(is_root_device IN (0, 1)),
     is_read_only INTEGER NOT NULL DEFAULT 0 CHECK(is_read_only IN (0, 1)),
@@ -78,7 +78,7 @@ CREATE INDEX idx_workspaces_base ON workspaces(master_image_id);
 
 -- Asset download providers (configuration + pipeline stages stored as JSON)
 CREATE TABLE providers (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     asset_type TEXT NOT NULL CHECK(asset_type IN ('kernel', 'rootfs', 'firecracker')),
     provider_type TEXT NOT NULL,  -- 'github_release', 'archive', 'alpine_cdn'
@@ -93,7 +93,7 @@ CREATE UNIQUE INDEX idx_providers_default ON providers(asset_type) WHERE is_defa
 
 -- Downloaded kernels
 CREATE TABLE kernels (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     version TEXT NOT NULL,
     architecture TEXT NOT NULL,
     path_on_host TEXT NOT NULL UNIQUE,
@@ -108,7 +108,7 @@ CREATE UNIQUE INDEX idx_kernels_version_arch ON kernels(version, architecture);
 
 -- Downloaded rootfs images
 CREATE TABLE rootfs_images (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     distro TEXT NOT NULL DEFAULT 'alpine',
     version TEXT NOT NULL,
     architecture TEXT NOT NULL,
@@ -123,7 +123,7 @@ CREATE UNIQUE INDEX idx_rootfs_images_distro_version_arch ON rootfs_images(distr
 
 -- Downloaded Firecracker binaries
 CREATE TABLE firecracker_versions (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     version TEXT NOT NULL,
     architecture TEXT NOT NULL,
     path_on_host TEXT NOT NULL UNIQUE,
@@ -137,7 +137,7 @@ CREATE UNIQUE INDEX idx_firecracker_version_arch ON firecracker_versions(version
 
 -- Templates: blueprints for building rootfs images
 CREATE TABLE templates (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     version INTEGER NOT NULL DEFAULT 1,
     source_type TEXT NOT NULL CHECK(source_type IN ('rootfs')),
@@ -151,8 +151,8 @@ CREATE INDEX idx_templates_name ON templates(name);
 
 -- Builds: immutable build attempts from templates
 CREATE TABLE builds (
-    id TEXT PRIMARY KEY,
-    template_id TEXT NOT NULL,
+    id INTEGER PRIMARY KEY,
+    template_id INTEGER NOT NULL,
     template_version INTEGER NOT NULL,
     name TEXT NOT NULL,
     source_type TEXT NOT NULL,
@@ -160,7 +160,7 @@ CREATE TABLE builds (
     overlays TEXT,
     status TEXT NOT NULL DEFAULT 'building' CHECK(status IN ('building', 'success', 'failed')),
     build_log_path TEXT,
-    master_image_id TEXT,
+    master_image_id INTEGER,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     completed_at INTEGER,
     FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
@@ -173,8 +173,8 @@ CREATE INDEX idx_builds_master_image_id ON builds(master_image_id);
 
 -- VM boot history: tracks each boot/shutdown cycle
 CREATE TABLE vm_boot_history (
-    id TEXT PRIMARY KEY,
-    vm_id TEXT NOT NULL,
+    id INTEGER PRIMARY KEY,
+    vm_id INTEGER NOT NULL,
     boot_started_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     boot_stopped_at INTEGER,
     exit_code INTEGER,
@@ -197,7 +197,7 @@ pub fn seed_default_providers(conn: &rusqlite::Connection) -> Result<(), rusqlit
     conn.execute(
         "INSERT INTO providers (id, name, asset_type, provider_type, config, pipeline, is_default) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
-            "provider-anvil",
+            1,
             "anvil",
             "kernel",
             "github_release",
@@ -210,7 +210,7 @@ pub fn seed_default_providers(conn: &rusqlite::Connection) -> Result<(), rusqlit
     conn.execute(
         "INSERT INTO providers (id, name, asset_type, provider_type, config, pipeline, is_default) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
-            "provider-alpine",
+            2,
             "alpine",
             "rootfs",
             "alpine_cdn",
@@ -223,7 +223,7 @@ pub fn seed_default_providers(conn: &rusqlite::Connection) -> Result<(), rusqlit
     conn.execute(
         "INSERT INTO providers (id, name, asset_type, provider_type, config, pipeline, is_default) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
-            "provider-firecracker",
+            3,
             "firecracker",
             "firecracker",
             "github_release",
