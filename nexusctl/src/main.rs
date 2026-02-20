@@ -605,7 +605,7 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                     }
 
                     // Print table header
-                    println!("{:<20} {:<12} {:<12} {}", "TIMESTAMP", "FROM", "TO", "REASON");
+                    println!("{:<20} {:<12} {:<12} REASON", "TIMESTAMP", "FROM", "TO");
 
                     for record in history {
                         // Convert Unix timestamp to human-readable format
