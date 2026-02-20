@@ -4,6 +4,7 @@ use nexus_lib::backend::btrfs::BtrfsBackend;
 use nexus_lib::config::{self, Config};
 use nexus_lib::pipeline::PipelineExecutor;
 use nexus_lib::store::sqlite::SqliteStore;
+use nexus_lib::vsock_manager::VsockManager;
 use tracing::{error, info};
 use std::sync::Arc;
 
@@ -117,13 +118,22 @@ async fn main() {
     let assets_dir = nexus_lib::config::default_assets_dir();
     let executor = PipelineExecutor::new();
 
+    // Wrap store in Arc for sharing between VsockManager and AppState
+    let store_box: Box<dyn nexus_lib::store::traits::StateStore + Send + Sync> = Box::new(store);
+    let store_arc: Arc<dyn nexus_lib::store::traits::StateStore + Send + Sync> = Arc::from(store_box);
+
+    // Initialize VsockManager and start monitor task
+    let vsock_manager = Arc::new(VsockManager::new(store_arc.clone()));
+    vsock_manager.clone().start_monitor_task();
+
     let state = Arc::new(api::AppState {
-        store: Box::new(store),
+        store: store_arc,
         backend: Box::new(backend),
         workspaces_root,
         assets_dir,
         executor,
         firecracker: config.firecracker.clone(),
+        vsock_manager,
         processes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 

@@ -16,6 +16,7 @@ pub mod store;
 pub mod template;
 pub mod vm;
 pub mod vm_service;
+pub mod vsock_manager;
 pub mod workspace;
 pub mod workspace_service;
 

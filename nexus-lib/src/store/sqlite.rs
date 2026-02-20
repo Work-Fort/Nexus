@@ -434,6 +434,86 @@ impl VmStore for SqliteStore {
 
         Ok(())
     }
+
+    fn update_vm_state(&self, id: Id, new_state: &str, reason: Option<&str>) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        // Get current state
+        let current_state: String = conn.query_row(
+            "SELECT state FROM vms WHERE id = ?",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| StoreError::Query(format!("cannot get current state: {e}")))?;
+
+        // Update state
+        conn.execute(
+            "UPDATE vms SET state = ?, updated_at = strftime('%s', 'now') WHERE id = ?",
+            rusqlite::params![new_state, id],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
+
+        // Record transition in history
+        conn.execute(
+            "INSERT INTO vm_state_history (vm_id, from_state, to_state, reason) VALUES (?, ?, ?, ?)",
+            rusqlite::params![id, current_state, new_state, reason],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot record state transition: {e}")))?;
+
+        Ok(())
+    }
+
+    fn set_vm_agent_connected_at(&self, id: Id, timestamp: i64) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE vms SET agent_connected_at = ? WHERE id = ?",
+            rusqlite::params![timestamp, id],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot set agent_connected_at: {e}")))?;
+        Ok(())
+    }
+
+    fn list_vms_by_state(&self, state: &str) -> Result<Vec<Vm>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, role, state, cid, vcpu_count, mem_size_mib, config_json, pid,
+                    socket_path, uds_path, console_log_path, agent_connected_at, created_at,
+                    updated_at, started_at, stopped_at
+             FROM vms WHERE state = ?"
+        )
+        .map_err(|e| StoreError::Query(format!("cannot prepare statement: {e}")))?;
+
+        let vms = stmt.query_map(rusqlite::params![state], |row| {
+            let role_str: String = row.get(2)?;
+            let state_str: String = row.get(3)?;
+            Ok(Vm {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                role: role_str.parse().map_err(|_| rusqlite::Error::FromSqlConversionFailure(
+                    2, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "parse error"))))?,
+                state: state_str.parse().map_err(|_| rusqlite::Error::FromSqlConversionFailure(
+                    3, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "parse error"))))?,
+                cid: row.get(4)?,
+                vcpu_count: row.get(5)?,
+                mem_size_mib: row.get(6)?,
+                config_json: row.get(7)?,
+                pid: row.get(8)?,
+                socket_path: row.get(9)?,
+                uds_path: row.get(10)?,
+                console_log_path: row.get(11)?,
+                agent_connected_at: row.get(12)?,
+                created_at: row.get(13)?,
+                updated_at: row.get(14)?,
+                started_at: row.get(15)?,
+                stopped_at: row.get(16)?,
+            })
+        })
+        .map_err(|e| StoreError::Query(format!("cannot query VMs: {e}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| StoreError::Query(format!("cannot map VM rows: {e}")))?;
+
+        Ok(vms)
+    }
 }
 
 impl ImageStore for SqliteStore {
@@ -804,6 +884,18 @@ impl StateStore for SqliteStore {
         // rusqlite closes the connection on drop. This method exists
         // for the trait interface — other backends may need explicit cleanup.
         Ok(())
+    }
+
+    fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let value: Option<String> = conn.query_row(
+            "SELECT value FROM settings WHERE key = ?",
+            rusqlite::params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| StoreError::Query(format!("cannot get setting: {e}")))?;
+        Ok(value)
     }
 }
 

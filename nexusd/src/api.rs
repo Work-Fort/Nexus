@@ -12,6 +12,7 @@ use nexus_lib::store::traits::{DbStatus, StateStore, StoreError};
 use nexus_lib::template::CreateTemplateParams;
 use nexus_lib::vm::{CreateVmParams, VmState};
 use nexus_lib::vm_service;
+use nexus_lib::vsock_manager::VsockManager;
 use nexus_lib::workspace::{ImportImageParams, CreateWorkspaceParams};
 use nexus_lib::workspace_service::{WorkspaceService, WorkspaceServiceError};
 use serde::{Deserialize, Serialize};
@@ -52,12 +53,13 @@ pub struct TrackedProcess {
 
 /// Application state shared across handlers.
 pub struct AppState {
-    pub store: Box<dyn StateStore + Send + Sync>,
+    pub store: Arc<dyn StateStore + Send + Sync>,
     pub backend: Box<dyn WorkspaceBackend>,
     pub workspaces_root: PathBuf,
     pub assets_dir: PathBuf,
     pub executor: PipelineExecutor,
     pub firecracker: FirecrackerConfig,
+    pub vsock_manager: Arc<VsockManager>,
     /// Map of VM ID -> tracked Firecracker process (child + boot_id).
     /// Protected by a tokio Mutex for async access.
     pub processes: TokioMutex<HashMap<nexus_lib::id::Id, TrackedProcess>>,
@@ -931,6 +933,17 @@ async fn start_vm_handler(
                 boot_id,
             });
 
+            // Connect to guest-agent and wait for handshake
+            match state.vsock_manager.connect_and_handshake(vm.id, runtime_dir).await {
+                Ok(metadata) => {
+                    tracing::info!("guest-agent connected for VM {}: {:?}", vm.id, metadata);
+                }
+                Err(e) => {
+                    tracing::warn!("failed to connect to guest-agent for VM {}: {}", vm.id, e);
+                    // State will transition to unreachable via monitor task
+                }
+            }
+
             (StatusCode::OK, Json(serde_json::to_value(updated_vm).unwrap()))
         }
         Err(e) => {
@@ -1138,6 +1151,9 @@ mod tests {
         fn list_running_vms(&self) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
         fn record_boot_start(&self, _: nexus_lib::id::Id, _: &str) -> Result<nexus_lib::id::Id, StoreError> { unimplemented!() }
         fn record_boot_stop(&self, _: nexus_lib::id::Id, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
+        fn update_vm_state(&self, _: nexus_lib::id::Id, _: &str, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
+        fn set_vm_agent_connected_at(&self, _: nexus_lib::id::Id, _: i64) -> Result<(), StoreError> { unimplemented!() }
+        fn list_vms_by_state(&self, _: &str) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
     }
 
     impl ImageStore for MockStore {
@@ -1221,6 +1237,7 @@ mod tests {
             })
         }
         fn close(&self) -> Result<(), StoreError> { Ok(()) }
+        fn get_setting(&self, _: &str) -> Result<Option<String>, StoreError> { Ok(None) }
     }
 
     struct FailingStore;
@@ -1247,6 +1264,9 @@ mod tests {
         fn list_running_vms(&self) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
         fn record_boot_start(&self, _: nexus_lib::id::Id, _: &str) -> Result<nexus_lib::id::Id, StoreError> { unimplemented!() }
         fn record_boot_stop(&self, _: nexus_lib::id::Id, _: Option<i32>, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
+        fn update_vm_state(&self, _: nexus_lib::id::Id, _: &str, _: Option<&str>) -> Result<(), StoreError> { unimplemented!() }
+        fn set_vm_agent_connected_at(&self, _: nexus_lib::id::Id, _: i64) -> Result<(), StoreError> { unimplemented!() }
+        fn list_vms_by_state(&self, _: &str) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
     }
 
     impl ImageStore for FailingStore {
@@ -1326,16 +1346,20 @@ mod tests {
             Err(StoreError::Query("disk I/O error".to_string()))
         }
         fn close(&self) -> Result<(), StoreError> { Ok(()) }
+        fn get_setting(&self, _: &str) -> Result<Option<String>, StoreError> { Ok(None) }
     }
 
     fn mock_state_with_store(store: impl StateStore + Send + Sync + 'static) -> Arc<AppState> {
+        let store_arc: Arc<dyn StateStore + Send + Sync> = Arc::new(store);
+        let vsock_manager = Arc::new(VsockManager::new(store_arc.clone()));
         Arc::new(AppState {
-            store: Box::new(store),
+            store: store_arc,
             backend: Box::new(MockBackend),
             workspaces_root: std::path::PathBuf::from("/tmp/mock-ws"),
             assets_dir: std::path::PathBuf::from("/tmp/mock-assets"),
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
             firecracker: nexus_lib::config::FirecrackerConfig::default(),
+            vsock_manager,
             processes: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
@@ -1414,13 +1438,16 @@ mod tests {
         let store = SqliteStore::open_and_init(&db_path).unwrap();
         // Leak the tempdir so it lives long enough
         std::mem::forget(dir);
+        let store_arc: Arc<dyn StateStore + Send + Sync> = Arc::new(store);
+        let vsock_manager = Arc::new(VsockManager::new(store_arc.clone()));
         Arc::new(AppState {
-            store: Box::new(store),
+            store: store_arc,
             backend: Box::new(MockBackend),
             workspaces_root: ws_root,
             assets_dir,
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
             firecracker: nexus_lib::config::FirecrackerConfig::default(),
+            vsock_manager,
             processes: tokio::sync::Mutex::new(HashMap::new()),
         })
     }

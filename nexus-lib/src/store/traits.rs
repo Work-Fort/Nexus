@@ -107,6 +107,15 @@ pub trait VmStore {
         exit_code: Option<i32>,
         error_message: Option<&str>,
     ) -> Result<(), StoreError>;
+
+    /// Update VM state and record transition in history
+    fn update_vm_state(&self, id: Id, new_state: &str, reason: Option<&str>) -> Result<(), StoreError>;
+
+    /// Set agent_connected_at timestamp
+    fn set_vm_agent_connected_at(&self, id: Id, timestamp: i64) -> Result<(), StoreError>;
+
+    /// List VMs by state
+    fn list_vms_by_state(&self, state: &str) -> Result<Vec<Vm>, StoreError>;
 }
 
 /// Master image record persistence.
@@ -269,6 +278,9 @@ pub trait StateStore: VmStore + ImageStore + WorkspaceStore + AssetStore + Build
 
     /// Close the store and release resources.
     fn close(&self) -> Result<(), StoreError>;
+
+    /// Get setting value from settings table
+    fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError>;
 }
 
 #[cfg(test)]
