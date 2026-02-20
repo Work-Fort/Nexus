@@ -992,6 +992,12 @@ mod tests {
         fn delete_workspace(&self, _name_or_id: &str) -> Result<bool, StoreError> {
             unimplemented!()
         }
+        fn attach_workspace(&self, _workspace_id: &str, _vm_id: &str, _is_root_device: bool) -> Result<Workspace, StoreError> {
+            unimplemented!()
+        }
+        fn detach_workspace(&self, _workspace_id: &str) -> Result<Workspace, StoreError> {
+            unimplemented!()
+        }
     }
 
     impl AssetStore for MockStore {
@@ -1085,6 +1091,12 @@ mod tests {
             unimplemented!()
         }
         fn delete_workspace(&self, _name_or_id: &str) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
+        fn attach_workspace(&self, _workspace_id: &str, _vm_id: &str, _is_root_device: bool) -> Result<Workspace, StoreError> {
+            unimplemented!()
+        }
+        fn detach_workspace(&self, _workspace_id: &str) -> Result<Workspace, StoreError> {
             unimplemented!()
         }
     }

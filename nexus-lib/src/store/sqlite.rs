@@ -597,6 +597,42 @@ impl WorkspaceStore for SqliteStore {
 
         Ok(deleted > 0)
     }
+
+    fn attach_workspace(&self, workspace_id: &str, vm_id: &str, is_root_device: bool) -> Result<Workspace, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        conn.execute(
+            "UPDATE workspaces SET vm_id = ?1, is_root_device = ?2, attached_at = ?3, detached_at = NULL WHERE id = ?4",
+            rusqlite::params![vm_id, is_root_device, now, workspace_id],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot attach workspace: {e}")))?;
+
+        drop(conn);
+        self.get_workspace(workspace_id)?
+            .ok_or_else(|| StoreError::Query("workspace not found after attach".to_string()))
+    }
+
+    fn detach_workspace(&self, workspace_id: &str) -> Result<Workspace, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        conn.execute(
+            "UPDATE workspaces SET vm_id = NULL, is_root_device = 0, detached_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, workspace_id],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot detach workspace: {e}")))?;
+
+        drop(conn);
+        self.get_workspace(workspace_id)?
+            .ok_or_else(|| StoreError::Query("workspace not found after detach".to_string()))
+    }
 }
 
 impl StateStore for SqliteStore {
@@ -2140,5 +2176,59 @@ mod tests {
         assert!(!boot_id.is_empty());
 
         store.record_boot_stop(&boot_id, Some(0), None).unwrap();
+    }
+
+    #[test]
+    fn attach_workspace_to_vm() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let vm = store.create_vm(&CreateVmParams {
+            name: "attach-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let img = store.create_image(
+            &ImportImageParams { name: "base".to_string(), source_path: "/a".to_string() },
+            "/data/base",
+        ).unwrap();
+
+        let ws = store.create_workspace(Some("ws-for-vm"), "/data/ws-for-vm", &img.id).unwrap();
+        assert!(ws.vm_id.is_none());
+
+        let attached = store.attach_workspace(&ws.id, &vm.id, true).unwrap();
+        assert_eq!(attached.vm_id, Some(vm.id.clone()));
+        assert!(attached.is_root_device);
+        assert!(attached.attached_at.is_some());
+    }
+
+    #[test]
+    fn detach_workspace_from_vm() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        let vm = store.create_vm(&CreateVmParams {
+            name: "detach-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let img = store.create_image(
+            &ImportImageParams { name: "base".to_string(), source_path: "/a".to_string() },
+            "/data/base",
+        ).unwrap();
+
+        let ws = store.create_workspace(Some("ws-detach"), "/data/ws-detach", &img.id).unwrap();
+        store.attach_workspace(&ws.id, &vm.id, true).unwrap();
+
+        let detached = store.detach_workspace(&ws.id).unwrap();
+        assert!(detached.vm_id.is_none());
+        assert!(!detached.is_root_device);
+        assert!(detached.detached_at.is_some());
     }
 }

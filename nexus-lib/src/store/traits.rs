@@ -135,6 +135,12 @@ pub trait WorkspaceStore {
     /// Returns true if deleted, false if not found.
     /// Fails with Conflict if workspace is attached to a VM.
     fn delete_workspace(&self, name_or_id: &str) -> Result<bool, StoreError>;
+
+    /// Attach a workspace to a VM. Sets vm_id, is_root_device, and attached_at.
+    fn attach_workspace(&self, workspace_id: &str, vm_id: &str, is_root_device: bool) -> Result<Workspace, StoreError>;
+
+    /// Detach a workspace from a VM. Clears vm_id, is_root_device, sets detached_at.
+    fn detach_workspace(&self, workspace_id: &str) -> Result<Workspace, StoreError>;
 }
 
 /// Provider and downloaded asset persistence.
