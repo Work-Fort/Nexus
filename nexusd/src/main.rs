@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use clap::Parser;
 use nexus_lib::backend::btrfs::BtrfsBackend;
 use nexus_lib::config::{self, Config};

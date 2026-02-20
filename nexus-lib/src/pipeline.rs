@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 // nexus/nexus-lib/src/pipeline.rs
 
 use futures_util::StreamExt;

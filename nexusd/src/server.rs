@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use crate::api::{self, AppState};
 use nexus_lib::config::Config;
 use tokio::net::TcpListener;

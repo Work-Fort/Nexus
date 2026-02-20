@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use crate::backend::traits::{BackendError, WorkspaceBackend};
 use crate::store::traits::{StateStore, StoreError};
 use crate::workspace::{ImportImageParams, MasterImage, Workspace};

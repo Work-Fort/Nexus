@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use nexus_lib::test_support::TestDaemon;
 
 #[tokio::test]

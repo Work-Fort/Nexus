@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 pub mod asset;
 pub mod backend;
 pub mod build_service;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use tracing_subscriber::{EnvFilter, fmt};
 
 pub fn init() {

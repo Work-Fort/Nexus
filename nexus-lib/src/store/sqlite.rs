@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use crate::asset::{
     FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
     RegisterKernelParams, RegisterRootfsParams, RootfsImage,

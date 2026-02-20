@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use clap::{Parser, Subcommand};
 use nexus_lib::client::NexusClient;
 use nexus_lib::vm::{CreateVmParams, VmRole};

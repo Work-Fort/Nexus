@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use serde::{Deserialize, Serialize};
 
 /// VM role determines the VM's function in the system.

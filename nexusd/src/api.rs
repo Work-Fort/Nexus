@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use axum::{Json, Router, routing::{delete, get, post}};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;

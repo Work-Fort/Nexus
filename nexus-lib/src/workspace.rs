@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use serde::{Deserialize, Serialize};
 
 /// A master image: a read-only btrfs subvolume registered in the database.

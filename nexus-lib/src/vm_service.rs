@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use crate::config;
 use crate::store::traits::StoreError;
 use crate::vm::Vm;

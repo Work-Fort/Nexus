@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 // nexus/nexus-lib/src/github.rs
 
 use serde::Deserialize;

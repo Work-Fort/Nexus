@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use crate::backend::traits::WorkspaceBackend;
 use crate::pipeline::{ChecksumSet, PipelineExecutor, PipelineStage};
 use crate::store::traits::StoreError;

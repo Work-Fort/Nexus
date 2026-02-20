@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command};

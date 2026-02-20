@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use crate::api::AppState;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};

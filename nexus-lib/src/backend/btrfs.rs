@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 use crate::backend::traits::{BackendError, SubvolumeInfo, WorkspaceBackend};
 use std::path::{Path, PathBuf};
 
