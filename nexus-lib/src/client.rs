@@ -378,6 +378,62 @@ impl NexusClient {
         }
     }
 
+    pub async fn attach_workspace(
+        &self,
+        name_or_id: &str,
+        vm_id: &str,
+        is_root_device: bool,
+    ) -> Result<crate::workspace::Workspace, ClientError> {
+        let url = format!("{}/v1/workspaces/{name_or_id}/attach", self.base_url);
+        let resp = self.http.post(&url)
+            .json(&serde_json::json!({
+                "vm_id": vm_id,
+                "is_root_device": is_root_device,
+            }))
+            .send().await.map_err(|e| {
+                if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+                else { ClientError::Api(e.to_string()) }
+            })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(ClientError::Api(format!("workspace '{}' not found", name_or_id)));
+        }
+        if status == reqwest::StatusCode::CONFLICT {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("conflict").to_string()));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status {status}: {body}")));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn detach_workspace(&self, name_or_id: &str) -> Result<crate::workspace::Workspace, ClientError> {
+        let url = format!("{}/v1/workspaces/{name_or_id}/detach", self.base_url);
+        let resp = self.http.post(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(ClientError::Api(format!("workspace '{}' not found", name_or_id)));
+        }
+        if status == reqwest::StatusCode::CONFLICT {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("conflict").to_string()));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("unexpected status {status}: {body}")));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
     // --- Kernel methods ---
 
     pub async fn list_kernels(&self) -> Result<Vec<crate::asset::Kernel>, ClientError> {

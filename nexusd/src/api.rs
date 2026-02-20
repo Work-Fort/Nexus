@@ -333,6 +333,73 @@ async fn delete_workspace_handler(
     }
 }
 
+#[derive(Deserialize)]
+struct AttachWorkspaceRequest {
+    vm_id: String,
+    #[serde(default)]
+    is_root_device: bool,
+}
+
+async fn attach_workspace_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+    Json(req): Json<AttachWorkspaceRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Resolve workspace by name or ID
+    let ws = match state.store.get_workspace(&name_or_id) {
+        Ok(Some(ws)) => ws,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    match state.store.attach_workspace(&ws.id, &req.vm_id, req.is_root_device) {
+        Ok(ws) => (StatusCode::OK, Json(serde_json::to_value(ws).unwrap())),
+        Err(StoreError::Conflict(msg)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+async fn detach_workspace_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let ws = match state.store.get_workspace(&name_or_id) {
+        Ok(Some(ws)) => ws,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    match state.store.detach_workspace(&ws.id) {
+        Ok(ws) => (StatusCode::OK, Json(serde_json::to_value(ws).unwrap())),
+        Err(StoreError::Conflict(msg)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Kernel handlers
 // ---------------------------------------------------------------------------
@@ -906,6 +973,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/images/{name_or_id}", get(get_image).delete(delete_image_handler))
         .route("/v1/workspaces", post(create_workspace_handler).get(list_workspaces))
         .route("/v1/workspaces/{name_or_id}", get(get_workspace).delete(delete_workspace_handler))
+        .route("/v1/workspaces/{name_or_id}/attach", post(attach_workspace_handler))
+        .route("/v1/workspaces/{name_or_id}/detach", post(detach_workspace_handler))
         .route("/v1/kernels", get(list_kernels_handler))
         .route("/v1/kernels/download", post(download_kernel_handler))
         .route("/v1/kernels/{version}", delete(remove_kernel_handler))
@@ -1559,5 +1628,84 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert!(json.is_empty());
+    }
+
+    #[tokio::test]
+    async fn attach_and_detach_workspace() {
+        let state = test_state();
+
+        // Create a VM
+        let resp = router(state.clone())
+            .oneshot(
+                Request::post("/v1/vms")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "attach-vm"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let vm: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let vm_id = vm["id"].as_str().unwrap();
+
+        // Import an image
+        let resp = router(state.clone())
+            .oneshot(
+                Request::post("/v1/images")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name": "attach-img", "source_path": "/tmp/fake"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        // Create a workspace
+        let resp = router(state.clone())
+            .oneshot(
+                Request::post("/v1/workspaces")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"base": "attach-img", "name": "attach-ws"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        // Attach workspace to VM
+        let attach_body = serde_json::json!({
+            "vm_id": vm_id,
+            "is_root_device": true
+        });
+        let resp = router(state.clone())
+            .oneshot(
+                Request::post("/v1/workspaces/attach-ws/attach")
+                    .header("content-type", "application/json")
+                    .body(Body::from(attach_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let ws: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(ws["vm_id"], vm_id);
+        assert_eq!(ws["is_root_device"], true);
+
+        // Detach workspace
+        let resp = router(state.clone())
+            .oneshot(
+                Request::post("/v1/workspaces/attach-ws/detach")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let ws: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(ws["vm_id"].is_null());
+        assert_eq!(ws["is_root_device"], false);
     }
 }

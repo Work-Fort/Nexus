@@ -202,6 +202,22 @@ enum WsAction {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Attach a workspace to a VM
+    Attach {
+        /// Workspace name or ID
+        name: String,
+        /// VM name or ID to attach to
+        #[arg(long)]
+        vm: String,
+        /// Mount as root device
+        #[arg(long)]
+        root: bool,
+    },
+    /// Detach a workspace from its VM
+    Detach {
+        /// Workspace name or ID
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -775,6 +791,60 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                 Err(e) => {
                     eprintln!("Error: cannot delete workspace \"{}\"\n  {e}", name);
                     ExitCode::from(EXIT_CONFLICT)
+                }
+            }
+        }
+        WsAction::Attach { name, vm, root } => {
+            // Resolve the VM name to an ID
+            let vm_id = match client.get_vm(&vm).await {
+                Ok(Some(vm)) => vm.id,
+                Ok(None) => {
+                    eprintln!("Error: VM \"{}\" not found", vm);
+                    return ExitCode::from(EXIT_NOT_FOUND);
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            match client.attach_workspace(&name, &vm_id, root).await {
+                Ok(ws) => {
+                    let ws_name = ws.name.as_deref().unwrap_or(&ws.id);
+                    println!("Attached workspace \"{}\" to VM \"{}\"", ws_name, vm);
+                    if root {
+                        println!("  Root device: yes");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot attach workspace \"{name}\"\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        WsAction::Detach { name } => {
+            match client.detach_workspace(&name).await {
+                Ok(ws) => {
+                    let ws_name = ws.name.as_deref().unwrap_or(&ws.id);
+                    println!("Detached workspace \"{}\"", ws_name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot detach workspace \"{name}\"\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }
         }
