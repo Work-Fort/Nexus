@@ -253,7 +253,7 @@ impl<'a> FirecrackerService<'a> {
         let versions = self.store.list_firecracker_versions()?;
         if let Some(fc) = versions.iter().find(|f| f.version == version && f.architecture == arch) {
             let _ = std::fs::remove_file(&fc.path_on_host);
-            self.store.delete_firecracker(&fc.id)?;
+            self.store.delete_firecracker(fc.id)?;
             Ok(true)
         } else {
             Ok(false)

@@ -151,7 +151,7 @@ impl<'a> RootfsService<'a> {
         let images = self.store.list_rootfs_images()?;
         if let Some(img) = images.iter().find(|r| r.distro == distro && r.version == version && r.architecture == arch) {
             let _ = std::fs::remove_file(&img.path_on_host);
-            self.store.delete_rootfs(&img.id)?;
+            self.store.delete_rootfs(img.id)?;
             Ok(true)
         } else {
             Ok(false)

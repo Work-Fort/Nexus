@@ -103,7 +103,7 @@ pub fn spawn_firecracker(
     kernel_path: &str,
     rootfs_path: &str,
 ) -> Result<(std::process::Child, PathBuf), VmServiceError> {
-    let runtime_dir = vm_runtime_dir(&vm.id);
+    let runtime_dir = vm_runtime_dir(&vm.id.to_string());
     fs::create_dir_all(&runtime_dir)?;
 
     let api_sock = runtime_dir.join("firecracker.sock");

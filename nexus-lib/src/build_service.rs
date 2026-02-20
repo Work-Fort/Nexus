@@ -80,7 +80,7 @@ impl<'a> BuildService<'a> {
     /// 5. Import into btrfs subvolume and register as master image
     /// 6. Update build status
     pub async fn execute_build(&self, build: &Build) {
-        let build_dir = self.builds_dir.join(&build.id);
+        let build_dir = self.builds_dir.join(build.id.to_string());
         let log_path = self.builds_dir.join(format!("{}.log", build.id));
 
         let result = self.run_build_steps(build, &build_dir, &log_path).await;
@@ -88,16 +88,16 @@ impl<'a> BuildService<'a> {
         match result {
             Ok(image_id) => {
                 let _ = self.store.update_build_status(
-                    &build.id,
+                    build.id,
                     BuildStatus::Success,
-                    Some(&image_id),
+                    Some(image_id),
                     Some(&log_path.to_string_lossy()),
                 );
             }
             Err(e) => {
                 tracing::error!(build_id = %build.id, error = %e, "build failed");
                 let _ = self.store.update_build_status(
-                    &build.id,
+                    build.id,
                     BuildStatus::Failed,
                     None,
                     Some(&log_path.to_string_lossy()),
@@ -114,7 +114,7 @@ impl<'a> BuildService<'a> {
         build: &Build,
         build_dir: &Path,
         log_path: &Path,
-    ) -> Result<String, BuildServiceError> {
+    ) -> Result<crate::id::Id, BuildServiceError> {
         let mut log = std::fs::File::create(log_path)
             .map_err(|e| BuildServiceError::BuildFailed(format!("cannot create log: {e}")))?;
 
@@ -182,7 +182,8 @@ impl<'a> BuildService<'a> {
         writeln!(log, "ext4 packaging complete").ok();
 
         // Step 5: Import as master image (create btrfs subvolume with ext4 inside)
-        let image_name = format!("{}-build-{}", build.name, &build.id[..8]);
+        let build_id_suffix = build.id.encode().chars().take(8).collect::<String>();
+        let image_name = format!("{}-build-{}", build.name, build_id_suffix);
         writeln!(log, "Creating master image: {}", image_name).ok();
 
         let staging_dir = build_dir.join("staging");

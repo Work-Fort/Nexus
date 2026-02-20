@@ -216,7 +216,7 @@ impl<'a> KernelService<'a> {
         let kernels = self.store.list_kernels()?;
         if let Some(kernel) = kernels.iter().find(|k| k.version == version && k.architecture == arch) {
             let _ = std::fs::remove_file(&kernel.path_on_host);
-            self.store.delete_kernel(&kernel.id)?;
+            self.store.delete_kernel(kernel.id)?;
             Ok(true)
         } else {
             Ok(false)

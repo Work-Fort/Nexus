@@ -112,7 +112,7 @@ impl<'a> WorkspaceService<'a> {
         let workspace = match self.store.create_workspace(
             ws_name,
             &dest.to_string_lossy(),
-            &image.id,
+            image.id,
         ) {
             Ok(ws) => ws,
             Err(e) => {
@@ -140,7 +140,7 @@ impl<'a> WorkspaceService<'a> {
         }
 
         // Then remove the DB record
-        self.store.delete_workspace(&ws.id)?;
+        self.store.delete_workspace(ws.id)?;
 
         Ok(true)
     }
@@ -160,7 +160,7 @@ impl<'a> WorkspaceService<'a> {
         }
 
         // Then remove the DB record (validates constraints like workspace references)
-        self.store.delete_image(&image.id)?;
+        self.store.delete_image(image.id)?;
 
         Ok(true)
     }
