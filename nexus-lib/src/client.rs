@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn vm_response_deserializes() {
-        let json = r#"{"id":"abc","name":"test","role":"work","state":"created","cid":3,"vcpu_count":1,"mem_size_mib":128,"created_at":1000,"updated_at":1000}"#;
+        let json = r#"{"id":"aaaaaaaaaaaaa","name":"test","role":"work","state":"created","cid":3,"vcpu_count":1,"mem_size_mib":128,"created_at":1000,"updated_at":1000}"#;
         let vm: crate::vm::Vm = serde_json::from_str(json).unwrap();
         assert_eq!(vm.name, "test");
         assert_eq!(vm.cid, 3);
@@ -748,23 +748,30 @@ mod tests {
 
     #[test]
     fn template_response_deserializes() {
-        let json = r#"{"id":"tpl-1","name":"base","version":1,"source_type":"rootfs","source_identifier":"https://example.com/rootfs.tar.gz","created_at":1000,"updated_at":1000}"#;
-        let tpl: crate::template::Template = serde_json::from_str(json).unwrap();
+        use crate::id::Id;
+        let valid_id = Id::from_i64(100).encode();
+        let json = format!(r#"{{"id":"{}","name":"base","version":1,"source_type":"rootfs","source_identifier":"https://example.com/rootfs.tar.gz","created_at":1000,"updated_at":1000}}"#, valid_id);
+        let tpl: crate::template::Template = serde_json::from_str(&json).unwrap();
         assert_eq!(tpl.name, "base");
         assert_eq!(tpl.version, 1);
     }
 
     #[test]
     fn build_response_deserializes() {
-        let json = r#"{"id":"bld-1","template_id":"tpl-1","template_version":1,"name":"base","source_type":"rootfs","source_identifier":"https://example.com/rootfs.tar.gz","status":"building","created_at":1000}"#;
-        let build: crate::template::Build = serde_json::from_str(json).unwrap();
+        use crate::id::Id;
+        let build_id = Id::from_i64(200).encode();
+        let template_id = Id::from_i64(100).encode();
+        let json = format!(r#"{{"id":"{}","template_id":"{}","template_version":1,"name":"base","source_type":"rootfs","source_identifier":"https://example.com/rootfs.tar.gz","status":"building","created_at":1000}}"#, build_id, template_id);
+        let build: crate::template::Build = serde_json::from_str(&json).unwrap();
         assert_eq!(build.status, crate::template::BuildStatus::Building);
     }
 
     #[test]
     fn start_vm_response_deserializes() {
-        let json = r#"{"id":"abc","name":"test","role":"work","state":"running","cid":3,"vcpu_count":1,"mem_size_mib":128,"created_at":1000,"updated_at":1000,"pid":1234,"socket_path":"/run/sock","uds_path":"/run/vsock","console_log_path":"/run/console.log"}"#;
-        let vm: crate::vm::Vm = serde_json::from_str(json).unwrap();
+        use crate::id::Id;
+        let vm_id = Id::from_i64(300).encode();
+        let json = format!(r#"{{"id":"{}","name":"test","role":"work","state":"running","cid":3,"vcpu_count":1,"mem_size_mib":128,"created_at":1000,"updated_at":1000,"pid":1234,"socket_path":"/run/sock","uds_path":"/run/vsock","console_log_path":"/run/console.log"}}"#, vm_id);
+        let vm: crate::vm::Vm = serde_json::from_str(&json).unwrap();
         assert_eq!(vm.state, crate::vm::VmState::Running);
         assert_eq!(vm.pid, Some(1234));
     }
