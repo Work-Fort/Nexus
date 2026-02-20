@@ -138,6 +138,17 @@ pub struct Vm {
     pub agent_connected_at: Option<i64>,
 }
 
+/// A single state transition record from the vm_state_history table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateHistory {
+    pub id: Id,
+    pub vm_id: Id,
+    pub from_state: String,
+    pub to_state: String,
+    pub reason: Option<String>,
+    pub transitioned_at: i64,
+}
+
 impl CreateVmParams {
     pub fn validate(&self) -> Result<(), String> {
         if Id::is_valid_base32(&self.name) {

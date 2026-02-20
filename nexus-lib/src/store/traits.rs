@@ -111,6 +111,9 @@ pub trait VmStore {
     /// Update VM state and record transition in history
     fn update_vm_state(&self, id: Id, new_state: &str, reason: Option<&str>) -> Result<(), StoreError>;
 
+    /// Get state transition history for a VM, ordered by timestamp (newest first).
+    fn get_state_history(&self, vm_id: Id) -> Result<Vec<crate::vm::StateHistory>, StoreError>;
+
     /// Set agent_connected_at timestamp
     fn set_vm_agent_connected_at(&self, id: Id, timestamp: i64) -> Result<(), StoreError>;
 
