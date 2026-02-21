@@ -215,7 +215,7 @@ enum DriveAction {
         #[arg(long)]
         vm: String,
         /// Mount as root device
-        #[arg(long)]
+        #[arg(long, default_value = "true")]
         root: bool,
     },
     /// Detach a drive from its VM
