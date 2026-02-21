@@ -668,7 +668,7 @@ async fn cmd_image(daemon_addr: &str, action: ImageAction) -> ExitCode {
                 Ok(img) => {
                     println!("Imported image \"{}\"", img.name);
                     println!("  Path: {}", img.subvolume_path);
-                    println!("\n  Create a workspace: nexusctl ws create --base {} --name my-ws", img.name);
+                    println!("\n  Create a drive: nexusctl drive create --base {} --name my-drive", img.name);
                     ExitCode::SUCCESS
                 }
                 Err(e) if e.is_connect() => {

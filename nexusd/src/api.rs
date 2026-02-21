@@ -881,8 +881,8 @@ async fn start_vm_handler(
         ),
     };
 
-    // Resolve rootfs path: look for an attached workspace or use a default
-    // For now, require a workspace attached as root device
+    // Resolve rootfs path: look for an attached drive or use a default
+    // For now, require a drive attached as root device
     let rootfs_path = match find_rootfs_for_vm(&state, &vm.id) {
         Ok(path) => path,
         Err(msg) => return (
@@ -960,7 +960,7 @@ async fn start_vm_handler(
     }
 }
 
-/// Find the rootfs ext4 image for a VM by looking for an attached root-device workspace.
+/// Find the rootfs ext4 image for a VM by looking for an attached root-device drive.
 fn find_rootfs_for_vm(state: &AppState, vm_id: &nexus_lib::id::Id) -> Result<String, String> {
     // Look for a drive attached to this VM as root device
     let drives = state.store.list_drives(None)
@@ -1461,9 +1461,9 @@ mod tests {
     fn test_state() -> Arc<AppState> {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let ws_root = dir.path().join("workspaces");
+        let drives_root = dir.path().join("drives");
         let assets_dir = dir.path().join("assets");
-        std::fs::create_dir_all(&ws_root).unwrap();
+        std::fs::create_dir_all(&drives_root).unwrap();
         std::fs::create_dir_all(&assets_dir).unwrap();
         let store = SqliteStore::open_and_init(&db_path).unwrap();
         // Leak the tempdir so it lives long enough
@@ -1473,7 +1473,7 @@ mod tests {
         Arc::new(AppState {
             store: store_arc,
             backend: Box::new(MockBackend),
-            drives_root: ws_root,
+            drives_root,
             assets_dir,
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
             firecracker: nexus_lib::config::FirecrackerConfig::default(),
@@ -1808,7 +1808,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn attach_and_detach_workspace() {
+    async fn attach_and_detach_drive() {
         let state = test_state();
 
         // Create a VM
@@ -1838,7 +1838,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
-        // Create a workspace
+        // Create a drive
         let resp = router(state.clone())
             .oneshot(
                 Request::post("/v1/drives")
@@ -1850,7 +1850,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
-        // Attach workspace to VM
+        // Attach drive to VM
         let attach_body = serde_json::json!({
             "vm_id": vm_id,
             "is_root_device": true
@@ -1866,11 +1866,11 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        let ws: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(ws["vm_id"], vm_id);
-        assert_eq!(ws["is_root_device"], true);
+        let drive: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(drive["vm_id"], vm_id);
+        assert_eq!(drive["is_root_device"], true);
 
-        // Detach workspace
+        // Detach drive
         let resp = router(state.clone())
             .oneshot(
                 Request::post("/v1/drives/attach-ws/detach")
