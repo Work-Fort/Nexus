@@ -92,12 +92,12 @@ pub fn default_config_path() -> PathBuf {
     config_dir.join("nexus.yaml")
 }
 
-/// Returns the default workspaces path: $XDG_DATA_HOME/nexus/workspaces
-pub fn default_workspaces_path() -> PathBuf {
+/// Returns the default drives path: $XDG_DATA_HOME/nexus/drives
+pub fn default_drives_path() -> PathBuf {
     let data_dir = dirs::data_dir()
         .expect("cannot determine XDG_DATA_HOME")
         .join("nexus");
-    data_dir.join("workspaces")
+    data_dir.join("drives")
 }
 
 /// Returns the default database path: $XDG_STATE_HOME/nexus/nexus.db
@@ -183,7 +183,7 @@ api:
     #[test]
     fn storage_config_defaults() {
         let config = Config::default();
-        assert!(config.storage.workspaces.contains("nexus/workspaces"));
+        assert!(config.storage.drives.contains("nexus/drives"));
     }
 
     #[test]
@@ -192,10 +192,10 @@ api:
 api:
   listen: "127.0.0.1:8080"
 storage:
-  workspaces: "/mnt/btrfs/nexus/workspaces"
+  drives: "/mnt/btrfs/nexus/drives"
 "#;
         let config: Config = serde_norway::from_str(yaml).unwrap();
-        assert_eq!(config.storage.workspaces, "/mnt/btrfs/nexus/workspaces");
+        assert_eq!(config.storage.drives, "/mnt/btrfs/nexus/drives");
     }
 
     #[test]

@@ -475,19 +475,19 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                         println!("Stopped:    {}", format_timestamp(ts));
                     }
 
-                    // Look up attached workspace and base image
-                    if let Ok(workspaces) = client.list_workspaces(None).await {
-                        let attached: Vec<_> = workspaces.iter()
-                            .filter(|ws| ws.vm_id.as_ref() == Some(&vm.id))
+                    // Look up attached drives and base image
+                    if let Ok(drives) = client.list_drives(None).await {
+                        let attached: Vec<_> = drives.iter()
+                            .filter(|d| d.vm_id.as_ref() == Some(&vm.id))
                             .collect();
                         if !attached.is_empty() {
                             println!();
-                            for ws in &attached {
-                                let ws_name = ws.name.as_deref().unwrap_or("(unnamed)");
-                                let device_type = if ws.is_root_device { "root" } else { "data" };
-                                print!("Workspace:  {} ({})", ws_name, device_type);
+                            for d in &attached {
+                                let drive_name = d.name.as_deref().unwrap_or("(unnamed)");
+                                let device_type = if d.is_root_device { "root" } else { "data" };
+                                print!("Drive:      {} ({})", drive_name, device_type);
                                 // Resolve base image name
-                                if let Some(ref img_id) = ws.master_image_id {
+                                if let Some(ref img_id) = d.master_image_id {
                                     if let Ok(Some(img)) = client.get_image(&img_id.encode()).await {
                                         print!(" from image \"{}\"", img.name);
                                     }

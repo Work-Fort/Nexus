@@ -20,6 +20,12 @@ pub const SCHEMA_SQL: &str = r#"
 -- 2. Deleting the database file
 -- 3. Restarting the daemon (schema recreates automatically)
 
+-- Schema version tracking
+CREATE TABLE schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 -- Application settings (key-value store)
 CREATE TABLE settings (
     key TEXT PRIMARY KEY,

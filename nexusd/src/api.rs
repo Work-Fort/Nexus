@@ -815,7 +815,7 @@ async fn trigger_build(
             state_clone.store.as_ref(),
             state_clone.backend.as_ref(),
             &state_clone.executor,
-            state_clone.workspaces_root.clone(),
+            state_clone.drives_root.clone(),
             builds_dir,
         );
         svc.execute_build(&build_clone).await;
@@ -1148,10 +1148,10 @@ mod tests {
         FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
         RegisterKernelParams, RegisterRootfsParams, RootfsImage,
     };
-    use nexus_lib::store::traits::{AssetStore, BuildStore, ImageStore, StoreError, VmStore, WorkspaceStore};
+    use nexus_lib::store::traits::{AssetStore, BuildStore, DriveStore, ImageStore, StoreError, VmStore};
     use nexus_lib::template::{Build, BuildStatus, CreateTemplateParams, Template};
     use nexus_lib::vm::{CreateVmParams, Vm};
-    use nexus_lib::workspace::{ImportImageParams, MasterImage, Workspace};
+    use nexus_lib::drive::{Drive, ImportImageParams, MasterImage};
     use tower::ServiceExt;
 
     /// A mock store for testing the health endpoint without SQLite.
@@ -1202,25 +1202,25 @@ mod tests {
         }
     }
 
-    impl WorkspaceStore for MockStore {
-        fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: nexus_lib::id::Id) -> Result<Workspace, StoreError> {
+    impl DriveStore for MockStore {
+        fn create_drive(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: nexus_lib::id::Id) -> Result<Drive, StoreError> {
             unimplemented!()
         }
-        fn list_workspaces(&self, _base: Option<&str>) -> Result<Vec<Workspace>, StoreError> {
+        fn list_drives(&self, _base: Option<&str>) -> Result<Vec<Drive>, StoreError> {
             unimplemented!()
         }
-        fn get_workspace_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Workspace>, StoreError> { unimplemented!() }
-        fn get_workspace_by_name(&self, _name: &str) -> Result<Option<Workspace>, StoreError> { unimplemented!() }
-        fn get_workspace(&self, _name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
+        fn get_drive_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Drive>, StoreError> { unimplemented!() }
+        fn get_drive_by_name(&self, _name: &str) -> Result<Option<Drive>, StoreError> { unimplemented!() }
+        fn get_drive(&self, _name_or_id: &str) -> Result<Option<Drive>, StoreError> {
             unimplemented!()
         }
-        fn delete_workspace(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
+        fn delete_drive(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        fn attach_workspace(&self, _workspace_id: nexus_lib::id::Id, _vm_id: nexus_lib::id::Id, _is_root_device: bool) -> Result<Workspace, StoreError> {
+        fn attach_drive(&self, _drive_id: nexus_lib::id::Id, _vm_id: nexus_lib::id::Id, _is_root_device: bool) -> Result<Drive, StoreError> {
             unimplemented!()
         }
-        fn detach_workspace(&self, _workspace_id: nexus_lib::id::Id) -> Result<Workspace, StoreError> {
+        fn detach_drive(&self, _drive_id: nexus_lib::id::Id) -> Result<Drive, StoreError> {
             unimplemented!()
         }
     }
@@ -1316,25 +1316,25 @@ mod tests {
         }
     }
 
-    impl WorkspaceStore for FailingStore {
-        fn create_workspace(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: nexus_lib::id::Id) -> Result<Workspace, StoreError> {
+    impl DriveStore for FailingStore {
+        fn create_drive(&self, _name: Option<&str>, _subvolume_path: &str, _master_image_id: nexus_lib::id::Id) -> Result<Drive, StoreError> {
             unimplemented!()
         }
-        fn list_workspaces(&self, _base: Option<&str>) -> Result<Vec<Workspace>, StoreError> {
+        fn list_drives(&self, _base: Option<&str>) -> Result<Vec<Drive>, StoreError> {
             unimplemented!()
         }
-        fn get_workspace_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Workspace>, StoreError> { unimplemented!() }
-        fn get_workspace_by_name(&self, _name: &str) -> Result<Option<Workspace>, StoreError> { unimplemented!() }
-        fn get_workspace(&self, _name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
+        fn get_drive_by_id(&self, _id: nexus_lib::id::Id) -> Result<Option<Drive>, StoreError> { unimplemented!() }
+        fn get_drive_by_name(&self, _name: &str) -> Result<Option<Drive>, StoreError> { unimplemented!() }
+        fn get_drive(&self, _name_or_id: &str) -> Result<Option<Drive>, StoreError> {
             unimplemented!()
         }
-        fn delete_workspace(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
+        fn delete_drive(&self, _id: nexus_lib::id::Id) -> Result<bool, StoreError> {
             unimplemented!()
         }
-        fn attach_workspace(&self, _workspace_id: nexus_lib::id::Id, _vm_id: nexus_lib::id::Id, _is_root_device: bool) -> Result<Workspace, StoreError> {
+        fn attach_drive(&self, _drive_id: nexus_lib::id::Id, _vm_id: nexus_lib::id::Id, _is_root_device: bool) -> Result<Drive, StoreError> {
             unimplemented!()
         }
-        fn detach_workspace(&self, _workspace_id: nexus_lib::id::Id) -> Result<Workspace, StoreError> {
+        fn detach_drive(&self, _drive_id: nexus_lib::id::Id) -> Result<Drive, StoreError> {
             unimplemented!()
         }
     }
@@ -1385,7 +1385,7 @@ mod tests {
         Arc::new(AppState {
             store: store_arc,
             backend: Box::new(MockBackend),
-            workspaces_root: std::path::PathBuf::from("/tmp/mock-ws"),
+            drives_root: std::path::PathBuf::from("/tmp/mock-ws"),
             assets_dir: std::path::PathBuf::from("/tmp/mock-assets"),
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
             firecracker: nexus_lib::config::FirecrackerConfig::default(),
@@ -1438,12 +1438,12 @@ mod tests {
         assert!(json.get("database").is_none() || json["database"].is_null());
     }
 
-    use nexus_lib::backend::traits::{BackendError, SubvolumeInfo, WorkspaceBackend};
+    use nexus_lib::backend::traits::{BackendError, DriveBackend, SubvolumeInfo};
 
     /// A no-op backend for API unit tests (no real btrfs needed).
     struct MockBackend;
 
-    impl WorkspaceBackend for MockBackend {
+    impl DriveBackend for MockBackend {
         fn import_image(&self, _source: &std::path::Path, dest: &std::path::Path) -> Result<SubvolumeInfo, BackendError> {
             Ok(SubvolumeInfo { path: dest.to_path_buf(), read_only: true, size_bytes: None })
         }
@@ -1473,7 +1473,7 @@ mod tests {
         Arc::new(AppState {
             store: store_arc,
             backend: Box::new(MockBackend),
-            workspaces_root: ws_root,
+            drives_root: ws_root,
             assets_dir,
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
             firecracker: nexus_lib::config::FirecrackerConfig::default(),
@@ -1841,7 +1841,7 @@ mod tests {
         // Create a workspace
         let resp = router(state.clone())
             .oneshot(
-                Request::post("/v1/workspaces")
+                Request::post("/v1/drives")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"base": "attach-img", "name": "attach-ws"}"#))
                     .unwrap(),
@@ -1857,7 +1857,7 @@ mod tests {
         });
         let resp = router(state.clone())
             .oneshot(
-                Request::post("/v1/workspaces/attach-ws/attach")
+                Request::post("/v1/drives/attach-ws/attach")
                     .header("content-type", "application/json")
                     .body(Body::from(attach_body.to_string()))
                     .unwrap(),
@@ -1873,7 +1873,7 @@ mod tests {
         // Detach workspace
         let resp = router(state.clone())
             .oneshot(
-                Request::post("/v1/workspaces/attach-ws/detach")
+                Request::post("/v1/drives/attach-ws/detach")
                     .body(Body::empty())
                     .unwrap(),
             )

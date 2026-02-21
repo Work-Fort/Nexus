@@ -637,19 +637,19 @@ impl ImageStore for SqliteStore {
             None => return Ok(false),
         };
 
-        // Check for workspaces referencing this image
+        // Check for drives referencing this image
         let conn = self.conn.lock().unwrap();
         let ws_count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM workspaces WHERE master_image_id = ?1",
+                "SELECT COUNT(*) FROM drives WHERE master_image_id = ?1",
                 [image.id],
                 |row| row.get(0),
             )
-            .map_err(|e| StoreError::Query(format!("cannot check workspace references: {e}")))?;
+            .map_err(|e| StoreError::Query(format!("cannot check drive references: {e}")))?;
 
         if ws_count > 0 {
             return Err(StoreError::Conflict(format!(
-                "cannot delete image '{}': {} workspace(s) reference it, delete them first",
+                "cannot delete image '{}': {} drive(s) reference it, delete them first",
                 image.name, ws_count
             )));
         }
@@ -1458,7 +1458,7 @@ mod tests {
     use super::*;
     use crate::template::{BuildStatus, CreateTemplateParams};
     use crate::vm::VmRole;
-    use crate::workspace::ImportImageParams;
+    use crate::drive::ImportImageParams;
 
     fn test_store() -> SqliteStore {
         // Use a named temp file so the path stays valid for the store lifetime.
@@ -1489,10 +1489,11 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        // Expected tables: schema_meta, settings, vms, master_images, workspaces,
-        // providers, kernels, rootfs_images, firecracker_versions, templates, builds,
-        // vm_boot_history, vm_state_history = 13 tables
-        assert_eq!(status.table_count, 13, "expected 13 tables, got {}", status.table_count);
+        // Expected tables: schema_meta, settings, tags, vms, master_images, drives,
+        // vm_boot_history, vm_state_history, routes, vsock_services, bridges, vm_network,
+        // firewall_rules, vm_tags, drive_tags, templates, builds, providers, kernels,
+        // rootfs_images, firecracker_versions = 21 tables
+        assert_eq!(status.table_count, 21, "expected 21 tables, got {}", status.table_count);
     }
 
     #[test]
@@ -1506,7 +1507,7 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 13);
+        assert_eq!(status.table_count, 21);
     }
 
     #[test]
@@ -1570,7 +1571,7 @@ mod tests {
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 13, "should have all tables after recreate");
+        assert_eq!(status.table_count, 21, "should have all tables after recreate");
 
         let conn = store.conn.lock().unwrap();
         let version: String = conn
@@ -1857,11 +1858,11 @@ mod tests {
             name: "base-agent".to_string(),
             source_path: "/tmp/rootfs".to_string(),
         };
-        let img = store.create_image(&params, "/data/workspaces/@base-agent").unwrap();
+        let img = store.create_image(&params, "/data/drives/@base-agent").unwrap();
 
         assert!(img.id.as_i64() > 0);
         assert_eq!(img.name, "base-agent");
-        assert_eq!(img.subvolume_path, "/data/workspaces/@base-agent");
+        assert_eq!(img.subvolume_path, "/data/drives/@base-agent");
 
         let found = store.get_image("base-agent").unwrap().unwrap();
         assert_eq!(found.id, img.id);
@@ -1928,7 +1929,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_image_with_workspaces_fails() {
+    fn delete_image_with_drives_fails() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
@@ -1938,7 +1939,7 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        store.create_workspace(Some("ws-1"), "/data/ws-1", img.id).unwrap();
+        store.create_drive(Some("ws-1"), "/data/ws-1", img.id).unwrap();
 
         let base_img = store.get_image("base").unwrap().unwrap();
         let result = store.delete_image(base_img.id);
@@ -1946,7 +1947,7 @@ mod tests {
     }
 
     #[test]
-    fn create_workspace_and_get_by_name() {
+    fn create_drive_and_get_by_name() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
@@ -1956,18 +1957,18 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        let ws = store.create_workspace(Some("my-ws"), "/data/my-ws", img.id).unwrap();
+        let ws = store.create_drive(Some("my-ws"), "/data/my-ws", img.id).unwrap();
 
         assert!(ws.id.as_i64() != 0);
         assert_eq!(ws.name, Some("my-ws".to_string()));
         assert_eq!(ws.master_image_id, Some(img.id.clone()));
 
-        let found = store.get_workspace("my-ws").unwrap().unwrap();
+        let found = store.get_drive("my-ws").unwrap().unwrap();
         assert_eq!(found.id, ws.id);
     }
 
     #[test]
-    fn create_workspace_auto_generates_name_when_none() {
+    fn create_drive_auto_generates_name_when_none() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
@@ -1977,12 +1978,12 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        let ws = store.create_workspace(None, "/data/anon-ws", img.id).unwrap();
+        let ws = store.create_drive(None, "/data/anon-ws", img.id).unwrap();
         assert!(ws.name.is_none());
     }
 
     #[test]
-    fn list_workspaces_returns_all() {
+    fn list_drives_returns_all() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
@@ -1992,15 +1993,15 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        store.create_workspace(Some("ws-a"), "/data/ws-a", img.id).unwrap();
-        store.create_workspace(Some("ws-b"), "/data/ws-b", img.id).unwrap();
+        store.create_drive(Some("ws-a"), "/data/ws-a", img.id).unwrap();
+        store.create_drive(Some("ws-b"), "/data/ws-b", img.id).unwrap();
 
-        let wss = store.list_workspaces(None).unwrap();
+        let wss = store.list_drives(None).unwrap();
         assert_eq!(wss.len(), 2);
     }
 
     #[test]
-    fn list_workspaces_filter_by_base() {
+    fn list_drives_filter_by_base() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
@@ -2014,16 +2015,16 @@ mod tests {
             "/data/base-b",
         ).unwrap();
 
-        store.create_workspace(Some("ws-a"), "/data/ws-a", img_a.id).unwrap();
-        store.create_workspace(Some("ws-b"), "/data/ws-b", img_b.id).unwrap();
+        store.create_drive(Some("ws-a"), "/data/ws-a", img_a.id).unwrap();
+        store.create_drive(Some("ws-b"), "/data/ws-b", img_b.id).unwrap();
 
-        let wss = store.list_workspaces(Some("base-a")).unwrap();
+        let wss = store.list_drives(Some("base-a")).unwrap();
         assert_eq!(wss.len(), 1);
         assert_eq!(wss[0].name, Some("ws-a".to_string()));
     }
 
     #[test]
-    fn delete_workspace_removes_record() {
+    fn delete_drive_removes_record() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
@@ -2033,21 +2034,21 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        store.create_workspace(Some("del-ws"), "/data/del-ws", img.id).unwrap();
+        store.create_drive(Some("del-ws"), "/data/del-ws", img.id).unwrap();
 
-        let ws_to_delete = store.get_workspace("del-ws").unwrap().unwrap();
-        let deleted = store.delete_workspace(ws_to_delete.id).unwrap();
+        let ws_to_delete = store.get_drive("del-ws").unwrap().unwrap();
+        let deleted = store.delete_drive(ws_to_delete.id).unwrap();
         assert!(deleted);
-        assert!(store.get_workspace("del-ws").unwrap().is_none());
+        assert!(store.get_drive("del-ws").unwrap().is_none());
     }
 
     #[test]
-    fn delete_workspace_not_found_returns_false() {
+    fn delete_drive_not_found_returns_false() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
-        assert!(!store.delete_workspace(crate::id::Id::from_i64(99999)).unwrap());
+        assert!(!store.delete_drive(crate::id::Id::from_i64(99999)).unwrap());
     }
 
     #[test]
@@ -2459,7 +2460,7 @@ mod tests {
     }
 
     #[test]
-    fn attach_workspace_to_vm() {
+    fn attach_drive_to_vm() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
@@ -2476,17 +2477,17 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        let ws = store.create_workspace(Some("ws-for-vm"), "/data/ws-for-vm", img.id).unwrap();
+        let ws = store.create_drive(Some("ws-for-vm"), "/data/ws-for-vm", img.id).unwrap();
         assert!(ws.vm_id.is_none());
 
-        let attached = store.attach_workspace(ws.id, vm.id, true).unwrap();
+        let attached = store.attach_drive(ws.id, vm.id, true).unwrap();
         assert_eq!(attached.vm_id, Some(vm.id));
         assert!(attached.is_root_device);
         assert!(attached.attached_at.is_some());
     }
 
     #[test]
-    fn detach_workspace_from_vm() {
+    fn detach_drive_from_vm() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let store = SqliteStore::open_and_init(&db_path).unwrap();
@@ -2503,10 +2504,10 @@ mod tests {
             "/data/base",
         ).unwrap();
 
-        let ws = store.create_workspace(Some("ws-detach"), "/data/ws-detach", img.id).unwrap();
-        store.attach_workspace(ws.id, vm.id, true).unwrap();
+        let ws = store.create_drive(Some("ws-detach"), "/data/ws-detach", img.id).unwrap();
+        store.attach_drive(ws.id, vm.id, true).unwrap();
 
-        let detached = store.detach_workspace(ws.id).unwrap();
+        let detached = store.detach_drive(ws.id).unwrap();
         assert!(detached.vm_id.is_none());
         assert!(!detached.is_root_device);
         assert!(detached.detached_at.is_some());
