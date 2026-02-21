@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
-use crate::backend::traits::WorkspaceBackend;
+use crate::backend::traits::DriveBackend;
+use crate::drive::ImportImageParams;
 use crate::embedded::{GUEST_AGENT_BINARY, GUEST_AGENT_SYSTEMD_UNIT, PLACEHOLDER_IMAGE_YAML};
 use crate::pipeline::{ChecksumSet, PipelineExecutor, PipelineStage};
 use crate::store::traits::StoreError;
 use crate::template::{Build, BuildStatus};
-use crate::workspace::ImportImageParams;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tracing;
@@ -40,25 +40,25 @@ impl From<StoreError> for BuildServiceError {
 /// Orchestrates build operations: download, extract, overlay, package, register.
 ///
 /// Uses `PipelineExecutor` from Step 6 to download rootfs tarballs (streaming
-/// SHA256 during transport). Uses `WorkspaceBackend` to create btrfs subvolumes
+/// SHA256 during transport). Uses `DriveBackend` to create btrfs subvolumes
 /// for master images. Uses `BuildStore` + `ImageStore` sub-traits for persistence.
 pub struct BuildService<'a> {
     store: &'a (dyn crate::store::traits::StateStore + Send + Sync),
-    backend: &'a dyn WorkspaceBackend,
+    backend: &'a dyn DriveBackend,
     executor: &'a PipelineExecutor,
-    workspaces_root: PathBuf,
+    drives_root: PathBuf,
     builds_dir: PathBuf,
 }
 
 impl<'a> BuildService<'a> {
     pub fn new(
         store: &'a (dyn crate::store::traits::StateStore + Send + Sync),
-        backend: &'a dyn WorkspaceBackend,
+        backend: &'a dyn DriveBackend,
         executor: &'a PipelineExecutor,
-        workspaces_root: PathBuf,
+        drives_root: PathBuf,
         builds_dir: PathBuf,
     ) -> Self {
-        BuildService { store, backend, executor, workspaces_root, builds_dir }
+        BuildService { store, backend, executor, drives_root, builds_dir }
     }
 
     /// Trigger a build: create the build record, return it immediately.
@@ -258,8 +258,8 @@ impl<'a> BuildService<'a> {
         std::fs::copy(&ext4_path, staging_dir.join("rootfs.ext4"))
             .map_err(|e| BuildServiceError::BuildFailed(format!("cannot copy ext4 to staging: {e}")))?;
 
-        // Use the workspace backend to create btrfs subvolume + mark read-only
-        let subvol_dest = self.workspaces_root.join(format!("@{}", image_name));
+        // Use the drive backend to create btrfs subvolume + mark read-only
+        let subvol_dest = self.drives_root.join(format!("@{}", image_name));
         self.backend.import_image(&staging_dir, &subvol_dest)
             .map_err(|e| BuildServiceError::BuildFailed(format!("cannot import image: {e}")))?;
 
