@@ -1,36 +1,36 @@
 // SPDX-License-Identifier: GPL-2.0-only
-use crate::backend::traits::{BackendError, SubvolumeInfo, WorkspaceBackend};
+use crate::backend::traits::{BackendError, DriveBackend, SubvolumeInfo};
 use std::path::{Path, PathBuf};
 
-/// btrfs-backed implementation of WorkspaceBackend.
+/// btrfs-backed implementation of DriveBackend.
 ///
 /// Uses libbtrfsutil for subvolume operations. Common operations
 /// (create, snapshot) work unprivileged — no CAP_SYS_ADMIN required.
 pub struct BtrfsBackend {
-    /// Root directory for all workspace subvolumes.
-    /// Typically $XDG_DATA_HOME/nexus/workspaces/
-    workspaces_root: PathBuf,
+    /// Root directory for all drive subvolumes.
+    /// Typically $XDG_DATA_HOME/nexus/drives/
+    drives_root: PathBuf,
 }
 
 impl BtrfsBackend {
-    pub fn new(workspaces_root: PathBuf) -> Result<Self, BackendError> {
-        // Ensure the workspaces root directory exists
-        std::fs::create_dir_all(&workspaces_root).map_err(|e| {
+    pub fn new(drives_root: PathBuf) -> Result<Self, BackendError> {
+        // Ensure the drives root directory exists
+        std::fs::create_dir_all(&drives_root).map_err(|e| {
             BackendError::Io(format!(
-                "cannot create workspaces directory {}: {e}",
-                workspaces_root.display()
+                "cannot create drives directory {}: {e}",
+                drives_root.display()
             ))
         })?;
 
-        Ok(BtrfsBackend { workspaces_root })
+        Ok(BtrfsBackend { drives_root })
     }
 
-    pub fn workspaces_root(&self) -> &Path {
-        &self.workspaces_root
+    pub fn drives_root(&self) -> &Path {
+        &self.drives_root
     }
 }
 
-impl WorkspaceBackend for BtrfsBackend {
+impl DriveBackend for BtrfsBackend {
     fn import_image(&self, source: &Path, dest: &Path) -> Result<SubvolumeInfo, BackendError> {
         // Validate source exists
         if !source.exists() {

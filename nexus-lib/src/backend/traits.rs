@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 use std::path::{Path, PathBuf};
 
-/// Errors from workspace backend operations.
+/// Errors from drive backend operations.
 #[derive(Debug)]
 pub enum BackendError {
     /// The source path does not exist or is inaccessible
@@ -36,17 +36,17 @@ pub struct SubvolumeInfo {
     pub size_bytes: Option<u64>,
 }
 
-/// Filesystem-agnostic trait for workspace storage operations.
+/// Filesystem-agnostic trait for drive storage operations.
 ///
 /// The btrfs implementation uses subvolumes and CoW snapshots.
 /// Other implementations could use directory copies, ZFS, OverlayFS, etc.
 ///
 /// This trait is `Send + Sync` so it can be stored in `AppState` and
 /// shared across async tasks.
-pub trait WorkspaceBackend: Send + Sync {
+pub trait DriveBackend: Send + Sync {
     /// Import a directory as a new master image subvolume.
     ///
-    /// 1. Creates a new subvolume at `dest` (under the workspaces root)
+    /// 1. Creates a new subvolume at `dest` (under the drives root)
     /// 2. Copies contents from `source` into the subvolume
     /// 3. Marks the subvolume as read-only
     ///
