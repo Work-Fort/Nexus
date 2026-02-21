@@ -115,7 +115,7 @@ async fn main() {
         }
     };
 
-    let assets_dir = nexus_lib::config::default_assets_dir();
+    let assets_dir = std::path::PathBuf::from(&config.storage.assets);
     let executor = PipelineExecutor::new();
 
     // Wrap store in Arc for sharing between VsockManager and AppState

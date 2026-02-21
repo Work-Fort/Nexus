@@ -56,16 +56,17 @@ pub struct Config {
 #[serde(default)]
 pub struct StorageConfig {
     pub drives: String,
+    pub assets: String,
 }
 
 impl Default for StorageConfig {
     fn default() -> Self {
         let data_dir = dirs::data_dir()
             .expect("cannot determine XDG_DATA_HOME")
-            .join("nexus")
-            .join("drives");
+            .join("nexus");
         StorageConfig {
-            drives: data_dir.to_string_lossy().to_string(),
+            drives: data_dir.join("drives").to_string_lossy().to_string(),
+            assets: data_dir.join("assets").to_string_lossy().to_string(),
         }
     }
 }
