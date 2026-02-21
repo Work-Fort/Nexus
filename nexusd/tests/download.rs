@@ -89,3 +89,73 @@ async fn kernel_download_register_list_verify() {
     let kernels: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert!(kernels.is_empty(), "kernel list should be empty after removal");
 }
+
+#[tokio::test]
+async fn rootfs_download_register_list() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    ).await;
+
+    let client = reqwest::Client::new();
+    let base = format!("http://{}", daemon.addr);
+
+    // Pre-check: no rootfs images
+    let resp = client.get(format!("{base}/v1/rootfs-images")).send().await.unwrap();
+    let images: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(images.is_empty());
+
+    // Build fake rootfs and start mock server
+    let rootfs = download_fixtures::FakeRootfs::new("alpine", "3.99.0");
+    let mock_server = wiremock::MockServer::start().await;
+    download_fixtures::serve_rootfs_from_mock(&mock_server, &rootfs).await;
+
+    // Configure provider: mock server, HTTP without TLS, simple checksum pipeline
+    let pipeline = serde_json::to_string(&vec![
+        serde_json::json!({"transport": "http", "credentials": {}, "host": "", "encrypted": false}),
+        serde_json::json!({"checksum": "SHA256"}),
+    ]).unwrap();
+    download_fixtures::configure_provider_for_mock(
+        &daemon.db_path, "rootfs", &mock_server.uri(), &pipeline,
+    );
+
+    // 1. Download rootfs via REST API
+    let resp = client.post(format!("{base}/v1/rootfs-images/download"))
+        .json(&serde_json::json!({"distro": "alpine", "version": "3.99.0"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 201, "rootfs download should return 201 Created");
+    let image: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(image["distro"], "alpine");
+    assert_eq!(image["version"], "3.99.0");
+    assert_eq!(image["architecture"], "x86_64");
+
+    // Comprehensive verification: file exists, correct SHA256
+    let path = image["path_on_host"].as_str().unwrap();
+    let rootfs_path = std::path::Path::new(path);
+    assert!(rootfs_path.exists(), "rootfs tarball must exist at expected path");
+    let metadata = std::fs::metadata(rootfs_path).unwrap();
+    assert!(metadata.len() > 0, "rootfs tarball must not be empty");
+    // Verify SHA256 matches expected value
+    let actual_sha256 = image["sha256"].as_str().unwrap();
+    assert_eq!(actual_sha256, rootfs.tarball_sha256, "rootfs SHA256 must match expected value");
+
+    // 2. Verify list endpoint
+    let resp = client.get(format!("{base}/v1/rootfs-images")).send().await.unwrap();
+    let images: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0]["distro"], "alpine");
+    assert_eq!(images[0]["version"], "3.99.0");
+
+    // 3. Verify duplicate download rejected
+    let resp = client.post(format!("{base}/v1/rootfs-images/download"))
+        .json(&serde_json::json!({"distro": "alpine", "version": "3.99.0"}))
+        .send().await.unwrap();
+    assert_ne!(resp.status(), 201);
+
+    // 4. Remove and verify
+    let resp = client.delete(format!("{base}/v1/rootfs-images/alpine/3.99.0"))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 204);
+    let resp = client.get(format!("{base}/v1/rootfs-images")).send().await.unwrap();
+    let images: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(images.is_empty());
+}
