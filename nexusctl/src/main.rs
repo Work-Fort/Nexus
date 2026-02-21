@@ -393,13 +393,13 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                     }
                     // Print table header
                     println!(
-                        "{:<20} {:<10} {:<10} {:<6} {:<8} {:<6}",
-                        "NAME", "ROLE", "STATE", "VCPU", "MEM", "CID"
+                        "{:<13} {:<20} {:<10} {:<10} {:<6} {:<8} {:<6}",
+                        "ID", "NAME", "ROLE", "STATE", "VCPU", "MEM", "CID"
                     );
                     for vm in &vms {
                         println!(
-                            "{:<20} {:<10} {:<10} {:<6} {:<8} {:<6}",
-                            vm.name, vm.role, vm.state, vm.vcpu_count,
+                            "{:<13} {:<20} {:<10} {:<10} {:<6} {:<8} {:<6}",
+                            vm.id, vm.name, vm.role, vm.state, vm.vcpu_count,
                             format!("{}M", vm.mem_size_mib), vm.cid,
                         );
                     }
@@ -643,9 +643,9 @@ async fn cmd_image(daemon_addr: &str, action: ImageAction) -> ExitCode {
                         println!("No images found.");
                         return ExitCode::SUCCESS;
                     }
-                    println!("{:<20} {:<50}", "NAME", "PATH");
+                    println!("{:<13} {:<20} {:<50}", "ID", "NAME", "PATH");
                     for img in &imgs {
-                        println!("{:<20} {:<50}", img.name, img.subvolume_path);
+                        println!("{:<13} {:<20} {:<50}", img.id, img.name, img.subvolume_path);
                     }
                     ExitCode::SUCCESS
                 }
@@ -749,11 +749,11 @@ async fn cmd_drive(daemon_addr: &str, action: DriveAction) -> ExitCode {
                         println!("No drives found.");
                         return ExitCode::SUCCESS;
                     }
-                    println!("{:<20} {:<50} {:<10}", "NAME", "PATH", "READ-ONLY");
+                    println!("{:<13} {:<20} {:<50} {:<10}", "ID", "NAME", "PATH", "READ-ONLY");
                     for drive in &drives {
                         let name = drive.name.as_deref().unwrap_or("(unnamed)");
                         let ro = if drive.is_read_only { "yes" } else { "no" };
-                        println!("{:<20} {:<50} {:<10}", name, drive.subvolume_path, ro);
+                        println!("{:<13} {:<20} {:<50} {:<10}", drive.id, name, drive.subvolume_path, ro);
                     }
                     ExitCode::SUCCESS
                 }
