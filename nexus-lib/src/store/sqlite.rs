@@ -996,7 +996,7 @@ impl AssetStore for SqliteStore {
             ],
         ).map_err(|e| StoreError::Query(e.to_string()))?;
         drop(conn);
-        self.get_kernel(&id.encode(), None)?.ok_or_else(|| StoreError::Query("kernel not found after insert".to_string()))
+        self.get_kernel(&params.version, Some(&params.architecture))?.ok_or_else(|| StoreError::Query("kernel not found after insert".to_string()))
     }
 
     fn list_kernels(&self) -> Result<Vec<Kernel>, StoreError> {
@@ -1053,7 +1053,7 @@ impl AssetStore for SqliteStore {
             ],
         ).map_err(|e| StoreError::Query(e.to_string()))?;
         drop(conn);
-        self.get_rootfs(&id.encode(), None)?.ok_or_else(|| StoreError::Query("rootfs not found after insert".to_string()))
+        self.get_rootfs(&params.version, Some(&params.architecture))?.ok_or_else(|| StoreError::Query("rootfs not found after insert".to_string()))
     }
 
     fn list_rootfs_images(&self) -> Result<Vec<RootfsImage>, StoreError> {
@@ -1110,7 +1110,7 @@ impl AssetStore for SqliteStore {
             ],
         ).map_err(|e| StoreError::Query(e.to_string()))?;
         drop(conn);
-        self.get_firecracker(&id.encode(), None)?.ok_or_else(|| StoreError::Query("firecracker not found after insert".to_string()))
+        self.get_firecracker(&params.version, Some(&params.architecture))?.ok_or_else(|| StoreError::Query("firecracker not found after insert".to_string()))
     }
 
     fn list_firecracker_versions(&self) -> Result<Vec<FirecrackerVersion>, StoreError> {
@@ -2605,5 +2605,59 @@ mod tests {
         assert_eq!(history[0].from_state, "created");
         assert_eq!(history[0].to_state, "running");
         assert_eq!(history[0].reason, Some("VM started".to_string()));
+    }
+
+    #[test]
+    fn register_firecracker_succeeds() {
+        let store = test_store();
+        let params = RegisterFirecrackerParams {
+            version: "1.12.0".to_string(),
+            architecture: "x86_64".to_string(),
+            path_on_host: "/tmp/firecracker-1.12.0".to_string(),
+            sha256: "abc123".to_string(),
+            file_size: 1024,
+            source_url: "https://example.com/firecracker-1.12.0".to_string(),
+        };
+        let fc = store.register_firecracker(&params).unwrap();
+        assert_eq!(fc.version, "1.12.0");
+        assert_eq!(fc.architecture, "x86_64");
+        assert_eq!(fc.path_on_host, "/tmp/firecracker-1.12.0");
+    }
+
+    #[test]
+    fn register_kernel_succeeds() {
+        let store = test_store();
+        let params = RegisterKernelParams {
+            version: "6.1.0".to_string(),
+            architecture: "x86_64".to_string(),
+            path_on_host: "/tmp/vmlinux-6.1.0".to_string(),
+            sha256: "def456".to_string(),
+            pgp_verified: false,
+            file_size: 2048,
+            source_url: "https://example.com/vmlinux-6.1.0".to_string(),
+        };
+        let kernel = store.register_kernel(&params).unwrap();
+        assert_eq!(kernel.version, "6.1.0");
+        assert_eq!(kernel.architecture, "x86_64");
+        assert_eq!(kernel.path_on_host, "/tmp/vmlinux-6.1.0");
+    }
+
+    #[test]
+    fn register_rootfs_succeeds() {
+        let store = test_store();
+        let params = RegisterRootfsParams {
+            distro: "alpine".to_string(),
+            version: "3.19.0".to_string(),
+            architecture: "x86_64".to_string(),
+            path_on_host: "/tmp/alpine-3.19.0.tar.gz".to_string(),
+            sha256: "ghi789".to_string(),
+            file_size: 4096,
+            source_url: "https://example.com/alpine-3.19.0.tar.gz".to_string(),
+        };
+        let rootfs = store.register_rootfs(&params).unwrap();
+        assert_eq!(rootfs.version, "3.19.0");
+        assert_eq!(rootfs.architecture, "x86_64");
+        assert_eq!(rootfs.distro, "alpine");
+        assert_eq!(rootfs.path_on_host, "/tmp/alpine-3.19.0.tar.gz");
     }
 }
