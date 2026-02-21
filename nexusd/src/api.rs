@@ -2,8 +2,10 @@
 use axum::{Json, Router, routing::{delete, get, post}};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use nexus_lib::backend::traits::WorkspaceBackend;
+use nexus_lib::backend::traits::DriveBackend;
 use nexus_lib::config::FirecrackerConfig;
+use nexus_lib::drive::{CreateDriveParams, ImportImageParams};
+use nexus_lib::drive_service::{DriveService, DriveServiceError};
 use nexus_lib::firecracker_service::FirecrackerService;
 use nexus_lib::kernel_service::KernelService;
 use nexus_lib::pipeline::PipelineExecutor;
@@ -13,8 +15,6 @@ use nexus_lib::template::CreateTemplateParams;
 use nexus_lib::vm::{CreateVmParams, VmState};
 use nexus_lib::vm_service;
 use nexus_lib::vsock_manager::VsockManager;
-use nexus_lib::workspace::{ImportImageParams, CreateWorkspaceParams};
-use nexus_lib::workspace_service::{WorkspaceService, WorkspaceServiceError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -54,8 +54,8 @@ pub struct TrackedProcess {
 /// Application state shared across handlers.
 pub struct AppState {
     pub store: Arc<dyn StateStore + Send + Sync>,
-    pub backend: Box<dyn WorkspaceBackend>,
-    pub workspaces_root: PathBuf,
+    pub backend: Box<dyn DriveBackend>,
+    pub drives_root: PathBuf,
     pub assets_dir: PathBuf,
     pub executor: PipelineExecutor,
     pub firecracker: FirecrackerConfig,
@@ -176,18 +176,18 @@ async fn import_image(
     State(state): State<Arc<AppState>>,
     Json(params): Json<ImportImageParams>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let svc = WorkspaceService::new(
+    let svc = DriveService::new(
         state.store.as_ref(),
         state.backend.as_ref(),
-        state.workspaces_root.clone(),
+        state.drives_root.clone(),
     );
     match svc.import_image(&params) {
         Ok(img) => (StatusCode::CREATED, Json(serde_json::to_value(img).unwrap())),
-        Err(WorkspaceServiceError::Store(StoreError::InvalidInput(msg))) => (
+        Err(DriveServiceError::Store(StoreError::InvalidInput(msg))) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": msg})),
         ),
-        Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
+        Err(DriveServiceError::Store(StoreError::Conflict(msg))) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),
         ),
@@ -201,10 +201,10 @@ async fn import_image(
 async fn list_images(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let svc = WorkspaceService::new(
+    let svc = DriveService::new(
         state.store.as_ref(),
         state.backend.as_ref(),
-        state.workspaces_root.clone(),
+        state.drives_root.clone(),
     );
     match svc.list_images() {
         Ok(imgs) => (StatusCode::OK, Json(serde_json::to_value(imgs).unwrap())),
@@ -219,10 +219,10 @@ async fn get_image(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let svc = WorkspaceService::new(
+    let svc = DriveService::new(
         state.store.as_ref(),
         state.backend.as_ref(),
-        state.workspaces_root.clone(),
+        state.drives_root.clone(),
     );
     match svc.get_image(&name_or_id) {
         Ok(Some(img)) => (StatusCode::OK, Json(serde_json::to_value(img).unwrap())),
@@ -283,26 +283,26 @@ async fn delete_image_handler(
     }
 }
 
-async fn create_workspace_handler(
+async fn create_drive_handler(
     State(state): State<Arc<AppState>>,
-    Json(params): Json<CreateWorkspaceParams>,
+    Json(params): Json<CreateDriveParams>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let svc = WorkspaceService::new(
+    let svc = DriveService::new(
         state.store.as_ref(),
         state.backend.as_ref(),
-        state.workspaces_root.clone(),
+        state.drives_root.clone(),
     );
-    match svc.create_workspace(&params.base, params.name.as_deref()) {
-        Ok(ws) => (StatusCode::CREATED, Json(serde_json::to_value(ws).unwrap())),
-        Err(WorkspaceServiceError::NotFound(msg)) => (
+    match svc.create_drive(&params.base, params.name.as_deref()) {
+        Ok(drive) => (StatusCode::CREATED, Json(serde_json::to_value(drive).unwrap())),
+        Err(DriveServiceError::NotFound(msg)) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": msg})),
         ),
-        Err(WorkspaceServiceError::Store(StoreError::InvalidInput(msg))) => (
+        Err(DriveServiceError::Store(StoreError::InvalidInput(msg))) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": msg})),
         ),
-        Err(WorkspaceServiceError::Store(StoreError::Conflict(msg))) => (
+        Err(DriveServiceError::Store(StoreError::Conflict(msg))) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),
         ),
@@ -313,18 +313,18 @@ async fn create_workspace_handler(
     }
 }
 
-async fn list_workspaces(
+async fn list_drives(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let base = query.get("base").map(|s| s.as_str());
-    let svc = WorkspaceService::new(
+    let svc = DriveService::new(
         state.store.as_ref(),
         state.backend.as_ref(),
-        state.workspaces_root.clone(),
+        state.drives_root.clone(),
     );
-    match svc.list_workspaces(base) {
-        Ok(wss) => (StatusCode::OK, Json(serde_json::to_value(wss).unwrap())),
+    match svc.list_drives(base) {
+        Ok(drives) => (StatusCode::OK, Json(serde_json::to_value(drives).unwrap())),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -332,20 +332,20 @@ async fn list_workspaces(
     }
 }
 
-async fn get_workspace(
+async fn get_drive(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let svc = WorkspaceService::new(
+    let svc = DriveService::new(
         state.store.as_ref(),
         state.backend.as_ref(),
-        state.workspaces_root.clone(),
+        state.drives_root.clone(),
     );
-    match svc.get_workspace(&name_or_id) {
-        Ok(Some(ws)) => (StatusCode::OK, Json(serde_json::to_value(ws).unwrap())),
+    match svc.get_drive(&name_or_id) {
+        Ok(Some(drive)) => (StatusCode::OK, Json(serde_json::to_value(drive).unwrap())),
         Ok(None) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+            Json(serde_json::json!({"error": format!("drive '{}' not found", name_or_id)})),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -354,16 +354,16 @@ async fn get_workspace(
     }
 }
 
-async fn delete_workspace_handler(
+async fn delete_drive_handler(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    // Resolve to workspace first to get the ID
-    let ws = match state.store.get_workspace(&name_or_id) {
-        Ok(Some(ws)) => ws,
+    // Resolve to drive first to get the ID
+    let drive = match state.store.get_drive(&name_or_id) {
+        Ok(Some(d)) => d,
         Ok(None) => return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+            Json(serde_json::json!({"error": format!("drive '{}' not found", name_or_id)})),
         ),
         Err(e) => return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -372,7 +372,7 @@ async fn delete_workspace_handler(
     };
 
     // Delete from filesystem first
-    let path = PathBuf::from(&ws.subvolume_path);
+    let path = PathBuf::from(&drive.subvolume_path);
     if path.exists() {
         if let Err(e) = state.backend.delete_subvolume(&path) {
             return (
@@ -383,11 +383,11 @@ async fn delete_workspace_handler(
     }
 
     // Then remove from database
-    match state.store.delete_workspace(ws.id) {
+    match state.store.delete_drive(drive.id) {
         Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
         Ok(false) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+            Json(serde_json::json!({"error": format!("drive '{}' not found", name_or_id)})),
         ),
         Err(StoreError::Conflict(msg)) => (
             StatusCode::CONFLICT,
@@ -401,23 +401,23 @@ async fn delete_workspace_handler(
 }
 
 #[derive(Deserialize)]
-struct AttachWorkspaceRequest {
+struct AttachDriveRequest {
     vm_id: String,
     #[serde(default)]
     is_root_device: bool,
 }
 
-async fn attach_workspace_handler(
+async fn attach_drive_handler(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
-    Json(req): Json<AttachWorkspaceRequest>,
+    Json(req): Json<AttachDriveRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    // Resolve workspace by name or ID
-    let ws = match state.store.get_workspace(&name_or_id) {
-        Ok(Some(ws)) => ws,
+    // Resolve drive by name or ID
+    let drive = match state.store.get_drive(&name_or_id) {
+        Ok(Some(d)) => d,
         Ok(None) => return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+            Json(serde_json::json!({"error": format!("drive '{}' not found", name_or_id)})),
         ),
         Err(e) => return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -438,8 +438,8 @@ async fn attach_workspace_handler(
         ),
     };
 
-    match state.store.attach_workspace(ws.id, vm.id, req.is_root_device) {
-        Ok(ws) => (StatusCode::OK, Json(serde_json::to_value(ws).unwrap())),
+    match state.store.attach_drive(drive.id, vm.id, req.is_root_device) {
+        Ok(drive) => (StatusCode::OK, Json(serde_json::to_value(drive).unwrap())),
         Err(StoreError::Conflict(msg)) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),
@@ -451,15 +451,15 @@ async fn attach_workspace_handler(
     }
 }
 
-async fn detach_workspace_handler(
+async fn detach_drive_handler(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let ws = match state.store.get_workspace(&name_or_id) {
-        Ok(Some(ws)) => ws,
+    let drive = match state.store.get_drive(&name_or_id) {
+        Ok(Some(d)) => d,
         Ok(None) => return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("workspace '{}' not found", name_or_id)})),
+            Json(serde_json::json!({"error": format!("drive '{}' not found", name_or_id)})),
         ),
         Err(e) => return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -467,8 +467,8 @@ async fn detach_workspace_handler(
         ),
     };
 
-    match state.store.detach_workspace(ws.id) {
-        Ok(ws) => (StatusCode::OK, Json(serde_json::to_value(ws).unwrap())),
+    match state.store.detach_drive(drive.id) {
+        Ok(drive) => (StatusCode::OK, Json(serde_json::to_value(drive).unwrap())),
         Err(StoreError::Conflict(msg)) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": msg})),
@@ -962,28 +962,28 @@ async fn start_vm_handler(
 
 /// Find the rootfs ext4 image for a VM by looking for an attached root-device workspace.
 fn find_rootfs_for_vm(state: &AppState, vm_id: &nexus_lib::id::Id) -> Result<String, String> {
-    // Look for a workspace attached to this VM as root device
-    let workspaces = state.store.list_workspaces(None)
-        .map_err(|e| format!("cannot list workspaces: {e}"))?;
+    // Look for a drive attached to this VM as root device
+    let drives = state.store.list_drives(None)
+        .map_err(|e| format!("cannot list drives: {e}"))?;
 
-    for ws in &workspaces {
-        if ws.vm_id.as_ref() == Some(vm_id) && ws.is_root_device {
-            // The rootfs.ext4 file lives inside the workspace subvolume
-            let rootfs = PathBuf::from(&ws.subvolume_path).join("rootfs.ext4");
+    for drive in &drives {
+        if drive.vm_id.as_ref() == Some(vm_id) && drive.is_root_device {
+            // The rootfs.ext4 file lives inside the drive subvolume
+            let rootfs = PathBuf::from(&drive.subvolume_path).join("rootfs.ext4");
             if rootfs.exists() {
                 return Ok(rootfs.to_string_lossy().to_string());
             }
             return Err(format!(
-                "workspace '{}' is attached as root device but rootfs.ext4 not found at {}",
-                ws.name.as_deref().unwrap_or(&ws.id.encode()),
+                "drive '{}' is attached as root device but rootfs.ext4 not found at {}",
+                drive.name.as_deref().unwrap_or(&drive.id.encode()),
                 rootfs.display()
             ));
         }
     }
 
     Err(format!(
-        "VM '{}' has no workspace attached as root device. Attach one with: \
-         nexusctl ws create --base <image> --name <ws> (then attach to VM)",
+        "VM '{}' has no drive attached as root device. Attach one with: \
+         nexusctl drive create --base <image> --name <drive> (then attach to VM)",
         vm_id.encode()
     ))
 }
@@ -1116,10 +1116,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/vms/{name_or_id}/history", get(vm_history_handler))
         .route("/v1/images", post(import_image).get(list_images))
         .route("/v1/images/{name_or_id}", get(get_image).delete(delete_image_handler))
-        .route("/v1/workspaces", post(create_workspace_handler).get(list_workspaces))
-        .route("/v1/workspaces/{name_or_id}", get(get_workspace).delete(delete_workspace_handler))
-        .route("/v1/workspaces/{name_or_id}/attach", post(attach_workspace_handler))
-        .route("/v1/workspaces/{name_or_id}/detach", post(detach_workspace_handler))
+        .route("/v1/drives", post(create_drive_handler).get(list_drives))
+        .route("/v1/drives/{name_or_id}", get(get_drive).delete(delete_drive_handler))
+        .route("/v1/drives/{name_or_id}/attach", post(attach_drive_handler))
+        .route("/v1/drives/{name_or_id}/detach", post(detach_drive_handler))
         .route("/v1/kernels", get(list_kernels_handler))
         .route("/v1/kernels/download", post(download_kernel_handler))
         .route("/v1/kernels/{version}", delete(remove_kernel_handler))

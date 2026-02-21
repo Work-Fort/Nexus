@@ -102,15 +102,15 @@ async fn main() {
     // Recover stale VMs from previous daemon instance
     recover_stale_vms(&store);
 
-    let workspaces_root = std::path::PathBuf::from(&config.storage.workspaces);
+    let drives_root = std::path::PathBuf::from(&config.storage.drives);
 
-    let backend = match BtrfsBackend::new(workspaces_root.clone()) {
+    let backend = match BtrfsBackend::new(drives_root.clone()) {
         Ok(backend) => {
-            info!(workspaces = %workspaces_root.display(), "workspace backend initialized");
+            info!(drives = %drives_root.display(), "drive backend initialized");
             backend
         }
         Err(e) => {
-            error!(error = %e, "failed to initialize workspace backend");
+            error!(error = %e, "failed to initialize drive backend");
             std::process::exit(1);
         }
     };
@@ -129,7 +129,7 @@ async fn main() {
     let state = Arc::new(api::AppState {
         store: store_arc,
         backend: Box::new(backend),
-        workspaces_root,
+        drives_root,
         assets_dir,
         executor,
         firecracker: config.firecracker.clone(),
