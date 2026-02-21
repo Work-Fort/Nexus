@@ -55,7 +55,7 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
-    pub workspaces: String,
+    pub drives: String,
 }
 
 impl Default for StorageConfig {
@@ -63,9 +63,9 @@ impl Default for StorageConfig {
         let data_dir = dirs::data_dir()
             .expect("cannot determine XDG_DATA_HOME")
             .join("nexus")
-            .join("workspaces");
+            .join("drives");
         StorageConfig {
-            workspaces: data_dir.to_string_lossy().to_string(),
+            drives: data_dir.to_string_lossy().to_string(),
         }
     }
 }

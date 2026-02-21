@@ -35,8 +35,8 @@ impl TestDaemon {
         let config_dir = tempfile::tempdir().expect("failed to create config dir");
         let config_path = config_dir.path().join("nexus.yaml");
         let config_yaml = format!(
-            "api:\n  listen: \"{addr}\"\nstorage:\n  workspaces: \"{}\"",
-            tmp_dir.path().join("workspaces").display()
+            "api:\n  listen: \"{addr}\"\nstorage:\n  drives: \"{}\"",
+            tmp_dir.path().join("drives").display()
         );
         std::fs::write(&config_path, config_yaml)
             .expect("failed to write test config");
