@@ -21,15 +21,15 @@ pub struct ImportImageParams {
     pub source_path: String,
 }
 
-/// A workspace: a btrfs subvolume snapshot, optionally attached to a VM.
+/// A drive: a btrfs subvolume snapshot, optionally attached to a VM.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Workspace {
+pub struct Drive {
     pub id: Id,
     pub name: Option<String>,
     pub vm_id: Option<Id>,
     pub subvolume_path: String,
     pub master_image_id: Option<Id>,
-    pub parent_workspace_id: Option<Id>,
+    pub parent_drive_id: Option<Id>,
     pub size_bytes: Option<i64>,
     pub is_root_device: bool,
     pub is_read_only: bool,
@@ -40,12 +40,12 @@ pub struct Workspace {
     pub created_at: i64,
 }
 
-impl CreateWorkspaceParams {
+impl CreateDriveParams {
     pub fn validate(&self) -> Result<(), String> {
         if let Some(ref name) = self.name {
             if Id::is_valid_base32(name) {
                 return Err(format!(
-                    "Workspace name '{}' cannot be a valid base32 ID (reserved for resource IDs)",
+                    "Drive name '{}' cannot be a valid base32 ID (reserved for resource IDs)",
                     name
                 ));
             }
@@ -66,10 +66,10 @@ impl ImportImageParams {
     }
 }
 
-/// Parameters for creating a workspace from a master image.
+/// Parameters for creating a drive from a master image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateWorkspaceParams {
-    /// Workspace name (optional, auto-generated if omitted)
+pub struct CreateDriveParams {
+    /// Drive name (optional, auto-generated if omitted)
     pub name: Option<String>,
     /// Name of the master image to snapshot from
     pub base: String,
@@ -84,7 +84,7 @@ mod tests {
         let img = MasterImage {
             id: Id::from_i64(1),
             name: "base-agent".to_string(),
-            subvolume_path: "/data/workspaces/@base-agent".to_string(),
+            subvolume_path: "/data/drives/@base-agent".to_string(),
             size_bytes: Some(1024 * 1024),
             created_at: 1000,
         };
@@ -94,14 +94,14 @@ mod tests {
     }
 
     #[test]
-    fn workspace_serializes_without_none_fields() {
-        let ws = Workspace {
+    fn drive_serializes_without_none_fields() {
+        let drive = Drive {
             id: Id::from_i64(1),
-            name: Some("my-ws".to_string()),
+            name: Some("my-drive".to_string()),
             vm_id: None,
-            subvolume_path: "/data/workspaces/@my-ws".to_string(),
+            subvolume_path: "/data/drives/@my-drive".to_string(),
             master_image_id: Some(Id::from_i64(2)),
-            parent_workspace_id: None,
+            parent_drive_id: None,
             size_bytes: None,
             is_root_device: false,
             is_read_only: false,
@@ -109,8 +109,8 @@ mod tests {
             detached_at: None,
             created_at: 2000,
         };
-        let json = serde_json::to_string(&ws).unwrap();
-        assert!(json.contains("my-ws"));
+        let json = serde_json::to_string(&drive).unwrap();
+        assert!(json.contains("my-drive"));
         assert!(!json.contains("attached_at"));
         assert!(!json.contains("detached_at"));
     }
@@ -124,17 +124,17 @@ mod tests {
     }
 
     #[test]
-    fn create_workspace_params_deserializes_with_name() {
-        let json = r#"{"name": "my-ws", "base": "base-agent"}"#;
-        let params: CreateWorkspaceParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.name, Some("my-ws".to_string()));
+    fn create_drive_params_deserializes_with_name() {
+        let json = r#"{"name": "my-drive", "base": "base-agent"}"#;
+        let params: CreateDriveParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.name, Some("my-drive".to_string()));
         assert_eq!(params.base, "base-agent");
     }
 
     #[test]
-    fn create_workspace_params_deserializes_without_name() {
+    fn create_drive_params_deserializes_without_name() {
         let json = r#"{"base": "base-agent"}"#;
-        let params: CreateWorkspaceParams = serde_json::from_str(json).unwrap();
+        let params: CreateDriveParams = serde_json::from_str(json).unwrap();
         assert!(params.name.is_none());
         assert_eq!(params.base, "base-agent");
     }

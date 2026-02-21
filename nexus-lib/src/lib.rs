@@ -17,8 +17,8 @@ pub mod template;
 pub mod vm;
 pub mod vm_service;
 pub mod vsock_manager;
-pub mod workspace;
-pub mod workspace_service;
+pub mod drive;
+pub mod drive_service;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
