@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 use clap::{Parser, Subcommand};
 use nexus_lib::client::NexusClient;
-use nexus_lib::vm::{CreateVmParams, VmRole};
+use nexus_lib::drive::{CreateDriveParams, ImportImageParams};
 use nexus_lib::template::CreateTemplateParams;
-use nexus_lib::workspace::{CreateWorkspaceParams, ImportImageParams};
+use nexus_lib::vm::{CreateVmParams, VmRole};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -51,11 +51,11 @@ enum Commands {
         #[command(subcommand)]
         action: ImageAction,
     },
-    /// Manage workspaces (alias: workspace)
-    #[command(alias = "workspace")]
-    Ws {
+    /// Manage drives (alias: drive, workspace, ws)
+    #[command(alias = "workspace", alias = "ws")]
+    Drive {
         #[command(subcommand)]
-        action: WsAction,
+        action: DriveAction,
     },
     /// Manage kernels
     Kernel {
@@ -178,38 +178,38 @@ enum ImageAction {
 }
 
 #[derive(Subcommand)]
-enum WsAction {
-    /// List all workspaces
+enum DriveAction {
+    /// List all drives
     List {
         /// Filter by base image name
         #[arg(long)]
         base: Option<String>,
     },
-    /// Create a workspace from a master image
+    /// Create a drive from a master image
     Create {
-        /// Workspace name
+        /// Drive name
         #[arg(long)]
         name: Option<String>,
         /// Base image name
         #[arg(long)]
         base: String,
     },
-    /// Show workspace details
+    /// Show drive details
     Inspect {
-        /// Workspace name or ID
+        /// Drive name or ID
         name: String,
     },
-    /// Delete a workspace
+    /// Delete a drive
     Delete {
-        /// Workspace name or ID
+        /// Drive name or ID
         name: String,
         /// Skip confirmation
         #[arg(short, long)]
         yes: bool,
     },
-    /// Attach a workspace to a VM
+    /// Attach a drive to a VM
     Attach {
-        /// Workspace name or ID
+        /// Drive name or ID
         name: String,
         /// VM name or ID to attach to
         #[arg(long)]
@@ -218,9 +218,9 @@ enum WsAction {
         #[arg(long)]
         root: bool,
     },
-    /// Detach a workspace from its VM
+    /// Detach a drive from its VM
     Detach {
-        /// Workspace name or ID
+        /// Drive name or ID
         name: String,
     },
 }
@@ -330,7 +330,7 @@ async fn main() -> ExitCode {
         Commands::Version => cmd_version(&daemon_addr).await,
         Commands::Vm { action } => cmd_vm(&daemon_addr, action).await,
         Commands::Image { action } => cmd_image(&daemon_addr, action).await,
-        Commands::Ws { action } => cmd_ws(&daemon_addr, action).await,
+        Commands::Drive { action } => cmd_drive(&daemon_addr, action).await,
         Commands::Kernel { action } => cmd_kernel(&daemon_addr, action).await,
         Commands::Rootfs { action } => cmd_rootfs(&daemon_addr, action).await,
         Commands::Firecracker { action } => cmd_firecracker(&daemon_addr, action).await,
@@ -738,22 +738,22 @@ async fn cmd_image(daemon_addr: &str, action: ImageAction) -> ExitCode {
     }
 }
 
-async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
+async fn cmd_drive(daemon_addr: &str, action: DriveAction) -> ExitCode {
     let client = NexusClient::new(daemon_addr);
 
     match action {
-        WsAction::List { base } => {
-            match client.list_workspaces(base.as_deref()).await {
-                Ok(wss) => {
-                    if wss.is_empty() {
-                        println!("No workspaces found.");
+        DriveAction::List { base } => {
+            match client.list_drives(base.as_deref()).await {
+                Ok(drives) => {
+                    if drives.is_empty() {
+                        println!("No drives found.");
                         return ExitCode::SUCCESS;
                     }
                     println!("{:<20} {:<50} {:<10}", "NAME", "PATH", "READ-ONLY");
-                    for ws in &wss {
-                        let name = ws.name.as_deref().unwrap_or("(unnamed)");
-                        let ro = if ws.is_read_only { "yes" } else { "no" };
-                        println!("{:<20} {:<50} {:<10}", name, ws.subvolume_path, ro);
+                    for drive in &drives {
+                        let name = drive.name.as_deref().unwrap_or("(unnamed)");
+                        let ro = if drive.is_read_only { "yes" } else { "no" };
+                        println!("{:<20} {:<50} {:<10}", name, drive.subvolume_path, ro);
                     }
                     ExitCode::SUCCESS
                 }
@@ -767,18 +767,18 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                 }
             }
         }
-        WsAction::Create { name, base } => {
-            let params = CreateWorkspaceParams {
+        DriveAction::Create { name, base } => {
+            let params = CreateDriveParams {
                 name: name.clone(),
                 base: base.clone(),
             };
-            match client.create_workspace(&params).await {
-                Ok(ws) => {
-                    let id_fallback = ws.id.encode();
-                    let ws_name = ws.name.as_deref().unwrap_or(&id_fallback);
-                    println!("Created workspace \"{}\" from base \"{}\"", ws_name, base);
-                    println!("  Path: {}", ws.subvolume_path);
-                    println!("\n  Inspect it: nexusctl ws inspect {}", ws_name);
+            match client.create_drive(&params).await {
+                Ok(drive) => {
+                    let id_fallback = drive.id.encode();
+                    let drive_name = drive.name.as_deref().unwrap_or(&id_fallback);
+                    println!("Created drive \"{}\" from base \"{}\"", drive_name, base);
+                    println!("  Path: {}", drive.subvolume_path);
+                    println!("\n  Inspect it: nexusctl drive inspect {}", drive_name);
                     ExitCode::SUCCESS
                 }
                 Err(e) if e.is_connect() => {
@@ -786,36 +786,36 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                     ExitCode::from(EXIT_DAEMON_UNREACHABLE)
                 }
                 Err(e) => {
-                    eprintln!("Error: cannot create workspace\n  {e}");
+                    eprintln!("Error: cannot create drive\n  {e}");
                     ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }
         }
-        WsAction::Inspect { name } => {
-            match client.get_workspace(&name).await {
-                Ok(Some(ws)) => {
-                    let ws_name = ws.name.as_deref().unwrap_or("(unnamed)");
-                    println!("Name:       {}", ws_name);
-                    println!("ID:         {}", ws.id);
-                    println!("Path:       {}", ws.subvolume_path);
-                    if let Some(ref img_id) = ws.master_image_id {
+        DriveAction::Inspect { name } => {
+            match client.get_drive(&name).await {
+                Ok(Some(drive)) => {
+                    let drive_name = drive.name.as_deref().unwrap_or("(unnamed)");
+                    println!("Name:       {}", drive_name);
+                    println!("ID:         {}", drive.id);
+                    println!("Path:       {}", drive.subvolume_path);
+                    if let Some(ref img_id) = drive.master_image_id {
                         println!("Base Image: {}", img_id);
                     }
-                    if let Some(ref vm_id) = ws.vm_id {
+                    if let Some(ref vm_id) = drive.vm_id {
                         println!("Attached:   VM {}", vm_id);
                     } else {
                         println!("Attached:   (none)");
                     }
-                    println!("Read-Only:  {}", if ws.is_read_only { "yes" } else { "no" });
-                    println!("Root Dev:   {}", if ws.is_root_device { "yes" } else { "no" });
-                    if let Some(size) = ws.size_bytes {
+                    println!("Read-Only:  {}", if drive.is_read_only { "yes" } else { "no" });
+                    println!("Root Dev:   {}", if drive.is_root_device { "yes" } else { "no" });
+                    if let Some(size) = drive.size_bytes {
                         println!("Size:       {} bytes", size);
                     }
-                    println!("Created:    {}", format_timestamp(ws.created_at));
+                    println!("Created:    {}", format_timestamp(drive.created_at));
                     ExitCode::SUCCESS
                 }
                 Ok(None) => {
-                    eprintln!("Error: workspace \"{}\" not found", name);
+                    eprintln!("Error: drive \"{}\" not found", name);
                     ExitCode::from(EXIT_NOT_FOUND)
                 }
                 Err(e) if e.is_connect() => {
@@ -828,22 +828,22 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                 }
             }
         }
-        WsAction::Delete { name, yes } => {
+        DriveAction::Delete { name, yes } => {
             if !yes {
                 eprintln!(
-                    "Error: refusing to delete workspace without confirmation\n  \
-                     Run with --yes to skip confirmation: nexusctl ws delete {} --yes",
+                    "Error: refusing to delete drive without confirmation\n  \
+                     Run with --yes to skip confirmation: nexusctl drive delete {} --yes",
                     name
                 );
                 return ExitCode::from(EXIT_GENERAL_ERROR);
             }
-            match client.delete_workspace(&name).await {
+            match client.delete_drive(&name).await {
                 Ok(true) => {
-                    println!("Deleted workspace \"{}\"", name);
+                    println!("Deleted drive \"{}\"", name);
                     ExitCode::SUCCESS
                 }
                 Ok(false) => {
-                    eprintln!("Error: workspace \"{}\" not found", name);
+                    eprintln!("Error: drive \"{}\" not found", name);
                     ExitCode::from(EXIT_NOT_FOUND)
                 }
                 Err(e) if e.is_connect() => {
@@ -851,12 +851,12 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                     ExitCode::from(EXIT_DAEMON_UNREACHABLE)
                 }
                 Err(e) => {
-                    eprintln!("Error: cannot delete workspace \"{}\"\n  {e}", name);
+                    eprintln!("Error: cannot delete drive \"{}\"\n  {e}", name);
                     ExitCode::from(EXIT_CONFLICT)
                 }
             }
         }
-        WsAction::Attach { name, vm, root } => {
+        DriveAction::Attach { name, vm, root } => {
             // Resolve the VM name to an ID
             let vm_id = match client.get_vm(&vm).await {
                 Ok(Some(vm)) => vm.id,
@@ -874,11 +874,11 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                 }
             };
 
-            match client.attach_workspace(&name, &vm_id.encode(), root).await {
-                Ok(ws) => {
-                    let id_fallback = ws.id.encode();
-                    let ws_name = ws.name.as_deref().unwrap_or(&id_fallback);
-                    println!("Attached workspace \"{}\" to VM \"{}\"", ws_name, vm);
+            match client.attach_drive(&name, &vm_id.encode(), root).await {
+                Ok(drive) => {
+                    let id_fallback = drive.id.encode();
+                    let drive_name = drive.name.as_deref().unwrap_or(&id_fallback);
+                    println!("Attached drive \"{}\" to VM \"{}\"", drive_name, vm);
                     if root {
                         println!("  Root device: yes");
                     }
@@ -889,17 +889,17 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                     ExitCode::from(EXIT_DAEMON_UNREACHABLE)
                 }
                 Err(e) => {
-                    eprintln!("Error: cannot attach workspace \"{name}\"\n  {e}");
+                    eprintln!("Error: cannot attach drive \"{name}\"\n  {e}");
                     ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }
         }
-        WsAction::Detach { name } => {
-            match client.detach_workspace(&name).await {
-                Ok(ws) => {
-                    let id_fallback = ws.id.encode();
-                    let ws_name = ws.name.as_deref().unwrap_or(&id_fallback);
-                    println!("Detached workspace \"{}\"", ws_name);
+        DriveAction::Detach { name } => {
+            match client.detach_drive(&name).await {
+                Ok(drive) => {
+                    let id_fallback = drive.id.encode();
+                    let drive_name = drive.name.as_deref().unwrap_or(&id_fallback);
+                    println!("Detached drive \"{}\"", drive_name);
                     ExitCode::SUCCESS
                 }
                 Err(e) if e.is_connect() => {
@@ -907,7 +907,7 @@ async fn cmd_ws(daemon_addr: &str, action: WsAction) -> ExitCode {
                     ExitCode::from(EXIT_DAEMON_UNREACHABLE)
                 }
                 Err(e) => {
-                    eprintln!("Error: cannot detach workspace \"{name}\"\n  {e}");
+                    eprintln!("Error: cannot detach drive \"{name}\"\n  {e}");
                     ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }

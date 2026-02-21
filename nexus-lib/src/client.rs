@@ -259,7 +259,7 @@ impl NexusClient {
 
     // --- Image methods ---
 
-    pub async fn import_image(&self, params: &crate::workspace::ImportImageParams) -> Result<crate::workspace::MasterImage, ClientError> {
+    pub async fn import_image(&self, params: &crate::drive::ImportImageParams) -> Result<crate::drive::MasterImage, ClientError> {
         let url = format!("{}/v1/images", self.base_url);
         let resp = self.http.post(&url).json(params).send().await.map_err(|e| {
             if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
@@ -279,7 +279,7 @@ impl NexusClient {
         resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
     }
 
-    pub async fn list_images(&self) -> Result<Vec<crate::workspace::MasterImage>, ClientError> {
+    pub async fn list_images(&self) -> Result<Vec<crate::drive::MasterImage>, ClientError> {
         let url = format!("{}/v1/images", self.base_url);
         let resp = self.http.get(&url).send().await.map_err(|e| {
             if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
@@ -293,7 +293,7 @@ impl NexusClient {
         resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
     }
 
-    pub async fn get_image(&self, name_or_id: &str) -> Result<Option<crate::workspace::MasterImage>, ClientError> {
+    pub async fn get_image(&self, name_or_id: &str) -> Result<Option<crate::drive::MasterImage>, ClientError> {
         let url = format!("{}/v1/images/{name_or_id}", self.base_url);
         let resp = self.http.get(&url).send().await.map_err(|e| {
             if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
@@ -326,10 +326,10 @@ impl NexusClient {
         }
     }
 
-    // --- Workspace methods ---
+    // --- Drive methods ---
 
-    pub async fn create_workspace(&self, params: &crate::workspace::CreateWorkspaceParams) -> Result<crate::workspace::Workspace, ClientError> {
-        let url = format!("{}/v1/workspaces", self.base_url);
+    pub async fn create_drive(&self, params: &crate::drive::CreateDriveParams) -> Result<crate::drive::Drive, ClientError> {
+        let url = format!("{}/v1/drives", self.base_url);
         let resp = self.http.post(&url).json(params).send().await.map_err(|e| {
             if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
             else { ClientError::Api(e.to_string()) }
@@ -348,8 +348,8 @@ impl NexusClient {
         resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
     }
 
-    pub async fn list_workspaces(&self, base: Option<&str>) -> Result<Vec<crate::workspace::Workspace>, ClientError> {
-        let mut url = format!("{}/v1/workspaces", self.base_url);
+    pub async fn list_drives(&self, base: Option<&str>) -> Result<Vec<crate::drive::Drive>, ClientError> {
+        let mut url = format!("{}/v1/drives", self.base_url);
         if let Some(b) = base {
             url.push_str(&format!("?base={b}"));
         }
@@ -365,8 +365,8 @@ impl NexusClient {
         resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
     }
 
-    pub async fn get_workspace(&self, name_or_id: &str) -> Result<Option<crate::workspace::Workspace>, ClientError> {
-        let url = format!("{}/v1/workspaces/{name_or_id}", self.base_url);
+    pub async fn get_drive(&self, name_or_id: &str) -> Result<Option<crate::drive::Drive>, ClientError> {
+        let url = format!("{}/v1/drives/{name_or_id}", self.base_url);
         let resp = self.http.get(&url).send().await.map_err(|e| {
             if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
             else { ClientError::Api(e.to_string()) }
@@ -380,8 +380,8 @@ impl NexusClient {
         resp.json().await.map(Some).map_err(|e| ClientError::Api(e.to_string()))
     }
 
-    pub async fn delete_workspace(&self, name_or_id: &str) -> Result<bool, ClientError> {
-        let url = format!("{}/v1/workspaces/{name_or_id}", self.base_url);
+    pub async fn delete_drive(&self, name_or_id: &str) -> Result<bool, ClientError> {
+        let url = format!("{}/v1/drives/{name_or_id}", self.base_url);
         let resp = self.http.delete(&url).send().await.map_err(|e| {
             if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
             else { ClientError::Api(e.to_string()) }
@@ -398,13 +398,13 @@ impl NexusClient {
         }
     }
 
-    pub async fn attach_workspace(
+    pub async fn attach_drive(
         &self,
         name_or_id: &str,
         vm_id: &str,
         is_root_device: bool,
-    ) -> Result<crate::workspace::Workspace, ClientError> {
-        let url = format!("{}/v1/workspaces/{name_or_id}/attach", self.base_url);
+    ) -> Result<crate::drive::Drive, ClientError> {
+        let url = format!("{}/v1/drives/{name_or_id}/attach", self.base_url);
         let resp = self.http.post(&url)
             .json(&serde_json::json!({
                 "vm_id": vm_id,
@@ -417,7 +417,7 @@ impl NexusClient {
 
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
-            return Err(ClientError::Api(format!("workspace '{}' not found", name_or_id)));
+            return Err(ClientError::Api(format!("drive '{}' not found", name_or_id)));
         }
         if status == reqwest::StatusCode::CONFLICT {
             let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
@@ -431,8 +431,8 @@ impl NexusClient {
         resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
     }
 
-    pub async fn detach_workspace(&self, name_or_id: &str) -> Result<crate::workspace::Workspace, ClientError> {
-        let url = format!("{}/v1/workspaces/{name_or_id}/detach", self.base_url);
+    pub async fn detach_drive(&self, name_or_id: &str) -> Result<crate::drive::Drive, ClientError> {
+        let url = format!("{}/v1/drives/{name_or_id}/detach", self.base_url);
         let resp = self.http.post(&url).send().await.map_err(|e| {
             if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
             else { ClientError::Api(e.to_string()) }
@@ -440,7 +440,7 @@ impl NexusClient {
 
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
-            return Err(ClientError::Api(format!("workspace '{}' not found", name_or_id)));
+            return Err(ClientError::Api(format!("drive '{}' not found", name_or_id)));
         }
         if status == reqwest::StatusCode::CONFLICT {
             let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
