@@ -150,11 +150,22 @@ pub trait KernelProvider: Send + Sync {
 /// - `signing-key.asc`
 pub struct GitHubKernelProvider {
     pub repo: String,
+    pub base_url: String,
 }
 
 impl GitHubKernelProvider {
     pub fn new(repo: &str) -> Self {
-        GitHubKernelProvider { repo: repo.to_string() }
+        GitHubKernelProvider {
+            repo: repo.to_string(),
+            base_url: "https://github.com".to_string(),
+        }
+    }
+
+    pub fn with_base_url(repo: &str, base_url: &str) -> Self {
+        GitHubKernelProvider {
+            repo: repo.to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
+        }
     }
 }
 
@@ -185,8 +196,8 @@ impl KernelProvider for GitHubKernelProvider {
 
     fn download_url(&self, version: &str, arch: &str) -> String {
         format!(
-            "https://github.com/{}/releases/download/v{}/{}",
-            self.repo, version, self.filename(version, arch)
+            "{}/{}/releases/download/v{}/{}",
+            self.base_url, self.repo, version, self.filename(version, arch)
         )
     }
 
@@ -200,22 +211,22 @@ impl KernelProvider for GitHubKernelProvider {
 
     fn checksums_url(&self, version: &str) -> Option<String> {
         Some(format!(
-            "https://github.com/{}/releases/download/v{}/SHA256SUMS",
-            self.repo, version
+            "{}/{}/releases/download/v{}/SHA256SUMS",
+            self.base_url, self.repo, version
         ))
     }
 
     fn pgp_signature_url(&self, version: &str) -> Option<String> {
         Some(format!(
-            "https://github.com/{}/releases/download/v{}/SHA256SUMS.asc",
-            self.repo, version
+            "{}/{}/releases/download/v{}/SHA256SUMS.asc",
+            self.base_url, self.repo, version
         ))
     }
 
     fn pgp_public_key_url(&self, version: &str) -> Option<String> {
         Some(format!(
-            "https://github.com/{}/releases/download/v{}/signing-key.asc",
-            self.repo, version
+            "{}/{}/releases/download/v{}/signing-key.asc",
+            self.base_url, self.repo, version
         ))
     }
 }
@@ -507,5 +518,26 @@ mod tests {
             Some("abc123".to_string())
         );
         assert_eq!(provider.parse_checksum(sums, "nonexistent"), None);
+    }
+
+    #[test]
+    fn github_kernel_provider_default_urls() {
+        let provider = GitHubKernelProvider::new("Work-Fort/Anvil");
+        assert_eq!(
+            provider.download_url("6.18.9", "x86_64"),
+            "https://github.com/Work-Fort/Anvil/releases/download/v6.18.9/vmlinux-6.18.9-x86_64.xz"
+        );
+        assert_eq!(
+            provider.checksums_url("6.18.9").unwrap(),
+            "https://github.com/Work-Fort/Anvil/releases/download/v6.18.9/SHA256SUMS"
+        );
+        assert_eq!(
+            provider.pgp_signature_url("6.18.9").unwrap(),
+            "https://github.com/Work-Fort/Anvil/releases/download/v6.18.9/SHA256SUMS.asc"
+        );
+        assert_eq!(
+            provider.pgp_public_key_url("6.18.9").unwrap(),
+            "https://github.com/Work-Fort/Anvil/releases/download/v6.18.9/signing-key.asc"
+        );
     }
 }

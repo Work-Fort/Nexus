@@ -54,6 +54,7 @@ pub struct FirecrackerService<'a> {
     executor: &'a PipelineExecutor,
     assets_dir: PathBuf,
     repo: String,
+    base_url: String,
 }
 
 impl<'a> FirecrackerService<'a> {
@@ -68,7 +69,12 @@ impl<'a> FirecrackerService<'a> {
             .as_str()
             .unwrap_or("firecracker-microvm/firecracker")
             .to_string();
-        FirecrackerService { store, executor, assets_dir, repo }
+        let base_url = provider_config.config.get("base_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("https://github.com")
+            .trim_end_matches('/')
+            .to_string();
+        FirecrackerService { store, executor, assets_dir, repo, base_url }
     }
 
     /// Create with default config (for tests / fallback).
@@ -80,6 +86,7 @@ impl<'a> FirecrackerService<'a> {
         FirecrackerService {
             store, executor, assets_dir,
             repo: "firecracker-microvm/firecracker".to_string(),
+            base_url: "https://github.com".to_string(),
         }
     }
 
@@ -89,15 +96,15 @@ impl<'a> FirecrackerService<'a> {
 
     fn checksums_url(&self, version: &str, arch: &str) -> String {
         format!(
-            "https://github.com/{}/releases/download/v{}/firecracker-v{}-{}.tgz.sha256.txt",
-            self.repo, version, version, arch
+            "{}/{}/releases/download/v{}/firecracker-v{}-{}.tgz.sha256.txt",
+            self.base_url, self.repo, version, version, arch
         )
     }
 
     fn download_url(&self, version: &str, arch: &str) -> String {
         format!(
-            "https://github.com/{}/releases/download/v{}/{}",
-            self.repo, version, self.tgz_filename(version, arch)
+            "{}/{}/releases/download/v{}/{}",
+            self.base_url, self.repo, version, self.tgz_filename(version, arch)
         )
     }
 

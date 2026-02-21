@@ -517,7 +517,10 @@ async fn download_kernel_handler(
         ),
     };
 
-    let svc = KernelService::new(state.store.as_ref(), &state.executor, state.assets_dir.clone());
+    let svc = KernelService::from_provider_config(
+        state.store.as_ref(), &state.executor,
+        state.assets_dir.clone(), &provider_config,
+    );
     match svc.download(&req.version, &provider_config).await {
         Ok(kernel) => (StatusCode::CREATED, Json(serde_json::to_value(kernel).unwrap())),
         Err(e) => (
@@ -597,7 +600,10 @@ async fn download_rootfs_handler(
         ),
     };
 
-    let svc = RootfsService::new(state.store.as_ref(), &state.executor, state.assets_dir.clone());
+    let svc = RootfsService::from_provider_config(
+        state.store.as_ref(), &state.executor,
+        state.assets_dir.clone(), &provider_config,
+    );
     match svc.download(&req.distro, &req.version, &provider_config).await {
         Ok(rootfs) => (StatusCode::CREATED, Json(serde_json::to_value(rootfs).unwrap())),
         Err(e) => (

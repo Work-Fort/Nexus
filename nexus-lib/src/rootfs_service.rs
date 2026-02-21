@@ -76,6 +76,22 @@ impl<'a> RootfsService<'a> {
         RootfsService { store, executor, assets_dir, providers }
     }
 
+    /// Create with a provider config from the DB. Reads base_url if present.
+    pub fn from_provider_config(
+        store: &'a (dyn StateStore + Send + Sync),
+        executor: &'a PipelineExecutor,
+        assets_dir: PathBuf,
+        provider_config: &Provider,
+    ) -> Self {
+        let base_url = provider_config.config.get("base_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("https://dl-cdn.alpinelinux.org");
+        let providers: Vec<Box<dyn RootfsProvider>> = vec![
+            Box::new(AlpineProvider::new(base_url)),
+        ];
+        RootfsService { store, executor, assets_dir, providers }
+    }
+
     fn find_provider(&self, distro: &str) -> Result<&dyn RootfsProvider, RootfsServiceError> {
         self.providers.iter()
             .find(|p| p.name() == distro)

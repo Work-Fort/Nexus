@@ -89,6 +89,25 @@ impl<'a> KernelService<'a> {
         KernelService { store, executor, assets_dir, providers }
     }
 
+    /// Create with a provider config from the DB. Reads base_url if present.
+    pub fn from_provider_config(
+        store: &'a (dyn StateStore + Send + Sync),
+        executor: &'a PipelineExecutor,
+        assets_dir: PathBuf,
+        provider_config: &Provider,
+    ) -> Self {
+        let base_url = provider_config.config.get("base_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("https://github.com");
+        let repo = provider_config.config.get("repo")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Work-Fort/Anvil");
+        let providers: Vec<Box<dyn KernelProvider>> = vec![
+            Box::new(GitHubKernelProvider::with_base_url(repo, base_url)),
+        ];
+        KernelService { store, executor, assets_dir, providers }
+    }
+
     fn default_provider(&self) -> Result<&dyn KernelProvider, KernelServiceError> {
         self.providers.first()
             .map(|p| p.as_ref())
