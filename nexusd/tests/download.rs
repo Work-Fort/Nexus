@@ -159,3 +159,81 @@ async fn rootfs_download_register_list() {
     let images: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert!(images.is_empty());
 }
+
+#[tokio::test]
+async fn firecracker_download_register_list() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    ).await;
+
+    let client = reqwest::Client::new();
+    let base = format!("http://{}", daemon.addr);
+
+    // Pre-check: no firecracker versions
+    let resp = client.get(format!("{base}/v1/firecracker")).send().await.unwrap();
+    let versions: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(versions.is_empty());
+
+    // Build fake firecracker tgz and start mock server
+    let fc = download_fixtures::FakeFirecracker::new("9.99.0");
+    let mock_server = wiremock::MockServer::start().await;
+    download_fixtures::serve_firecracker_from_mock(&mock_server, &fc).await;
+
+    // Configure provider: mock server, HTTP without TLS
+    let pipeline = serde_json::to_string(&vec![
+        serde_json::json!({"transport": "http", "credentials": {}, "host": "", "encrypted": false}),
+        serde_json::json!({"checksum": "SHA256"}),
+    ]).unwrap();
+    download_fixtures::configure_provider_for_mock(
+        &daemon.db_path, "firecracker", &mock_server.uri(), &pipeline,
+    );
+
+    // 1. Download firecracker via REST API
+    let resp = client.post(format!("{base}/v1/firecracker/download"))
+        .json(&serde_json::json!({"version": "9.99.0"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 201, "firecracker download should return 201 Created");
+    let fc_resp: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(fc_resp["version"], "9.99.0");
+    assert_eq!(fc_resp["architecture"], "x86_64");
+
+    // Comprehensive verification: binary exists, executable, correct version
+    let path = fc_resp["path_on_host"].as_str().unwrap();
+    let fc_path = std::path::Path::new(path);
+    assert!(fc_path.exists(), "firecracker binary must exist at expected path");
+    let metadata = std::fs::metadata(fc_path).unwrap();
+    assert!(metadata.len() > 0, "firecracker binary must not be empty");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(metadata.permissions().mode() & 0o111 != 0, "binary must be executable");
+    }
+    // Verify --version reports correct version
+    let output = std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .expect("failed to run firecracker --version");
+    assert!(output.status.success(), "firecracker --version must succeed");
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    assert!(version_output.contains("9.99.0"), "firecracker --version must report correct version");
+
+    // 2. Verify list endpoint
+    let resp = client.get(format!("{base}/v1/firecracker")).send().await.unwrap();
+    let versions: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0]["version"], "9.99.0");
+
+    // 3. Verify duplicate download rejected
+    let resp = client.post(format!("{base}/v1/firecracker/download"))
+        .json(&serde_json::json!({"version": "9.99.0"}))
+        .send().await.unwrap();
+    assert_ne!(resp.status(), 201);
+
+    // 4. Remove and verify
+    let resp = client.delete(format!("{base}/v1/firecracker/9.99.0"))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 204);
+    let resp = client.get(format!("{base}/v1/firecracker")).send().await.unwrap();
+    let versions: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(versions.is_empty());
+}
