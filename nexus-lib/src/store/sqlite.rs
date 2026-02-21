@@ -3,12 +3,12 @@ use crate::asset::{
     FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
     RegisterKernelParams, RegisterRootfsParams, RootfsImage,
 };
+use crate::drive::{Drive, ImportImageParams, MasterImage};
 use crate::id::Id;
 use crate::store::schema::{seed_default_providers, SCHEMA_SQL, SCHEMA_VERSION};
-use crate::store::traits::{AssetStore, BuildStore, DbStatus, ImageStore, StateStore, StoreError, VmStore, WorkspaceStore};
+use crate::store::traits::{AssetStore, BuildStore, DbStatus, DriveStore, ImageStore, StateStore, StoreError, VmStore};
 use crate::template::{Build, BuildStatus, CreateTemplateParams, Template};
 use crate::vm::{CreateVmParams, Vm, VmState};
-use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
@@ -665,18 +665,18 @@ impl ImageStore for SqliteStore {
     }
 }
 
-impl WorkspaceStore for SqliteStore {
-    fn create_workspace(
+impl DriveStore for SqliteStore {
+    fn create_drive(
         &self,
         name: Option<&str>,
         subvolume_path: &str,
         master_image_id: Id,
-    ) -> Result<Workspace, StoreError> {
+    ) -> Result<Drive, StoreError> {
         // Validate that name (if provided) is not a valid base32 ID
         if let Some(name_str) = name {
             if Id::is_valid_base32(name_str) {
                 return Err(StoreError::InvalidInput(format!(
-                    "Workspace name '{}' cannot be a valid base32 ID (reserved for resource IDs)",
+                    "Drive name '{}' cannot be a valid base32 ID (reserved for resource IDs)",
                     name_str
                 )));
             }
@@ -686,145 +686,145 @@ impl WorkspaceStore for SqliteStore {
         let id = Id::generate();
 
         conn.execute(
-            "INSERT INTO workspaces (id, name, subvolume_path, master_image_id) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO drives (id, name, subvolume_path, master_image_id) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![id, name, subvolume_path, master_image_id],
         )
         .map_err(|e| {
             if let rusqlite::Error::SqliteFailure(err, _) = &e {
                 if err.code == rusqlite::ErrorCode::ConstraintViolation {
                     return StoreError::Conflict(format!(
-                        "workspace name '{}' already exists",
+                        "drive name '{}' already exists",
                         name.unwrap_or("(unnamed)")
                     ));
                 }
             }
-            StoreError::Query(format!("cannot insert workspace: {e}"))
+            StoreError::Query(format!("cannot insert drive: {e}"))
         })?;
 
         drop(conn);
-        self.get_workspace_by_id(id)?
-            .ok_or_else(|| StoreError::Query("workspace not found after insert".to_string()))
+        self.get_drive_by_id(id)?
+            .ok_or_else(|| StoreError::Query("drive not found after insert".to_string()))
     }
 
-    fn list_workspaces(&self, base: Option<&str>) -> Result<Vec<Workspace>, StoreError> {
+    fn list_drives(&self, base: Option<&str>) -> Result<Vec<Drive>, StoreError> {
         let conn = self.conn.lock().unwrap();
 
         let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match base {
             Some(base_name) => {
                 (
-                    "SELECT w.id, w.name, w.vm_id, w.subvolume_path, w.master_image_id, \
-                     w.parent_workspace_id, w.size_bytes, w.is_root_device, w.is_read_only, \
-                     w.attached_at, w.detached_at, w.created_at \
-                     FROM workspaces w \
-                     JOIN master_images m ON w.master_image_id = m.id \
+                    "SELECT d.id, d.name, d.vm_id, d.subvolume_path, d.master_image_id, \
+                     d.parent_drive_id, d.size_bytes, d.is_root_device, d.is_read_only, \
+                     d.attached_at, d.detached_at, d.created_at \
+                     FROM drives d \
+                     JOIN master_images m ON d.master_image_id = m.id \
                      WHERE m.name = ? \
-                     ORDER BY w.created_at DESC".to_string(),
+                     ORDER BY d.created_at DESC".to_string(),
                     vec![Box::new(base_name.to_string()) as Box<dyn rusqlite::types::ToSql>],
                 )
             }
             None => {
                 (
                     "SELECT id, name, vm_id, subvolume_path, master_image_id, \
-                     parent_workspace_id, size_bytes, is_root_device, is_read_only, \
+                     parent_drive_id, size_bytes, is_root_device, is_read_only, \
                      attached_at, detached_at, created_at \
-                     FROM workspaces ORDER BY created_at DESC".to_string(),
+                     FROM drives ORDER BY created_at DESC".to_string(),
                     vec![],
                 )
             }
         };
 
         let mut stmt = conn.prepare(&sql)
-            .map_err(|e| StoreError::Query(format!("cannot prepare workspace list query: {e}")))?;
+            .map_err(|e| StoreError::Query(format!("cannot prepare drive list query: {e}")))?;
 
         let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-        let workspaces = stmt
-            .query_map(param_refs.as_slice(), |row| Ok(row_to_workspace(row)))
-            .map_err(|e| StoreError::Query(format!("cannot list workspaces: {e}")))?
+        let drives = stmt
+            .query_map(param_refs.as_slice(), |row| Ok(row_to_drive(row)))
+            .map_err(|e| StoreError::Query(format!("cannot list drives: {e}")))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| StoreError::Query(format!("cannot read workspace row: {e}")))?;
+            .map_err(|e| StoreError::Query(format!("cannot read drive row: {e}")))?;
 
-        Ok(workspaces)
+        Ok(drives)
     }
 
-    fn get_workspace_by_id(&self, id: Id) -> Result<Option<Workspace>, StoreError> {
+    fn get_drive_by_id(&self, id: Id) -> Result<Option<Drive>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, vm_id, subvolume_path, master_image_id, \
-                 parent_workspace_id, size_bytes, is_root_device, is_read_only, \
+                 parent_drive_id, size_bytes, is_root_device, is_read_only, \
                  attached_at, detached_at, created_at \
-                 FROM workspaces WHERE id = ?1",
+                 FROM drives WHERE id = ?1",
             )
-            .map_err(|e| StoreError::Query(format!("cannot prepare workspace get query: {e}")))?;
+            .map_err(|e| StoreError::Query(format!("cannot prepare drive get query: {e}")))?;
 
         let mut rows = stmt
-            .query_map([id], |row| Ok(row_to_workspace(row)))
-            .map_err(|e| StoreError::Query(format!("cannot get workspace: {e}")))?;
+            .query_map([id], |row| Ok(row_to_drive(row)))
+            .map_err(|e| StoreError::Query(format!("cannot get drive: {e}")))?;
 
         match rows.next() {
-            Some(Ok(ws)) => Ok(Some(ws)),
-            Some(Err(e)) => Err(StoreError::Query(format!("cannot read workspace row: {e}"))),
+            Some(Ok(d)) => Ok(Some(d)),
+            Some(Err(e)) => Err(StoreError::Query(format!("cannot read drive row: {e}"))),
             None => Ok(None),
         }
     }
 
-    fn get_workspace_by_name(&self, name: &str) -> Result<Option<Workspace>, StoreError> {
+    fn get_drive_by_name(&self, name: &str) -> Result<Option<Drive>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, vm_id, subvolume_path, master_image_id, \
-                 parent_workspace_id, size_bytes, is_root_device, is_read_only, \
+                 parent_drive_id, size_bytes, is_root_device, is_read_only, \
                  attached_at, detached_at, created_at \
-                 FROM workspaces WHERE name = ?1",
+                 FROM drives WHERE name = ?1",
             )
-            .map_err(|e| StoreError::Query(format!("cannot prepare workspace get query: {e}")))?;
+            .map_err(|e| StoreError::Query(format!("cannot prepare drive get query: {e}")))?;
 
         let mut rows = stmt
-            .query_map([name], |row| Ok(row_to_workspace(row)))
-            .map_err(|e| StoreError::Query(format!("cannot get workspace: {e}")))?;
+            .query_map([name], |row| Ok(row_to_drive(row)))
+            .map_err(|e| StoreError::Query(format!("cannot get drive: {e}")))?;
 
         match rows.next() {
-            Some(Ok(ws)) => Ok(Some(ws)),
-            Some(Err(e)) => Err(StoreError::Query(format!("cannot read workspace row: {e}"))),
+            Some(Ok(d)) => Ok(Some(d)),
+            Some(Err(e)) => Err(StoreError::Query(format!("cannot read drive row: {e}"))),
             None => Ok(None),
         }
     }
 
-    fn get_workspace(&self, name_or_id: &str) -> Result<Option<Workspace>, StoreError> {
+    fn get_drive(&self, name_or_id: &str) -> Result<Option<Drive>, StoreError> {
         // Try decoding as base32 ID first
         if let Ok(id) = Id::decode(name_or_id) {
-            if let Some(ws) = self.get_workspace_by_id(id)? {
-                return Ok(Some(ws));
+            if let Some(d) = self.get_drive_by_id(id)? {
+                return Ok(Some(d));
             }
         }
 
         // Fall back to name lookup
-        self.get_workspace_by_name(name_or_id)
+        self.get_drive_by_name(name_or_id)
     }
 
-    fn delete_workspace(&self, id: Id) -> Result<bool, StoreError> {
-        let ws = match self.get_workspace_by_id(id)? {
-            Some(ws) => ws,
+    fn delete_drive(&self, id: Id) -> Result<bool, StoreError> {
+        let drive = match self.get_drive_by_id(id)? {
+            Some(d) => d,
             None => return Ok(false),
         };
 
-        // Cannot delete workspace attached to a VM
-        if ws.vm_id.is_some() {
+        // Cannot delete drive attached to a VM
+        if drive.vm_id.is_some() {
             return Err(StoreError::Conflict(format!(
-                "cannot delete workspace '{}': attached to VM, detach it first",
-                ws.name.as_deref().unwrap_or(&ws.id.to_string())
+                "cannot delete drive '{}': attached to VM, detach it first",
+                drive.name.as_deref().unwrap_or(&drive.id.to_string())
             )));
         }
 
         let conn = self.conn.lock().unwrap();
         let deleted = conn
-            .execute("DELETE FROM workspaces WHERE id = ?1", [ws.id])
-            .map_err(|e| StoreError::Query(format!("cannot delete workspace: {e}")))?;
+            .execute("DELETE FROM drives WHERE id = ?1", [drive.id])
+            .map_err(|e| StoreError::Query(format!("cannot delete drive: {e}")))?;
 
         Ok(deleted > 0)
     }
 
-    fn attach_workspace(&self, workspace_id: Id, vm_id: Id, is_root_device: bool) -> Result<Workspace, StoreError> {
+    fn attach_drive(&self, drive_id: Id, vm_id: Id, is_root_device: bool) -> Result<Drive, StoreError> {
         let conn = self.conn.lock().unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -832,17 +832,17 @@ impl WorkspaceStore for SqliteStore {
             .as_secs() as i64;
 
         conn.execute(
-            "UPDATE workspaces SET vm_id = ?1, is_root_device = ?2, attached_at = ?3, detached_at = NULL WHERE id = ?4",
-            rusqlite::params![vm_id, is_root_device, now, workspace_id],
+            "UPDATE drives SET vm_id = ?1, is_root_device = ?2, attached_at = ?3, detached_at = NULL WHERE id = ?4",
+            rusqlite::params![vm_id, is_root_device, now, drive_id],
         )
-        .map_err(|e| StoreError::Query(format!("cannot attach workspace: {e}")))?;
+        .map_err(|e| StoreError::Query(format!("cannot attach drive: {e}")))?;
 
         drop(conn);
-        self.get_workspace_by_id(workspace_id)?
-            .ok_or_else(|| StoreError::Query("workspace not found after attach".to_string()))
+        self.get_drive_by_id(drive_id)?
+            .ok_or_else(|| StoreError::Query("drive not found after attach".to_string()))
     }
 
-    fn detach_workspace(&self, workspace_id: Id) -> Result<Workspace, StoreError> {
+    fn detach_drive(&self, drive_id: Id) -> Result<Drive, StoreError> {
         let conn = self.conn.lock().unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -850,14 +850,14 @@ impl WorkspaceStore for SqliteStore {
             .as_secs() as i64;
 
         conn.execute(
-            "UPDATE workspaces SET vm_id = NULL, is_root_device = 0, detached_at = ?1 WHERE id = ?2",
-            rusqlite::params![now, workspace_id],
+            "UPDATE drives SET vm_id = NULL, is_root_device = 0, detached_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, drive_id],
         )
-        .map_err(|e| StoreError::Query(format!("cannot detach workspace: {e}")))?;
+        .map_err(|e| StoreError::Query(format!("cannot detach drive: {e}")))?;
 
         drop(conn);
-        self.get_workspace_by_id(workspace_id)?
-            .ok_or_else(|| StoreError::Query("workspace not found after detach".to_string()))
+        self.get_drive_by_id(drive_id)?
+            .ok_or_else(|| StoreError::Query("drive not found after detach".to_string()))
     }
 }
 
@@ -1247,14 +1247,14 @@ fn row_to_firecracker(row: &rusqlite::Row) -> FirecrackerVersion {
     }
 }
 
-fn row_to_workspace(row: &rusqlite::Row) -> Workspace {
-    Workspace {
+fn row_to_drive(row: &rusqlite::Row) -> Drive {
+    Drive {
         id: row.get(0).unwrap(),
         name: row.get(1).unwrap(),
         vm_id: row.get(2).unwrap(),
         subvolume_path: row.get(3).unwrap(),
         master_image_id: row.get(4).unwrap(),
-        parent_workspace_id: row.get(5).unwrap(),
+        parent_drive_id: row.get(5).unwrap(),
         size_bytes: row.get(6).unwrap(),
         is_root_device: row.get::<_, i32>(7).unwrap() != 0,
         is_read_only: row.get::<_, i32>(8).unwrap() != 0,

@@ -3,10 +3,10 @@ use crate::asset::{
     FirecrackerVersion, Kernel, Provider, RegisterFirecrackerParams,
     RegisterKernelParams, RegisterRootfsParams, RootfsImage,
 };
+use crate::drive::{Drive, ImportImageParams, MasterImage};
 use crate::id::Id;
 use crate::template::{Build, BuildStatus, CreateTemplateParams, Template};
 use crate::vm::{CreateVmParams, Vm};
-use crate::workspace::{ImportImageParams, MasterImage, Workspace};
 
 /// Information about the database for status reporting.
 #[derive(Debug, Clone)]
@@ -140,42 +140,42 @@ pub trait ImageStore {
 
     /// Delete a master image by ID.
     /// Returns true if deleted, false if not found.
-    /// Fails with Conflict if workspaces reference this image.
+    /// Fails with Conflict if drives reference this image.
     fn delete_image(&self, id: Id) -> Result<bool, StoreError>;
 }
 
-/// Workspace record persistence.
-pub trait WorkspaceStore {
-    /// Register a workspace in the database.
-    fn create_workspace(
+/// Drive record persistence.
+pub trait DriveStore {
+    /// Register a drive in the database.
+    fn create_drive(
         &self,
         name: Option<&str>,
         subvolume_path: &str,
         master_image_id: Id,
-    ) -> Result<Workspace, StoreError>;
+    ) -> Result<Drive, StoreError>;
 
-    /// List all workspaces, optionally filtered by master image name.
-    fn list_workspaces(&self, base: Option<&str>) -> Result<Vec<Workspace>, StoreError>;
+    /// List all drives, optionally filtered by master image name.
+    fn list_drives(&self, base: Option<&str>) -> Result<Vec<Drive>, StoreError>;
 
-    /// Get a workspace by ID.
-    fn get_workspace_by_id(&self, id: Id) -> Result<Option<Workspace>, StoreError>;
+    /// Get a drive by ID.
+    fn get_drive_by_id(&self, id: Id) -> Result<Option<Drive>, StoreError>;
 
-    /// Get a workspace by name.
-    fn get_workspace_by_name(&self, name: &str) -> Result<Option<Workspace>, StoreError>;
+    /// Get a drive by name.
+    fn get_drive_by_name(&self, name: &str) -> Result<Option<Drive>, StoreError>;
 
-    /// Get a workspace by name or ID (convenience method for API layer).
-    fn get_workspace(&self, name_or_id: &str) -> Result<Option<Workspace>, StoreError>;
+    /// Get a drive by name or ID (convenience method for API layer).
+    fn get_drive(&self, name_or_id: &str) -> Result<Option<Drive>, StoreError>;
 
-    /// Delete a workspace by ID.
+    /// Delete a drive by ID.
     /// Returns true if deleted, false if not found.
-    /// Fails with Conflict if workspace is attached to a VM.
-    fn delete_workspace(&self, id: Id) -> Result<bool, StoreError>;
+    /// Fails with Conflict if drive is attached to a VM.
+    fn delete_drive(&self, id: Id) -> Result<bool, StoreError>;
 
-    /// Attach a workspace to a VM. Sets vm_id, is_root_device, and attached_at.
-    fn attach_workspace(&self, workspace_id: Id, vm_id: Id, is_root_device: bool) -> Result<Workspace, StoreError>;
+    /// Attach a drive to a VM. Sets vm_id, is_root_device, and attached_at.
+    fn attach_drive(&self, drive_id: Id, vm_id: Id, is_root_device: bool) -> Result<Drive, StoreError>;
 
-    /// Detach a workspace from a VM. Clears vm_id, is_root_device, sets detached_at.
-    fn detach_workspace(&self, workspace_id: Id) -> Result<Workspace, StoreError>;
+    /// Detach a drive from a VM. Clears vm_id, is_root_device, sets detached_at.
+    fn detach_drive(&self, drive_id: Id) -> Result<Drive, StoreError>;
 }
 
 /// Provider and downloaded asset persistence.
@@ -272,7 +272,7 @@ pub trait BuildStore {
 /// All state persistence goes through this trait. The pre-alpha
 /// implementation is SQLite; this trait exists so the backend can
 /// be swapped to Postgres or etcd for clustering later.
-pub trait StateStore: VmStore + ImageStore + WorkspaceStore + AssetStore + BuildStore {
+pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStore {
     /// Initialize the store (create schema if needed, run migrations).
     fn init(&self) -> Result<(), StoreError>;
 
