@@ -400,16 +400,16 @@ mod tests {
     fn firecracker_version_serializes() {
         let fc = FirecrackerVersion {
             id: Id::from_i64(1),
-            version: "1.12.0".to_string(),
+            version: "1.14.1".to_string(),
             architecture: "x86_64".to_string(),
-            path_on_host: "/home/user/.local/share/nexus/assets/firecracker/firecracker-v1.12.0-x86_64".to_string(),
+            path_on_host: "/home/user/.local/share/nexus/assets/firecracker/firecracker-v1.14.1-x86_64".to_string(),
             sha256: "abcdef1234567890".to_string(),
             file_size: 3_000_000,
-            source_url: "https://github.com/firecracker-microvm/firecracker/releases/download/v1.12.0/firecracker-v1.12.0-x86_64.tgz".to_string(),
+            source_url: "https://github.com/firecracker-microvm/firecracker/releases/download/v1.14.1/firecracker-v1.14.1-x86_64.tgz".to_string(),
             downloaded_at: 1000,
         };
         let json = serde_json::to_string(&fc).unwrap();
-        assert!(json.contains("1.12.0"));
+        assert!(json.contains("1.14.1"));
         assert!(json.contains("firecracker"));
     }
 

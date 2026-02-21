@@ -275,7 +275,7 @@ mod tests {
     fn tgz_filename_format() {
         // Verify URL construction directly (no provider trait needed)
         let repo = "firecracker-microvm/firecracker";
-        let version = "1.12.0";
+        let version = "1.14.1";
         let arch = "x86_64";
         let expected = format!(
             "https://github.com/{}/releases/download/v{}/firecracker-v{}-{}.tgz",
@@ -283,7 +283,7 @@ mod tests {
         );
         assert_eq!(
             expected,
-            "https://github.com/firecracker-microvm/firecracker/releases/download/v1.12.0/firecracker-v1.12.0-x86_64.tgz"
+            "https://github.com/firecracker-microvm/firecracker/releases/download/v1.14.1/firecracker-v1.14.1-x86_64.tgz"
         );
     }
 
@@ -305,7 +305,7 @@ mod tests {
         header.set_cksum();
         ar.append_data(
             &mut header,
-            "release-v1.12.0-x86_64/firecracker-v1.12.0-x86_64.debug",
+            "release-v1.14.1-x86_64/firecracker-v1.14.1-x86_64.debug",
             &debug_content[..],
         ).unwrap();
 
@@ -316,7 +316,7 @@ mod tests {
         header.set_cksum();
         ar.append_data(
             &mut header,
-            "release-v1.12.0-x86_64/firecracker-v1.12.0-x86_64",
+            "release-v1.14.1-x86_64/firecracker-v1.14.1-x86_64",
             &real_content[..],
         ).unwrap();
 
