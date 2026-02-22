@@ -6,7 +6,7 @@ use crate::store::traits::{NetworkStore, StoreError};
 use ipnetwork::Ipv4Network;
 use std::process::Command;
 use serde_json::json;
-use rtnetlink::{new_connection, Handle};
+use rtnetlink::{new_connection, Handle, LinkUnspec};
 use futures::stream::TryStreamExt;
 use tun_tap::{Iface, Mode};
 
@@ -82,72 +82,95 @@ impl NetworkService {
     /// Ensure the bridge exists (create if needed, configure IP).
     /// Requires CAP_NET_ADMIN.
     pub fn ensure_bridge(&self) -> Result<(), NetworkError> {
-        let bridge_name = &self.config.bridge_name;
+        let bridge_name = self.config.bridge_name.clone();
+        let subnet = self.config.subnet.clone();
 
-        // Check if bridge already exists
-        let check = Command::new("ip")
-            .args(["link", "show", bridge_name])
-            .output();
+        // Use block_in_place to run async rtnetlink in sync context
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let helper = NetlinkHelper::new()?;
 
-        if check.is_ok() && check.unwrap().status.success() {
-            // Bridge already exists
-            return Ok(());
-        }
+                // Check if bridge already exists
+                let existing_index = helper.get_link_index(&bridge_name).await.ok();
 
-        // Create the bridge
-        let create = Command::new("ip")
-            .args(["link", "add", "name", bridge_name, "type", "bridge"])
-            .output()
-            .map_err(|e| NetworkError::Bridge(format!("failed to create bridge: {e}")))?;
+                if let Some(bridge_index) = existing_index {
+                    tracing::info!("Bridge {} already exists at index {}, ensuring it's up", bridge_name, bridge_index);
 
-        if !create.status.success() {
-            let stderr = String::from_utf8_lossy(&create.stderr);
-            return Err(NetworkError::Bridge(format!("ip link add failed: {stderr}")));
-        }
+                    // Bring bridge up
+                    helper.handle
+                        .link()
+                        .set(LinkUnspec::new_with_index(bridge_index).up().build())
+                        .execute()
+                        .await
+                        .map_err(|e| NetworkError::Bridge(format!("failed to bring bridge up: {e}")))?;
 
-        // Assign IP to bridge
-        let network: Ipv4Network = self.config.subnet.parse()
-            .map_err(|e| NetworkError::Bridge(format!("invalid subnet: {e}")))?;
-        let gateway = network.nth(1).ok_or_else(|| {
-            NetworkError::Bridge("subnet too small".to_string())
-        })?;
-        let prefix_len = network.prefix();
+                    return Ok(());
+                }
 
-        let addr = Command::new("ip")
-            .args(["addr", "add", &format!("{}/{}", gateway, prefix_len), "dev", bridge_name])
-            .output()
-            .map_err(|e| NetworkError::Bridge(format!("failed to assign IP: {e}")))?;
+                // Create the bridge
+                use rtnetlink::LinkBridge;
 
-        if !addr.status.success() {
-            let stderr = String::from_utf8_lossy(&addr.stderr);
-            // Ignore "file exists" error (IP already assigned)
-            if !stderr.contains("File exists") {
-                return Err(NetworkError::Bridge(format!("ip addr add failed: {stderr}")));
-            }
-        }
+                helper.handle
+                    .link()
+                    .add(LinkBridge::new(&bridge_name).build())
+                    .execute()
+                    .await
+                    .map_err(|e| NetworkError::Bridge(format!("failed to create bridge: {e}")))?;
 
-        // Bring the bridge up
-        let up = Command::new("ip")
-            .args(["link", "set", bridge_name, "up"])
-            .output()
-            .map_err(|e| NetworkError::Bridge(format!("failed to bring bridge up: {e}")))?;
+                tracing::info!("Bridge {} created", bridge_name);
 
-        if !up.status.success() {
-            let stderr = String::from_utf8_lossy(&up.stderr);
-            return Err(NetworkError::Bridge(format!("ip link set up failed: {stderr}")));
-        }
+                // Get bridge index for IP assignment
+                let bridge_index = helper.get_link_index(&bridge_name).await?;
 
-        // Store bridge in database
-        let network: Ipv4Network = self.config.subnet.parse().unwrap();
-        let gateway = network.nth(1).unwrap();
-        self.store.create_bridge(
-            bridge_name,
-            &self.config.subnet,
-            &gateway.to_string(),
-            bridge_name,
-        )?;
+                // Parse subnet and gateway IP
+                let network: Ipv4Network = subnet.parse()
+                    .map_err(|e| NetworkError::Bridge(format!("invalid subnet: {e}")))?;
+                let gateway = network.nth(1).ok_or_else(|| {
+                    NetworkError::Bridge("subnet too small".to_string())
+                })?;
+                let prefix_len = network.prefix();
 
-        Ok(())
+                // Assign IP to bridge
+                let result = helper.handle
+                    .address()
+                    .add(bridge_index, gateway.into(), prefix_len)
+                    .execute()
+                    .await;
+
+                match result {
+                    Ok(_) => {
+                        tracing::info!("Assigned IP {}/{} to bridge {}", gateway, prefix_len, bridge_name);
+                    }
+                    Err(e) => {
+                        let err_str = format!("{}", e);
+                        if err_str.contains("File exists") || err_str.contains("EEXIST") {
+                            tracing::debug!("IP already assigned to bridge (EEXIST), continuing");
+                        } else {
+                            return Err(NetworkError::Bridge(format!("failed to assign IP: {e}")));
+                        }
+                    }
+                }
+
+                // Bring bridge up
+                helper.handle
+                    .link()
+                    .set(LinkUnspec::new_with_index(bridge_index).up().build())
+                    .execute()
+                    .await
+                    .map_err(|e| NetworkError::Bridge(format!("failed to bring bridge up: {e}")))?;
+
+                // Store bridge in database
+                self.store.create_bridge(
+                    &bridge_name,
+                    &subnet,
+                    &gateway.to_string(),
+                    &bridge_name,
+                )?;
+
+                tracing::info!("Bridge {} is up and configured", bridge_name);
+                Ok(())
+            })
+        })
     }
 
     /// Allocate an IP for a VM and return the assigned IP.
