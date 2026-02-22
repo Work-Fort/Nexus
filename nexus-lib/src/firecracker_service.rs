@@ -138,6 +138,8 @@ impl<'a> FirecrackerService<'a> {
         version: &str,
         provider_config: &Provider,
     ) -> Result<FirecrackerVersion, FirecrackerServiceError> {
+        // Strip leading "v" if present to normalize version format
+        let version = version.trim_start_matches('v');
         let arch = current_arch();
 
         let existing = self.store.list_firecracker_versions()?;
