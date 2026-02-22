@@ -66,6 +66,16 @@ cp target/debug/nexusd ~/.local/bin/
 mkdir -p ~/.config/systemd/user
 cp dist/nexus.service ~/.config/systemd/user/
 systemctl --user daemon-reload
+
+# Grant CAP_NET_ADMIN for networking features
+if command -v setcap &> /dev/null; then
+    sudo setcap cap_net_admin=+ep ~/.local/bin/nexusd
+    echo "Granted CAP_NET_ADMIN to nexusd"
+else
+    echo "WARNING: setcap not found. Networking features will require manual capability grant."
+    echo "See docs/networking.md for details."
+fi
+
 echo "Installed nexusd (debug) to ~/.local/bin/ and nexus.service"
 """
 
@@ -78,6 +88,16 @@ cp target/release/nexusd ~/.local/bin/
 mkdir -p ~/.config/systemd/user
 cp dist/nexus.service ~/.config/systemd/user/
 systemctl --user daemon-reload
+
+# Grant CAP_NET_ADMIN for networking features
+if command -v setcap &> /dev/null; then
+    sudo setcap cap_net_admin=+ep ~/.local/bin/nexusd
+    echo "Granted CAP_NET_ADMIN to nexusd"
+else
+    echo "WARNING: setcap not found. Networking features will require manual capability grant."
+    echo "See docs/networking.md for details."
+fi
+
 echo "Installed nexusd (release) to ~/.local/bin/ and nexus.service"
 """
 
