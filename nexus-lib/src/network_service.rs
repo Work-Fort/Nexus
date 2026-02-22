@@ -489,6 +489,7 @@ mod tests {
     use crate::store::sqlite::SqliteStore;
     use crate::store::traits::VmStore;
     use crate::vm::{CreateVmParams, VmRole};
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     fn test_store() -> SqliteStore {
@@ -569,7 +570,7 @@ mod tests {
     fn dns_servers_joins_with_comma() {
         let store = test_store();
         let service = NetworkService::new(
-            &store,
+            Arc::new(store),
             NetworkConfig {
                 bridge_name: "testbr0".to_string(),
                 subnet: "192.168.100.0/24".to_string(),

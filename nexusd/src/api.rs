@@ -1342,6 +1342,16 @@ mod tests {
         fn update_build_status(&self, _id: nexus_lib::id::Id, _status: BuildStatus, _master_image_id: Option<nexus_lib::id::Id>, _build_log_path: Option<&str>) -> Result<Build, StoreError> { unimplemented!() }
     }
 
+    impl nexus_lib::store::traits::NetworkStore for MockStore {
+        fn create_bridge(&self, _name: &str, _subnet: &str, _gateway: &str, _interface: &str) -> Result<(), StoreError> { unimplemented!() }
+        fn list_bridges(&self) -> Result<Vec<nexus_lib::store::traits::Bridge>, StoreError> { unimplemented!() }
+        fn get_bridge(&self, _name: &str) -> Result<Option<nexus_lib::store::traits::Bridge>, StoreError> { unimplemented!() }
+        fn assign_vm_ip(&self, _vm_id: i64, _ip_address: &str, _bridge_name: &str) -> Result<(), StoreError> { unimplemented!() }
+        fn get_vm_network(&self, _vm_id: i64) -> Result<Option<nexus_lib::store::traits::VmNetwork>, StoreError> { unimplemented!() }
+        fn release_vm_ip(&self, _vm_id: i64) -> Result<(), StoreError> { unimplemented!() }
+        fn list_allocated_ips(&self, _bridge_name: &str) -> Result<Vec<String>, StoreError> { unimplemented!() }
+    }
+
     impl StateStore for MockStore {
         fn init(&self) -> Result<(), StoreError> { Ok(()) }
         fn status(&self) -> Result<DbStatus, StoreError> {
@@ -1456,6 +1466,16 @@ mod tests {
         fn update_build_status(&self, _id: nexus_lib::id::Id, _status: BuildStatus, _master_image_id: Option<nexus_lib::id::Id>, _build_log_path: Option<&str>) -> Result<Build, StoreError> { unimplemented!() }
     }
 
+    impl nexus_lib::store::traits::NetworkStore for FailingStore {
+        fn create_bridge(&self, _name: &str, _subnet: &str, _gateway: &str, _interface: &str) -> Result<(), StoreError> { unimplemented!() }
+        fn list_bridges(&self) -> Result<Vec<nexus_lib::store::traits::Bridge>, StoreError> { unimplemented!() }
+        fn get_bridge(&self, _name: &str) -> Result<Option<nexus_lib::store::traits::Bridge>, StoreError> { unimplemented!() }
+        fn assign_vm_ip(&self, _vm_id: i64, _ip_address: &str, _bridge_name: &str) -> Result<(), StoreError> { unimplemented!() }
+        fn get_vm_network(&self, _vm_id: i64) -> Result<Option<nexus_lib::store::traits::VmNetwork>, StoreError> { unimplemented!() }
+        fn release_vm_ip(&self, _vm_id: i64) -> Result<(), StoreError> { unimplemented!() }
+        fn list_allocated_ips(&self, _bridge_name: &str) -> Result<Vec<String>, StoreError> { unimplemented!() }
+    }
+
     impl StateStore for FailingStore {
         fn init(&self) -> Result<(), StoreError> { Ok(()) }
         fn status(&self) -> Result<DbStatus, StoreError> {
@@ -1468,6 +1488,10 @@ mod tests {
     fn mock_state_with_store(store: impl StateStore + Send + Sync + 'static) -> Arc<AppState> {
         let store_arc: Arc<dyn StateStore + Send + Sync> = Arc::new(store);
         let vsock_manager = Arc::new(VsockManager::new(store_arc.clone()));
+        let network_service = nexus_lib::network_service::NetworkService::new(
+            store_arc.clone(),
+            nexus_lib::config::NetworkConfig::default(),
+        );
         Arc::new(AppState {
             store: store_arc,
             backend: Box::new(MockBackend),
@@ -1476,6 +1500,7 @@ mod tests {
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
             firecracker: nexus_lib::config::FirecrackerConfig::default(),
             vsock_manager,
+            network_service,
             processes: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
@@ -1556,6 +1581,10 @@ mod tests {
         std::mem::forget(dir);
         let store_arc: Arc<dyn StateStore + Send + Sync> = Arc::new(store);
         let vsock_manager = Arc::new(VsockManager::new(store_arc.clone()));
+        let network_service = nexus_lib::network_service::NetworkService::new(
+            store_arc.clone(),
+            nexus_lib::config::NetworkConfig::default(),
+        );
         Arc::new(AppState {
             store: store_arc,
             backend: Box::new(MockBackend),
@@ -1564,6 +1593,7 @@ mod tests {
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
             firecracker: nexus_lib::config::FirecrackerConfig::default(),
             vsock_manager,
+            network_service,
             processes: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
