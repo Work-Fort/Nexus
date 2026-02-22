@@ -6,7 +6,7 @@ use crate::asset::{
 use crate::drive::{Drive, ImportImageParams, MasterImage};
 use crate::id::Id;
 use crate::store::schema::{seed_default_providers, SCHEMA_SQL, SCHEMA_VERSION};
-use crate::store::traits::{AssetStore, BuildStore, DbStatus, DriveStore, ImageStore, StateStore, StoreError, VmStore};
+use crate::store::traits::{AssetStore, Bridge, BuildStore, DbStatus, DriveStore, ImageStore, NetworkStore, StateStore, StoreError, VmNetwork, VmStore};
 use crate::template::{Build, BuildStatus, CreateTemplateParams, Template};
 use crate::vm::{CreateVmParams, Vm, VmState};
 use rusqlite::Connection;
@@ -1469,6 +1469,109 @@ impl BuildStore for SqliteStore {
     }
 }
 
+impl NetworkStore for SqliteStore {
+    fn create_bridge(
+        &self,
+        name: &str,
+        subnet: &str,
+        gateway: &str,
+        interface: &str,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO bridges (name, subnet, gateway, interface) VALUES (?1, ?2, ?3, ?4)",
+            (name, subnet, gateway, interface),
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    fn list_bridges(&self) -> Result<Vec<Bridge>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT name, subnet, gateway, interface, created_at FROM bridges"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let bridges = stmt.query_map([], |row| {
+            Ok(Bridge {
+                name: row.get(0)?,
+                subnet: row.get(1)?,
+                gateway: row.get(2)?,
+                interface: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        }).map_err(|e| StoreError::Query(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(bridges)
+    }
+
+    fn get_bridge(&self, name: &str) -> Result<Option<Bridge>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT name, subnet, gateway, interface, created_at FROM bridges WHERE name = ?1"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let bridge = stmt.query_row([name], |row| {
+            Ok(Bridge {
+                name: row.get(0)?,
+                subnet: row.get(1)?,
+                gateway: row.get(2)?,
+                interface: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        }).optional()
+        .map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(bridge)
+    }
+
+    fn assign_vm_ip(
+        &self,
+        vm_id: i64,
+        ip_address: &str,
+        bridge_name: &str,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO vm_network (vm_id, ip_address, bridge_name) VALUES (?1, ?2, ?3)",
+            (vm_id, ip_address, bridge_name),
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    fn get_vm_network(&self, vm_id: i64) -> Result<Option<VmNetwork>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT vm_id, ip_address, bridge_name FROM vm_network WHERE vm_id = ?1"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let network = stmt.query_row([vm_id], |row| {
+            Ok(VmNetwork {
+                vm_id: row.get(0)?,
+                ip_address: row.get(1)?,
+                bridge_name: row.get(2)?,
+            })
+        }).optional()
+        .map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(network)
+    }
+
+    fn release_vm_ip(&self, vm_id: i64) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM vm_network WHERE vm_id = ?1", [vm_id])
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    fn list_allocated_ips(&self, bridge_name: &str) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT ip_address FROM vm_network WHERE bridge_name = ?1"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        let ips = stmt.query_map([bridge_name], |row| row.get::<_, String>(0))
+            .map_err(|e| StoreError::Query(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(ips)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2785,5 +2888,77 @@ mod tests {
         // Second entry is the start transition
         assert_eq!(history[1].from_state, "created");
         assert_eq!(history[1].to_state, "running");
+    }
+
+    fn create_test_vm(store: &SqliteStore, name: &str) -> Vm {
+        store.create_vm(&CreateVmParams {
+            name: name.to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap()
+    }
+
+    #[test]
+    fn create_bridge_stores_bridge_config() {
+        let store = test_store();
+        let result = store.create_bridge(
+            "nexbr0",
+            "172.16.0.0/12",
+            "172.16.0.1",
+            "nexbr0",
+        );
+        assert!(result.is_ok());
+
+        let bridges = store.list_bridges().unwrap();
+        assert_eq!(bridges.len(), 1);
+        assert_eq!(bridges[0].name, "nexbr0");
+        assert_eq!(bridges[0].subnet, "172.16.0.0/12");
+        assert_eq!(bridges[0].gateway, "172.16.0.1");
+    }
+
+    #[test]
+    fn assign_vm_ip_stores_network_config() {
+        let store = test_store();
+        store.create_bridge("nexbr0", "172.16.0.0/12", "172.16.0.1", "nexbr0").unwrap();
+        let vm = create_test_vm(&store, "vm1");
+
+        let result = store.assign_vm_ip(vm.id.as_i64(), "172.16.0.2", "nexbr0");
+        assert!(result.is_ok());
+
+        let network = store.get_vm_network(vm.id.as_i64()).unwrap();
+        assert!(network.is_some());
+        let network = network.unwrap();
+        assert_eq!(network.ip_address, "172.16.0.2");
+        assert_eq!(network.bridge_name, "nexbr0");
+    }
+
+    #[test]
+    fn release_vm_ip_removes_network_config() {
+        let store = test_store();
+        store.create_bridge("nexbr0", "172.16.0.0/12", "172.16.0.1", "nexbr0").unwrap();
+        let vm = create_test_vm(&store, "vm1");
+        store.assign_vm_ip(vm.id.as_i64(), "172.16.0.2", "nexbr0").unwrap();
+
+        let result = store.release_vm_ip(vm.id.as_i64());
+        assert!(result.is_ok());
+
+        let network = store.get_vm_network(vm.id.as_i64()).unwrap();
+        assert!(network.is_none());
+    }
+
+    #[test]
+    fn list_allocated_ips_returns_all_assigned_ips() {
+        let store = test_store();
+        store.create_bridge("nexbr0", "172.16.0.0/12", "172.16.0.1", "nexbr0").unwrap();
+        let vm1 = create_test_vm(&store, "vm1");
+        let vm2 = create_test_vm(&store, "vm2");
+        store.assign_vm_ip(vm1.id.as_i64(), "172.16.0.2", "nexbr0").unwrap();
+        store.assign_vm_ip(vm2.id.as_i64(), "172.16.0.3", "nexbr0").unwrap();
+
+        let allocated = store.list_allocated_ips("nexbr0").unwrap();
+        assert_eq!(allocated.len(), 2);
+        assert!(allocated.contains(&"172.16.0.2".to_string()));
+        assert!(allocated.contains(&"172.16.0.3".to_string()));
     }
 }

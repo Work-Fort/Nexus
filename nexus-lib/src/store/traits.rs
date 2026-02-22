@@ -50,6 +50,22 @@ impl std::fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
+#[derive(Debug, Clone)]
+pub struct Bridge {
+    pub name: String,
+    pub subnet: String,
+    pub gateway: String,
+    pub interface: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct VmNetwork {
+    pub vm_id: i64,
+    pub ip_address: String,
+    pub bridge_name: String,
+}
+
 /// VM record persistence.
 pub trait VmStore {
     /// Create a new VM record. Assigns a unique ID and auto-assigns a vsock CID.
@@ -267,12 +283,37 @@ pub trait BuildStore {
     ) -> Result<Build, StoreError>;
 }
 
+/// Network state management (Step 12)
+pub trait NetworkStore {
+    // Bridge management
+    fn create_bridge(
+        &self,
+        name: &str,
+        subnet: &str,
+        gateway: &str,
+        interface: &str,
+    ) -> Result<(), StoreError>;
+    fn list_bridges(&self) -> Result<Vec<Bridge>, StoreError>;
+    fn get_bridge(&self, name: &str) -> Result<Option<Bridge>, StoreError>;
+
+    // VM network assignment
+    fn assign_vm_ip(
+        &self,
+        vm_id: i64,
+        ip_address: &str,
+        bridge_name: &str,
+    ) -> Result<(), StoreError>;
+    fn get_vm_network(&self, vm_id: i64) -> Result<Option<VmNetwork>, StoreError>;
+    fn release_vm_ip(&self, vm_id: i64) -> Result<(), StoreError>;
+    fn list_allocated_ips(&self, bridge_name: &str) -> Result<Vec<String>, StoreError>;
+}
+
 /// Convenience super-trait for code that needs the full store.
 ///
 /// All state persistence goes through this trait. The pre-alpha
 /// implementation is SQLite; this trait exists so the backend can
 /// be swapped to Postgres or etcd for clustering later.
-pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStore {
+pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStore + NetworkStore {
     /// Initialize the store (create schema if needed, run migrations).
     fn init(&self) -> Result<(), StoreError>;
 
