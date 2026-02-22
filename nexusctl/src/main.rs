@@ -393,13 +393,24 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                     }
                     // Print table header
                     println!(
-                        "{:<13} {:<20} {:<10} {:<10} {:<6} {:<8} {:<6}",
-                        "ID", "NAME", "ROLE", "STATE", "VCPU", "MEM", "CID"
+                        "{:<13} {:<20} {:<10} {:<10} {:<15} {:<6} {:<8} {:<6}",
+                        "ID", "NAME", "ROLE", "STATE", "NETWORK", "VCPU", "MEM", "CID"
                     );
                     for vm in &vms {
+                        // Fetch network info for each VM
+                        let network_info = match client.vm_inspect(&vm.id.encode()).await {
+                            Ok(detail) => {
+                                if let Some(network) = detail.network {
+                                    network.ip_address
+                                } else {
+                                    "-".to_string()
+                                }
+                            }
+                            Err(_) => "-".to_string(),
+                        };
                         println!(
-                            "{:<13} {:<20} {:<10} {:<10} {:<6} {:<8} {:<6}",
-                            vm.id, vm.name, vm.role, vm.state, vm.vcpu_count,
+                            "{:<13} {:<20} {:<10} {:<10} {:<15} {:<6} {:<8} {:<6}",
+                            vm.id, vm.name, vm.role, vm.state, network_info, vm.vcpu_count,
                             format!("{}M", vm.mem_size_mib), vm.cid,
                         );
                     }
@@ -446,8 +457,9 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
             }
         }
         VmAction::Inspect { name } => {
-            match client.get_vm(&name).await {
-                Ok(Some(vm)) => {
+            match client.vm_inspect(&name).await {
+                Ok(detail) => {
+                    let vm = &detail.vm;
                     println!("Name:       {}", vm.name);
                     println!("ID:         {}", vm.id);
                     println!("Role:       {}", vm.role);
@@ -466,6 +478,11 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                     }
                     if let Some(ref log) = vm.console_log_path {
                         println!("Console:    {}", log);
+                    }
+                    if let Some(ref network) = detail.network {
+                        println!("Network:");
+                        println!("  IP Address: {}", network.ip_address);
+                        println!("  Bridge:     {}", network.bridge_name);
                     }
                     println!("Created:    {}", format_timestamp(vm.created_at));
                     if let Some(ts) = vm.started_at {
@@ -498,10 +515,6 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                     }
 
                     ExitCode::SUCCESS
-                }
-                Ok(None) => {
-                    eprintln!("Error: VM \"{}\" not found", name);
-                    ExitCode::from(EXIT_NOT_FOUND)
                 }
                 Err(e) if e.is_connect() => {
                     print_connect_error(daemon_addr);

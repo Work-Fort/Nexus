@@ -127,7 +127,15 @@ async fn get_vm(
     Path(name_or_id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     match state.store.get_vm(&name_or_id) {
-        Ok(Some(vm)) => (StatusCode::OK, Json(serde_json::to_value(vm).unwrap())),
+        Ok(Some(vm)) => {
+            let network = state.store.get_vm_network(vm.id.as_i64()).ok().flatten();
+            let mut vm_json = serde_json::to_value(&vm).unwrap();
+            vm_json["network"] = network.as_ref().map(|n| serde_json::json!({
+                "ip_address": n.ip_address,
+                "bridge_name": n.bridge_name,
+            })).unwrap_or(serde_json::Value::Null);
+            (StatusCode::OK, Json(vm_json))
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),

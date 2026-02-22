@@ -39,6 +39,19 @@ pub struct DatabaseInfo {
     pub size_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct VmDetail {
+    #[serde(flatten)]
+    pub vm: crate::vm::Vm,
+    pub network: Option<VmNetworkInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VmNetworkInfo {
+    pub ip_address: String,
+    pub bridge_name: String,
+}
+
 pub struct NexusClient {
     base_url: String,
     http: reqwest::Client,
@@ -146,6 +159,26 @@ impl NexusClient {
         }
 
         resp.json().await.map(Some).map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn vm_inspect(&self, name_or_id: &str) -> Result<VmDetail, ClientError> {
+        let url = format!("{}/v1/vms/{name_or_id}", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                ClientError::Connect(e.to_string())
+            } else {
+                ClientError::Api(e.to_string())
+            }
+        })?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(ClientError::Api(format!("VM '{}' not found", name_or_id)));
+        }
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
     }
 
     pub async fn get_vm_history(&self, name_or_id: &str) -> Result<Vec<crate::vm::StateHistory>, ClientError> {
