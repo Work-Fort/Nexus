@@ -378,14 +378,18 @@ impl VmStore for SqliteStore {
 
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE vms SET state = 'crashed', pid = NULL, \
+            "UPDATE vms SET pid = NULL, \
              stopped_at = strftime('%s', 'now'), updated_at = strftime('%s', 'now') \
              WHERE id = ?1",
             [vm.id],
         )
-        .map_err(|e| StoreError::Query(format!("cannot update VM state: {e}")))?;
+        .map_err(|e| StoreError::Query(format!("cannot update VM metadata: {e}")))?;
 
         drop(conn);
+
+        // Record state transition to crashed
+        self.update_vm_state(vm.id, "crashed", Some("VM crashed"))?;
+
         self.get_vm_by_id(vm.id)?
             .ok_or_else(|| StoreError::Query("VM not found after update".to_string()))
     }
@@ -2698,6 +2702,44 @@ mod tests {
         assert_eq!(history[0].from_state, "running");
         assert_eq!(history[0].to_state, "stopped");
         assert_eq!(history[0].reason, Some("VM stopped".to_string()));
+        // Second entry is the start transition
+        assert_eq!(history[1].from_state, "created");
+        assert_eq!(history[1].to_state, "running");
+    }
+
+    #[test]
+    fn crash_vm_records_state_transition() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let store = SqliteStore::open_and_init(&db_path).unwrap();
+
+        // Create and start a VM
+        let params = CreateVmParams {
+            name: "crash-vm".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        };
+        let vm = store.create_vm(&params).unwrap();
+        store.start_vm(
+            vm.id,
+            12345,
+            "/tmp/test.sock",
+            "/tmp/test.uds",
+            "/tmp/test.log",
+            "{}"
+        ).unwrap();
+
+        // Crash the VM
+        store.crash_vm(vm.id).unwrap();
+
+        // Check that state transition was recorded
+        let history = store.get_state_history(vm.id).unwrap();
+        assert_eq!(history.len(), 2);
+        // History is reverse chronological, so crashed transition is first
+        assert_eq!(history[0].from_state, "running");
+        assert_eq!(history[0].to_state, "crashed");
+        assert_eq!(history[0].reason, Some("VM crashed".to_string()));
         // Second entry is the start transition
         assert_eq!(history[1].from_state, "created");
         assert_eq!(history[1].to_state, "running");
