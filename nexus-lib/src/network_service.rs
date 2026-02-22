@@ -10,6 +10,19 @@ use rtnetlink::{new_connection, Handle, LinkUnspec};
 use futures::stream::TryStreamExt;
 use tun_tap::{Iface, Mode};
 use rtnetlink::packet_route::link::LinkAttribute;
+use std::os::fd::AsRawFd;
+
+/// Set IFF_PERSIST flag on a tap device to prevent kernel from destroying it when the fd closes.
+/// This allows Firecracker to attach to the pre-created tap device.
+fn set_tap_persistent(iface: &Iface) -> Result<(), std::io::Error> {
+    const TUNSETPERSIST: nix::libc::c_ulong = 0x400454cb; // ioctl number for TUNSETPERSIST
+    let fd = iface.as_raw_fd();
+    let ret = unsafe { nix::libc::ioctl(fd, TUNSETPERSIST, 1) };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
 
 /// Helper to execute async netlink operations in a sync context.
 struct NetlinkHelper {
@@ -266,7 +279,14 @@ impl NetworkService {
 
                 tracing::info!("Tap device {} is up", actual_tap_name);
 
-                // Keep iface alive until tap is fully configured
+                // Make tap device persistent so it survives when we drop the iface.
+                // This allows Firecracker to attach to the pre-created tap device.
+                set_tap_persistent(&iface)
+                    .map_err(|e| NetworkError::Tap(format!("failed to set tap persistent: {e}")))?;
+
+                tracing::info!("Tap device {} is now persistent", actual_tap_name);
+
+                // Drop iface - the tap device will persist
                 drop(iface);
 
                 Ok(actual_tap_name)
