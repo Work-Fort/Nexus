@@ -1,5 +1,6 @@
 mod metadata;
 mod vsock;
+mod mcp;
 
 use anyhow::{Context, Result};
 use metadata::ImageMetadata;
@@ -25,8 +26,11 @@ async fn main() -> Result<()> {
 
     info!("loaded image metadata: {:?}", metadata);
 
-    // Start vsock server
-    let vsock_task = tokio::spawn(vsock::run_vsock_server(metadata));
+    // Start vsock control server (port 100)
+    let control_task = tokio::spawn(vsock::run_vsock_server(metadata));
+
+    // Start MCP server (port 200)
+    let mcp_task = tokio::spawn(mcp::run_mcp_server());
 
     // Wait for shutdown signal
     tokio::select! {
@@ -36,11 +40,18 @@ async fn main() -> Result<()> {
         _ = signal_term() => {
             info!("received SIGTERM, shutting down");
         }
-        result = vsock_task => {
+        result = control_task => {
             match result {
-                Ok(Ok(())) => info!("vsock server exited cleanly"),
-                Ok(Err(e)) => error!("vsock server error: {}", e),
-                Err(e) => error!("vsock server task panicked: {}", e),
+                Ok(Ok(())) => info!("control server exited cleanly"),
+                Ok(Err(e)) => error!("control server error: {}", e),
+                Err(e) => error!("control server task panicked: {}", e),
+            }
+        }
+        result = mcp_task => {
+            match result {
+                Ok(Ok(())) => info!("MCP server exited cleanly"),
+                Ok(Err(e)) => error!("MCP server error: {}", e),
+                Err(e) => error!("MCP server task panicked: {}", e),
             }
         }
     }

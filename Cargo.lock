@@ -1229,6 +1229,7 @@ name = "guest-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "nexus-protocol",
  "serde",
  "serde_json",
  "serde_yml",
