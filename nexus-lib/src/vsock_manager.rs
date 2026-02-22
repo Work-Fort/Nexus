@@ -11,6 +11,7 @@ use tokio::time::{timeout, Duration};
 use tracing::{info, warn, error};
 
 const CONTROL_PORT: u32 = 100;
+const MCP_PORT: u32 = 200;
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Image metadata received from guest-agent
@@ -43,10 +44,98 @@ pub enum HostMessage {
     Ping { timestamp: i64 },
 }
 
+/// Connection pool for MCP vsock connections (port 200)
+#[derive(Clone)]
+struct McpConnectionPool {
+    connections: Arc<Mutex<HashMap<crate::id::Id, Arc<Mutex<UnixStream>>>>>,
+}
+
+impl McpConnectionPool {
+    fn new() -> Self {
+        Self {
+            connections: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    async fn get_or_connect(&self, vm_id: crate::id::Id, uds_path: PathBuf) -> Result<Arc<Mutex<UnixStream>>> {
+        let mut conns = self.connections.lock().await;
+
+        // Return existing connection if available
+        if let Some(stream) = conns.get(&vm_id) {
+            return Ok(stream.clone());
+        }
+
+        // Establish new connection
+        let stream = self.connect_mcp(uds_path).await?;
+        let stream_arc = Arc::new(Mutex::new(stream));
+        conns.insert(vm_id, stream_arc.clone());
+
+        info!("established MCP connection for VM {}", vm_id);
+        Ok(stream_arc)
+    }
+
+    async fn connect_mcp(&self, uds_path: PathBuf) -> Result<UnixStream> {
+        let vsock_path = uds_path.join("firecracker.vsock");
+
+        // Connect to Firecracker vsock UDS
+        let mut stream = timeout(DEFAULT_CONNECT_TIMEOUT, UnixStream::connect(&vsock_path))
+            .await
+            .context("timeout connecting to vsock UDS for MCP")?
+            .with_context(|| format!("failed to connect to vsock UDS at {}", vsock_path.display()))?;
+
+        // Send CONNECT command to Firecracker for port 200
+        let connect_cmd = format!("CONNECT {}\n", MCP_PORT);
+        stream.write_all(connect_cmd.as_bytes()).await
+            .context("failed to send MCP CONNECT command")?;
+        stream.flush().await
+            .context("failed to flush MCP CONNECT command")?;
+
+        info!("sent CONNECT {} to Firecracker vsock for MCP", MCP_PORT);
+
+        Ok(stream)
+    }
+
+    async fn reconnect(&self, vm_id: crate::id::Id, uds_path: PathBuf) -> Result<Arc<Mutex<UnixStream>>> {
+        // Remove stale connection
+        self.connections.lock().await.remove(&vm_id);
+
+        // Reconnect with exponential backoff
+        let mut retries = 0;
+        let max_retries = 5;
+
+        loop {
+            match self.connect_mcp(uds_path.clone()).await {
+                Ok(stream) => {
+                    let stream_arc = Arc::new(Mutex::new(stream));
+                    self.connections.lock().await.insert(vm_id, stream_arc.clone());
+                    info!("reconnected MCP for VM {} after {} retries", vm_id, retries);
+                    return Ok(stream_arc);
+                }
+                Err(e) if retries < max_retries => {
+                    retries += 1;
+                    let backoff = Duration::from_secs(2u64.pow(retries));
+                    warn!("MCP reconnect failed for VM {}, retrying in {:?}: {}", vm_id, backoff, e);
+                    tokio::time::sleep(backoff).await;
+                }
+                Err(e) => {
+                    error!("MCP reconnect exhausted for VM {}: {}", vm_id, e);
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    async fn close(&self, vm_id: crate::id::Id) {
+        self.connections.lock().await.remove(&vm_id);
+        info!("closed MCP connection for VM {}", vm_id);
+    }
+}
+
 /// Manages vsock connections to guest agents
 pub struct VsockManager {
     store: Arc<dyn StateStore + Send + Sync>,
     connections: Arc<Mutex<HashMap<crate::id::Id, VsockConnection>>>,
+    mcp_pool: McpConnectionPool,
 }
 
 #[allow(dead_code)]
@@ -60,6 +149,7 @@ impl VsockManager {
         Self {
             store,
             connections: Arc::new(Mutex::new(HashMap::new())),
+            mcp_pool: McpConnectionPool::new(),
         }
     }
 
@@ -196,8 +286,43 @@ impl VsockManager {
         Ok(())
     }
 
+    /// Establish MCP connection for a VM (called when VM reaches ready state)
+    pub async fn connect_mcp(&self, vm_id: crate::id::Id, uds_path: PathBuf) -> Result<()> {
+        self.mcp_pool.get_or_connect(vm_id, uds_path).await?;
+        Ok(())
+    }
+
+    /// Get MCP connection for sending requests
+    pub async fn get_mcp_connection(&self, vm_id: crate::id::Id, uds_path: PathBuf) -> Result<Arc<Mutex<UnixStream>>> {
+        match self.mcp_pool.get_or_connect(vm_id, uds_path.clone()).await {
+            Ok(stream) => Ok(stream),
+            Err(_) => {
+                // Try reconnecting
+                self.mcp_pool.reconnect(vm_id, uds_path).await
+            }
+        }
+    }
+
+    /// Close MCP connection (called on VM stop/crash)
+    pub async fn close_mcp_connection(&self, vm_id: crate::id::Id) {
+        self.mcp_pool.close(vm_id).await;
+    }
+
     /// Close connection for a VM (called on VM stop/crash)
     pub async fn close_connection(&self, vm_id: crate::id::Id) {
         self.connections.lock().await.remove(&vm_id);
+        self.mcp_pool.close(vm_id).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_connection_pool_initializes_empty() {
+        let pool = McpConnectionPool::new();
+        // Cannot directly inspect connections (private), but this verifies it compiles
+        drop(pool);
     }
 }

@@ -38,6 +38,7 @@ anyhow = "1"
 data-encoding = "2.6"
 rand = "0.10"
 thiserror = "2"
+nexus-protocol = { path = "../nexus-protocol" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
