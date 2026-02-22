@@ -940,9 +940,15 @@ async fn start_vm_handler(
             });
 
             // Connect to guest-agent and wait for handshake
-            match state.vsock_manager.connect_and_handshake(vm.id, runtime_dir).await {
+            match state.vsock_manager.connect_and_handshake(vm.id, runtime_dir.clone()).await {
                 Ok(metadata) => {
                     tracing::info!("guest-agent connected for VM {}: {:?}", vm.id, metadata);
+
+                    // Connect to MCP server (port 200) - non-fatal if it fails
+                    if let Err(e) = state.vsock_manager.connect_mcp(vm.id, runtime_dir).await {
+                        tracing::warn!("failed to establish MCP connection for VM {}: {}", vm.id, e);
+                        // Non-fatal: control channel (port 100) is still working
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("failed to connect to guest-agent for VM {}: {}", vm.id, e);
@@ -1037,6 +1043,9 @@ async fn stop_vm_handler(
             let _ = state.store.record_boot_stop(tracked.boot_id, None, None);
         }
     }
+
+    // Close vsock connections (both control and MCP)
+    state.vsock_manager.close_connection(vm.id).await;
 
     match state.store.stop_vm(vm.id) {
         Ok(stopped) => (StatusCode::OK, Json(serde_json::to_value(stopped).unwrap())),

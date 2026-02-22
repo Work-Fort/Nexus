@@ -73,5 +73,8 @@ async fn check_processes(state: &AppState) {
         } else {
             info!(vm_id = %vm_id, "VM transitioned to crashed state");
         }
+
+        // Close vsock connections (both control and MCP)
+        state.vsock_manager.close_connection(*vm_id).await;
     }
 }
