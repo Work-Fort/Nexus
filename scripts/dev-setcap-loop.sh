@@ -21,7 +21,7 @@ echo "Watching for nexusd binaries..."
 while true; do
     for binary in "${BINARY_PATHS[@]}"; do
         if [ -f "$binary" ]; then
-            setcap cap_net_admin+ep "$binary" 2>/dev/null || true
+            setcap cap_net_admin+eip "$binary" 2>/dev/null || true
             echo "[$(date +%H:%M:%S)] Set CAP_NET_ADMIN on $binary"
         fi
     done
