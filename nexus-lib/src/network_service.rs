@@ -273,25 +273,29 @@ impl NetworkService {
     pub fn destroy_tap(&self, vm_id: i64) -> Result<(), NetworkError> {
         let tap_name = format!("tap{}", vm_id);
 
-        // Delete tap device (this also detaches it from the bridge)
-        let delete = Command::new("ip")
-            .args(["link", "delete", &tap_name])
-            .output();
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let helper = NetlinkHelper::new()?;
 
-        if let Ok(output) = delete {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                // Ignore "cannot find device" error (already deleted)
-                if !stderr.contains("Cannot find device") {
-                    tracing::warn!("ip link delete failed: {}", stderr);
+                // Get tap device index
+                if let Ok(tap_index) = helper.get_link_index(&tap_name).await {
+                    // Delete tap device
+                    if let Err(e) = helper.handle.link().del(tap_index).execute().await {
+                        tracing::warn!("Failed to delete tap device {}: {}", tap_name, e);
+                        // Continue to release IP even if tap deletion fails
+                    } else {
+                        tracing::info!("Deleted tap device {}", tap_name);
+                    }
+                } else {
+                    tracing::warn!("Tap device {} not found, skipping deletion", tap_name);
                 }
-            }
-        }
 
-        // Release IP from database
-        self.store.release_vm_ip(vm_id)?;
+                // Release IP from database
+                self.store.release_vm_ip(vm_id)?;
 
-        Ok(())
+                Ok(())
+            })
+        })
     }
 
     /// Get the gateway IP for the bridge.
