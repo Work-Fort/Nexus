@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::info;
 
 /// MCP client for invoking tools via JSON-RPC over vsock
 pub struct McpClient {
@@ -81,6 +81,7 @@ impl McpClient {
         let mut stream = self.stream.lock().await;
         let mut reader = BufReader::new(&mut *stream);
         let mut line = String::new();
+        #[allow(unused_assignments)]
         let mut exit_code = None;
 
         loop {
