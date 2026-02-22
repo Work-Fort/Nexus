@@ -1,3 +1,3 @@
 [workspace]
-members = ["nexusd", "nexus-lib", "nexusctl", "guest-agent", "integration-tests"]
+members = ["nexusd", "nexus-lib", "nexusctl", "guest-agent", "nexus-protocol", "integration-tests"]
 resolver = "2"
