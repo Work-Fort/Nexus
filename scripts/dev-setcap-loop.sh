@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+# Handle Ctrl-C gracefully
+trap 'echo -e "\nStopping CAP_NET_ADMIN auto-setter..."; exit 0' SIGINT SIGTERM
+
 BINARY_PATHS=(
     "target/debug/nexusd"
     "target/release/nexusd"
