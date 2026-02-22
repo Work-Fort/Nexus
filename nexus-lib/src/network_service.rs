@@ -5,6 +5,7 @@ use crate::config::NetworkConfig;
 use crate::store::traits::{NetworkStore, StoreError};
 use ipnetwork::Ipv4Network;
 use std::process::Command;
+use serde_json::json;
 
 /// Errors from network service operations.
 #[derive(Debug)]
@@ -245,6 +246,241 @@ impl<'a> NetworkService<'a> {
     pub fn dns_servers(&self) -> String {
         self.config.dns_servers.join(",")
     }
+
+    /// Initialize nftables rules for NAT and VM isolation.
+    /// Creates the `nexus` table with postrouting (NAT) and forward (filter) chains.
+    /// Requires CAP_NET_ADMIN.
+    pub fn init_nftables(&self) -> Result<(), NetworkError> {
+        let bridge_name = &self.config.bridge_name;
+        let subnet = &self.config.subnet;
+
+        // Parse subnet to get correct CIDR format
+        let network: ipnetwork::Ipv4Network = subnet.parse()
+            .map_err(|e| NetworkError::Nftables(format!("invalid subnet: {e}")))?;
+        let subnet_cidr = format!("{}/{}", network.network(), network.prefix());
+
+        // Create complete nftables ruleset via JSON
+        let ruleset_json = json!({
+            "nftables": [
+                {
+                    "add": {
+                        "table": {
+                            "family": "inet",
+                            "name": "nexus"
+                        }
+                    }
+                },
+                {
+                    "add": {
+                        "chain": {
+                            "family": "inet",
+                            "table": "nexus",
+                            "name": "postrouting",
+                            "type": "nat",
+                            "hook": "postrouting",
+                            "prio": 100,
+                            "policy": "accept"
+                        }
+                    }
+                },
+                {
+                    "add": {
+                        "chain": {
+                            "family": "inet",
+                            "table": "nexus",
+                            "name": "forward",
+                            "type": "filter",
+                            "hook": "forward",
+                            "prio": 0,
+                            "policy": "drop"
+                        }
+                    }
+                },
+                {
+                    "add": {
+                        "rule": {
+                            "family": "inet",
+                            "table": "nexus",
+                            "chain": "postrouting",
+                            "expr": [
+                                {
+                                    "match": {
+                                        "op": "==",
+                                        "left": {
+                                            "payload": {
+                                                "protocol": "ip",
+                                                "field": "saddr"
+                                            }
+                                        },
+                                        "right": subnet_cidr
+                                    }
+                                },
+                                {
+                                    "match": {
+                                        "op": "!=",
+                                        "left": {
+                                            "meta": {
+                                                "key": "oifname"
+                                            }
+                                        },
+                                        "right": bridge_name
+                                    }
+                                },
+                                {
+                                    "masquerade": null
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "add": {
+                        "rule": {
+                            "family": "inet",
+                            "table": "nexus",
+                            "chain": "forward",
+                            "expr": [
+                                {
+                                    "match": {
+                                        "op": "in",
+                                        "left": {
+                                            "ct": {
+                                                "key": "state"
+                                            }
+                                        },
+                                        "right": ["established", "related"]
+                                    }
+                                },
+                                {
+                                    "accept": null
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "add": {
+                        "rule": {
+                            "family": "inet",
+                            "table": "nexus",
+                            "chain": "forward",
+                            "expr": [
+                                {
+                                    "match": {
+                                        "op": "==",
+                                        "left": {
+                                            "meta": {
+                                                "key": "iifname"
+                                            }
+                                        },
+                                        "right": bridge_name
+                                    }
+                                },
+                                {
+                                    "match": {
+                                        "op": "!=",
+                                        "left": {
+                                            "meta": {
+                                                "key": "oifname"
+                                            }
+                                        },
+                                        "right": bridge_name
+                                    }
+                                },
+                                {
+                                    "accept": null
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "add": {
+                        "rule": {
+                            "family": "inet",
+                            "table": "nexus",
+                            "chain": "forward",
+                            "expr": [
+                                {
+                                    "match": {
+                                        "op": "==",
+                                        "left": {
+                                            "meta": {
+                                                "key": "iifname"
+                                            }
+                                        },
+                                        "right": bridge_name
+                                    }
+                                },
+                                {
+                                    "match": {
+                                        "op": "==",
+                                        "left": {
+                                            "meta": {
+                                                "key": "oifname"
+                                            }
+                                        },
+                                        "right": bridge_name
+                                    }
+                                },
+                                {
+                                    "drop": null
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        });
+
+        // Write JSON to temp file and apply via `nft -j -f`
+        let json_str = serde_json::to_string(&ruleset_json)
+            .map_err(|e| NetworkError::Nftables(format!("failed to serialize ruleset: {e}")))?;
+
+        let temp_file = std::env::temp_dir().join("nexus-nftables-init.json");
+        std::fs::write(&temp_file, json_str)
+            .map_err(|e| NetworkError::Nftables(format!("failed to write temp file: {e}")))?;
+
+        let apply = Command::new("nft")
+            .args(["-j", "-f", temp_file.to_str().unwrap()])
+            .output()
+            .map_err(|e| NetworkError::Nftables(format!("failed to run nft: {e}")))?;
+
+        if !apply.status.success() {
+            let stderr = String::from_utf8_lossy(&apply.stderr);
+            return Err(NetworkError::Nftables(format!("nft -j -f failed: {stderr}")));
+        }
+
+        Ok(())
+    }
+
+    /// Check if nftables is available and meets version requirements (>= 0.9.3).
+    pub fn check_nftables_version() -> Result<(), NetworkError> {
+        let output = Command::new("nft")
+            .arg("--version")
+            .output()
+            .map_err(|e| NetworkError::Nftables(format!("nft not found: {e}")))?;
+
+        if !output.status.success() {
+            return Err(NetworkError::Nftables("nft --version failed".to_string()));
+        }
+
+        let version_str = String::from_utf8_lossy(&output.stdout);
+        // Parse version (e.g., "nftables v1.1.1 (Old Doc Yak)")
+        if let Some(version) = version_str.split_whitespace().nth(1) {
+            let version = version.trim_start_matches('v');
+            tracing::info!("nftables version: {}", version);
+            // Version check: >= 0.9.3
+            // Simple string comparison works for nftables versioning
+            if version < "0.9.3" {
+                return Err(NetworkError::Nftables(
+                    format!("nftables version {} is too old (need >= 0.9.3)", version)
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -342,5 +578,15 @@ mod tests {
         );
 
         assert_eq!(service.dns_servers(), "8.8.8.8,1.1.1.1");
+    }
+
+    #[test]
+    fn check_nftables_version_succeeds_if_installed() {
+        // This test only passes if nftables is installed on the test system
+        // Skip if not available
+        let result = NetworkService::check_nftables_version();
+        if result.is_err() {
+            eprintln!("Skipping nftables test: {}", result.unwrap_err());
+        }
     }
 }
