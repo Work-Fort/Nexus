@@ -228,10 +228,12 @@ impl NetworkService {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 // Create tap device via ioctl (tun-tap crate)
-                let _iface = Iface::without_packet_info(&tap_name, Mode::Tap)
+                let iface = Iface::without_packet_info(&tap_name, Mode::Tap)
                     .map_err(|e| NetworkError::Tap(format!("failed to create tap device: {e}")))?;
 
-                tracing::info!("Created tap device {}", tap_name);
+                // Get the actual device name (may differ from requested name)
+                let actual_tap_name = iface.name().to_string();
+                tracing::info!("Created tap device {} (requested: {})", actual_tap_name, tap_name);
 
                 // Configure tap device with rtnetlink
                 let helper = NetlinkHelper::new()?;
@@ -239,8 +241,8 @@ impl NetworkService {
                 // Get bridge index
                 let bridge_index = helper.get_link_index(&bridge_name).await?;
 
-                // Get tap device index
-                let tap_index = helper.get_link_index(&tap_name).await?;
+                // Get tap device index (use actual name, not requested)
+                let tap_index = helper.get_link_index(&actual_tap_name).await?;
 
                 // Attach tap to bridge
                 helper.handle
@@ -252,7 +254,7 @@ impl NetworkService {
                     .await
                     .map_err(|e| NetworkError::Tap(format!("failed to attach tap to bridge: {e}")))?;
 
-                tracing::info!("Attached tap {} to bridge {}", tap_name, bridge_name);
+                tracing::info!("Attached tap {} to bridge {}", actual_tap_name, bridge_name);
 
                 // Bring tap up
                 helper.handle
@@ -262,8 +264,12 @@ impl NetworkService {
                     .await
                     .map_err(|e| NetworkError::Tap(format!("failed to bring tap up: {e}")))?;
 
-                tracing::info!("Tap device {} is up", tap_name);
-                Ok(tap_name)
+                tracing::info!("Tap device {} is up", actual_tap_name);
+
+                // Keep iface alive until tap is fully configured
+                drop(iface);
+
+                Ok(actual_tap_name)
             })
         })
     }
