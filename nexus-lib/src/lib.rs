@@ -23,5 +23,5 @@ pub mod drive_service;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod download_workflow_tests;
