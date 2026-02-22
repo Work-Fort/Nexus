@@ -6,6 +6,34 @@ use crate::store::traits::{NetworkStore, StoreError};
 use ipnetwork::Ipv4Network;
 use std::process::Command;
 use serde_json::json;
+use rtnetlink::{new_connection, Handle};
+use futures::stream::TryStreamExt;
+use tun_tap::{Iface, Mode};
+
+/// Helper to execute async netlink operations in a sync context.
+struct NetlinkHelper {
+    handle: Handle,
+}
+
+impl NetlinkHelper {
+    fn new() -> Result<Self, NetworkError> {
+        let (connection, handle, _) = new_connection()
+            .map_err(|e| NetworkError::Bridge(format!("failed to create netlink connection: {e}")))?;
+
+        // Spawn connection handler on current tokio runtime
+        tokio::spawn(connection);
+
+        Ok(NetlinkHelper { handle })
+    }
+
+    async fn get_link_index(&self, name: &str) -> Result<u32, NetworkError> {
+        let mut links = self.handle.link().get().match_name(name.to_string()).execute();
+        let link = links.try_next().await
+            .map_err(|e| NetworkError::Bridge(format!("failed to query link {}: {}", name, e)))?
+            .ok_or_else(|| NetworkError::Bridge(format!("link {} not found", name)))?;
+        Ok(link.header.index)
+    }
+}
 
 /// Errors from network service operations.
 #[derive(Debug)]

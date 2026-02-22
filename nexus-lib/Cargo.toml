@@ -41,6 +41,9 @@ thiserror = "2"
 nexus-protocol = { path = "../nexus-protocol" }
 nftables = "0.5"
 ipnetwork = "0.21"
+rtnetlink = "0.15"
+tun-tap = "0.1.4"
+futures = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
