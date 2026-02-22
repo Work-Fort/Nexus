@@ -56,8 +56,11 @@ pub fn firecracker_config(
     kernel_path: &str,
     rootfs_path: &str,
     vsock_uds_path: &str,
+    tap_device: Option<&str>,
+    guest_ip: Option<&str>,
+    gateway_ip: Option<&str>,
 ) -> serde_json::Value {
-    json!({
+    let mut config = json!({
         "boot-source": {
             "kernel_image_path": kernel_path,
             "boot_args": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/sbin/init"
@@ -80,7 +83,25 @@ pub fn firecracker_config(
             "guest_cid": vm.cid,
             "uds_path": vsock_uds_path
         }
-    })
+    });
+
+    // Add network interface if tap device provided
+    if let (Some(tap), Some(ip), Some(gw)) = (tap_device, guest_ip, gateway_ip) {
+        config["network-interfaces"] = json!([
+            {
+                "iface_id": "eth0",
+                "host_dev_name": tap,
+                "guest_mac": format!("02:FC:00:00:00:{:02x}", vm.cid % 256),
+            }
+        ]);
+
+        // Update boot args to include IP configuration
+        let mut boot_args = config["boot-source"]["boot_args"].as_str().unwrap().to_string();
+        boot_args.push_str(&format!(" ip={}::{}:255.240.0.0::eth0:off", ip, gw));
+        config["boot-source"]["boot_args"] = json!(boot_args);
+    }
+
+    config
 }
 
 /// Returns the runtime directory for a VM: $XDG_RUNTIME_DIR/nexus/vms/<id>
@@ -102,6 +123,9 @@ pub fn spawn_firecracker(
     vm: &Vm,
     kernel_path: &str,
     rootfs_path: &str,
+    tap_device: Option<&str>,
+    guest_ip: Option<&str>,
+    gateway_ip: Option<&str>,
 ) -> Result<(std::process::Child, PathBuf), VmServiceError> {
     let runtime_dir = vm_runtime_dir(&vm.id);
     fs::create_dir_all(&runtime_dir)?;
@@ -115,7 +139,15 @@ pub fn spawn_firecracker(
     let _ = fs::remove_file(&api_sock);
     let _ = fs::remove_file(&vsock_uds);
 
-    let config = firecracker_config(vm, kernel_path, rootfs_path, &vsock_uds.to_string_lossy());
+    let config = firecracker_config(
+        vm,
+        kernel_path,
+        rootfs_path,
+        &vsock_uds.to_string_lossy(),
+        tap_device,
+        guest_ip,
+        gateway_ip,
+    );
     let config_str = serde_json::to_string_pretty(&config)
         .map_err(|e| VmServiceError::FirecrackerError(format!("cannot serialize config: {e}")))?;
     fs::write(&config_path, &config_str)?;
@@ -175,7 +207,15 @@ mod tests {
     #[test]
     fn firecracker_config_has_correct_structure() {
         let vm = test_vm();
-        let config = firecracker_config(&vm, "/path/vmlinux", "/path/rootfs.ext4", "/run/vsock");
+        let config = firecracker_config(
+            &vm,
+            "/path/vmlinux",
+            "/path/rootfs.ext4",
+            "/run/vsock",
+            None,  // no tap device
+            None,  // no guest IP
+            None,  // no gateway IP
+        );
 
         assert_eq!(config["boot-source"]["kernel_image_path"], "/path/vmlinux");
         assert_eq!(config["drives"][0]["drive_id"], "rootfs");
@@ -186,6 +226,29 @@ mod tests {
         assert_eq!(config["machine-config"]["mem_size_mib"], 512);
         assert_eq!(config["vsock"]["guest_cid"], 3);
         assert_eq!(config["vsock"]["uds_path"], "/run/vsock");
+    }
+
+    #[test]
+    fn firecracker_config_with_network() {
+        let vm = test_vm();
+        let config = firecracker_config(
+            &vm,
+            "/path/vmlinux",
+            "/path/rootfs.ext4",
+            "/run/vsock",
+            Some("tap0"),
+            Some("172.16.0.2"),
+            Some("172.16.0.1"),
+        );
+
+        // Verify network interface is added
+        assert_eq!(config["network-interfaces"][0]["iface_id"], "eth0");
+        assert_eq!(config["network-interfaces"][0]["host_dev_name"], "tap0");
+        assert_eq!(config["network-interfaces"][0]["guest_mac"], "02:FC:00:00:00:03");
+
+        // Verify boot args include IP configuration
+        let boot_args = config["boot-source"]["boot_args"].as_str().unwrap();
+        assert!(boot_args.contains("ip=172.16.0.2::172.16.0.1:255.240.0.0::eth0:off"));
     }
 
     #[test]
@@ -204,6 +267,9 @@ mod tests {
             &vm,
             "/nonexistent/vmlinux",
             "/nonexistent/rootfs.ext4",
+            None,
+            None,
+            None,
         );
         assert!(result.is_err());
     }
