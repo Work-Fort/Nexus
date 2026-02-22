@@ -20,6 +20,7 @@ pub mod vsock_manager;
 pub mod drive;
 pub mod drive_service;
 pub mod mcp_client;
+pub mod network_service;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
