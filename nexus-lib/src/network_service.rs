@@ -9,6 +9,7 @@ use serde_json::json;
 use rtnetlink::{new_connection, Handle, LinkUnspec};
 use futures::stream::TryStreamExt;
 use tun_tap::{Iface, Mode};
+use rtnetlink::packet_route::link::LinkAttribute;
 
 /// Helper to execute async netlink operations in a sync context.
 struct NetlinkHelper {
@@ -222,42 +223,49 @@ impl NetworkService {
     /// Requires CAP_NET_ADMIN.
     pub fn create_tap(&self, vm_id: i64) -> Result<String, NetworkError> {
         let tap_name = format!("tap{}", vm_id);
-        let bridge_name = &self.config.bridge_name;
+        let bridge_name = self.config.bridge_name.clone();
 
-        // Create tap device
-        let create = Command::new("ip")
-            .args(["tuntap", "add", "dev", &tap_name, "mode", "tap"])
-            .output()
-            .map_err(|e| NetworkError::Tap(format!("failed to create tap: {e}")))?;
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                // Create tap device via ioctl (tun-tap crate)
+                let _iface = Iface::without_packet_info(&tap_name, Mode::Tap)
+                    .map_err(|e| NetworkError::Tap(format!("failed to create tap device: {e}")))?;
 
-        if !create.status.success() {
-            let stderr = String::from_utf8_lossy(&create.stderr);
-            return Err(NetworkError::Tap(format!("ip tuntap add failed: {stderr}")));
-        }
+                tracing::info!("Created tap device {}", tap_name);
 
-        // Attach tap to bridge
-        let attach = Command::new("ip")
-            .args(["link", "set", &tap_name, "master", bridge_name])
-            .output()
-            .map_err(|e| NetworkError::Tap(format!("failed to attach tap to bridge: {e}")))?;
+                // Configure tap device with rtnetlink
+                let helper = NetlinkHelper::new()?;
 
-        if !attach.status.success() {
-            let stderr = String::from_utf8_lossy(&attach.stderr);
-            return Err(NetworkError::Tap(format!("ip link set master failed: {stderr}")));
-        }
+                // Get bridge index
+                let bridge_index = helper.get_link_index(&bridge_name).await?;
 
-        // Bring tap up
-        let up = Command::new("ip")
-            .args(["link", "set", &tap_name, "up"])
-            .output()
-            .map_err(|e| NetworkError::Tap(format!("failed to bring tap up: {e}")))?;
+                // Get tap device index
+                let tap_index = helper.get_link_index(&tap_name).await?;
 
-        if !up.status.success() {
-            let stderr = String::from_utf8_lossy(&up.stderr);
-            return Err(NetworkError::Tap(format!("ip link set up failed: {stderr}")));
-        }
+                // Attach tap to bridge
+                helper.handle
+                    .link()
+                    .set(LinkUnspec::new_with_index(tap_index)
+                        .append_extra_attribute(LinkAttribute::Controller(bridge_index))
+                        .build())
+                    .execute()
+                    .await
+                    .map_err(|e| NetworkError::Tap(format!("failed to attach tap to bridge: {e}")))?;
 
-        Ok(tap_name)
+                tracing::info!("Attached tap {} to bridge {}", tap_name, bridge_name);
+
+                // Bring tap up
+                helper.handle
+                    .link()
+                    .set(LinkUnspec::new_with_index(tap_index).up().build())
+                    .execute()
+                    .await
+                    .map_err(|e| NetworkError::Tap(format!("failed to bring tap up: {e}")))?;
+
+                tracing::info!("Tap device {} is up", tap_name);
+                Ok(tap_name)
+            })
+        })
     }
 
     /// Destroy a tap device and release the VM's IP.
