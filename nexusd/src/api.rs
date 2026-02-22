@@ -60,6 +60,7 @@ pub struct AppState {
     pub executor: PipelineExecutor,
     pub firecracker: FirecrackerConfig,
     pub vsock_manager: Arc<VsockManager>,
+    pub network_service: nexus_lib::network_service::NetworkService,
     /// Map of VM ID -> tracked Firecracker process (child + boot_id).
     /// Protected by a tokio Mutex for async access.
     pub processes: TokioMutex<HashMap<nexus_lib::id::Id, TrackedProcess>>,
@@ -897,12 +898,33 @@ async fn start_vm_handler(
         ),
     };
 
+    // Allocate IP and create tap device
+    let (tap_device, guest_ip, gateway_ip) = match state.network_service.allocate_ip(vm.id.as_i64()) {
+        Ok(ip) => {
+            let gateway = state.network_service.gateway_ip().ok();
+            match state.network_service.create_tap(vm.id.as_i64()) {
+                Ok(tap) => (Some(tap), Some(ip), gateway),
+                Err(e) => {
+                    tracing::error!("Failed to create tap device for VM {}: {}", vm.name, e);
+                    (None, None, None)
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to allocate IP for VM {}: {}", vm.name, e);
+            (None, None, None)
+        }
+    };
+
     // Spawn Firecracker
     let (child, runtime_dir) = match vm_service::spawn_firecracker(
         &state.firecracker.binary,
         &vm,
         &state.firecracker.kernel,
         &rootfs_path,
+        tap_device.as_deref(),
+        guest_ip.as_deref(),
+        gateway_ip.as_deref(),
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -922,7 +944,13 @@ async fn start_vm_handler(
 
     // Generate config JSON for recording
     let config = vm_service::firecracker_config(
-        &vm, &state.firecracker.kernel, &rootfs_path, &vsock_uds,
+        &vm,
+        &state.firecracker.kernel,
+        &rootfs_path,
+        &vsock_uds,
+        tap_device.as_deref(),
+        guest_ip.as_deref(),
+        gateway_ip.as_deref(),
     );
     let config_str = serde_json::to_string(&config).unwrap_or_default();
 
@@ -1046,6 +1074,11 @@ async fn stop_vm_handler(
 
     // Close vsock connections (both control and MCP)
     state.vsock_manager.close_connection(vm.id).await;
+
+    // Destroy tap device and release IP
+    if let Err(e) = state.network_service.destroy_tap(vm.id.as_i64()) {
+        tracing::warn!("Failed to destroy tap device for VM {}: {}", vm.name, e);
+    }
 
     match state.store.stop_vm(vm.id) {
         Ok(stopped) => (StatusCode::OK, Json(serde_json::to_value(stopped).unwrap())),

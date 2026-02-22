@@ -38,14 +38,14 @@ impl From<StoreError> for NetworkError {
 }
 
 /// Service for managing VM networking (bridge, tap, IP allocation, NAT).
-pub struct NetworkService<'a> {
-    store: &'a (dyn NetworkStore + Send + Sync),
+pub struct NetworkService {
+    store: std::sync::Arc<dyn NetworkStore + Send + Sync>,
     config: NetworkConfig,
 }
 
-impl<'a> NetworkService<'a> {
+impl NetworkService {
     pub fn new(
-        store: &'a (dyn NetworkStore + Send + Sync),
+        store: std::sync::Arc<dyn NetworkStore + Send + Sync>,
         config: NetworkConfig,
     ) -> Self {
         NetworkService { store, config }
@@ -497,7 +497,7 @@ mod tests {
         SqliteStore::open_and_init(&db_path).unwrap()
     }
 
-    fn test_service(store: &SqliteStore) -> NetworkService {
+    fn test_service(store: std::sync::Arc<SqliteStore>) -> NetworkService {
         NetworkService::new(
             store,
             NetworkConfig {
@@ -510,8 +510,8 @@ mod tests {
 
     #[test]
     fn allocate_ip_returns_first_available_ip() {
-        let store = test_store();
-        let service = test_service(&store);
+        let store = std::sync::Arc::new(test_store());
+        let service = test_service(store.clone());
 
         // Create a VM to satisfy foreign key constraint
         let vm = store.create_vm(&CreateVmParams {
@@ -528,8 +528,8 @@ mod tests {
 
     #[test]
     fn allocate_ip_skips_already_assigned_ips() {
-        let store = test_store();
-        let service = test_service(&store);
+        let store = std::sync::Arc::new(test_store());
+        let service = test_service(store.clone());
 
         // Create VMs
         let vm1 = store.create_vm(&CreateVmParams {
@@ -556,8 +556,8 @@ mod tests {
 
     #[test]
     fn gateway_ip_returns_first_ip_in_subnet() {
-        let store = test_store();
-        let service = test_service(&store);
+        let store = std::sync::Arc::new(test_store());
+        let service = test_service(store.clone());
         store.create_bridge("testbr0", "192.168.100.0/24", "192.168.100.1", "testbr0").unwrap();
 
         let result = service.gateway_ip();

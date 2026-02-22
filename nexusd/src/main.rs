@@ -126,6 +126,28 @@ async fn main() {
     let vsock_manager = Arc::new(VsockManager::new(store_arc.clone()));
     vsock_manager.clone().start_monitor_task();
 
+    // Initialize network service
+    let network_service = nexus_lib::network_service::NetworkService::new(
+        store_arc.clone(),
+        config.network.clone(),
+    );
+
+    // Check nftables version
+    if let Err(e) = nexus_lib::network_service::NetworkService::check_nftables_version() {
+        tracing::error!("nftables check failed: {}", e);
+        tracing::warn!("Networking features will not be available");
+    } else {
+        // Initialize bridge and nftables rules
+        if let Err(e) = network_service.ensure_bridge() {
+            tracing::error!("Failed to create bridge: {}", e);
+            tracing::warn!("VMs will not have network connectivity");
+        }
+        if let Err(e) = network_service.init_nftables() {
+            tracing::error!("Failed to initialize nftables: {}", e);
+            tracing::warn!("NAT and firewall rules not configured");
+        }
+    }
+
     let state = Arc::new(api::AppState {
         store: store_arc,
         backend: Box::new(backend),
@@ -134,6 +156,7 @@ async fn main() {
         executor,
         firecracker: config.firecracker.clone(),
         vsock_manager,
+        network_service,
         processes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
