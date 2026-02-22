@@ -27,3 +27,6 @@ pub mod test_support;
 
 #[cfg(all(test, feature = "test-support"))]
 mod download_workflow_tests;
+
+#[cfg(all(test, feature = "test-support"))]
+mod step12_networking_qa;
