@@ -116,3 +116,87 @@ run = "bash scripts/build-rootfs.sh --output artifacts/rootfs.ext4 --force"
 [tasks."rootfs:clean"]
 description = "Remove built rootfs artifacts"
 run = "rm -rf artifacts/rootfs.ext4"
+
+[tasks.clean]
+description = "Remove all Nexus state (database, config, cache, drives)"
+run = """
+#!/usr/bin/env bash
+set -e
+
+echo "🧹 Cleaning Nexus state..."
+
+# Stop and remove systemd service (if exists - optional, for users who installed via systemd)
+if command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user is-active --quiet nexusd 2>/dev/null; then
+        echo "  → Stopping systemd service"
+        systemctl --user stop nexusd
+    fi
+
+    if systemctl --user is-enabled --quiet nexusd 2>/dev/null; then
+        echo "  → Disabling systemd service"
+        systemctl --user disable nexusd
+    fi
+
+    if [ -f "$HOME/.config/systemd/user/nexusd.service" ]; then
+        echo "  → Removing systemd unit file"
+        rm -f "$HOME/.config/systemd/user/nexusd.service"
+        systemctl --user daemon-reload
+    fi
+fi
+
+# Remove database
+if [ -f "$HOME/.local/share/nexus/nexus.db" ]; then
+    echo "  → Removing database"
+    rm -f "$HOME/.local/share/nexus/nexus.db"
+    rm -f "$HOME/.local/share/nexus/nexus.db-shm"
+    rm -f "$HOME/.local/share/nexus/nexus.db-wal"
+fi
+
+# Remove config
+if [ -f "$HOME/.config/nexus/config.yaml" ]; then
+    echo "  → Removing config"
+    rm -f "$HOME/.config/nexus/config.yaml"
+fi
+
+# Remove cache and assets
+if [ -d "$HOME/.local/share/nexus/assets" ]; then
+    echo "  → Removing assets cache"
+    rm -rf "$HOME/.local/share/nexus/assets"
+fi
+
+# Remove drives (btrfs subvolumes)
+if [ -d "$HOME/.local/share/nexus/drives" ]; then
+    echo "  → Removing drives"
+    # Check if directory contains btrfs subvolumes
+    if command -v btrfs >/dev/null 2>&1; then
+        for subvol in "$HOME/.local/share/nexus/drives"/*; do
+            if [ -d "$subvol" ] && btrfs subvolume show "$subvol" >/dev/null 2>&1; then
+                echo "    → Deleting btrfs subvolume: $(basename "$subvol")"
+                btrfs subvolume delete "$subvol"
+            fi
+        done
+    fi
+    rm -rf "$HOME/.local/share/nexus/drives"
+fi
+
+echo "✅ Nexus state cleaned"
+"""
+
+[tasks.integration-test]
+description = "Run real integration tests (requires KVM + btrfs + network)"
+run = """
+#!/usr/bin/env bash
+set -e
+
+echo "🧪 Running Nexus integration tests..."
+echo ""
+echo "Prerequisites:"
+echo "  - KVM access (/dev/kvm)"
+echo "  - btrfs filesystem"
+echo "  - Network connectivity"
+echo ""
+
+cd integration-tests
+cargo build --release
+exec ./target/release/integration-test-runner
+"""
