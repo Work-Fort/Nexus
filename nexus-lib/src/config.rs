@@ -50,6 +50,7 @@ pub struct Config {
     pub api: ApiConfig,
     pub storage: StorageConfig,
     pub firecracker: FirecrackerConfig,
+    pub network: NetworkConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -81,6 +82,27 @@ impl Default for ApiConfig {
     fn default() -> Self {
         ApiConfig {
             listen: "127.0.0.1:9600".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct NetworkConfig {
+    pub bridge_name: String,
+    pub subnet: String,
+    pub dns_servers: Vec<String>,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        NetworkConfig {
+            bridge_name: "nexbr0".to_string(),
+            subnet: "172.16.0.0/12".to_string(),
+            dns_servers: vec![
+                "8.8.8.8".to_string(),
+                "1.1.1.1".to_string(),
+            ],
         }
     }
 }
@@ -246,5 +268,30 @@ firecracker:
         let config: Config = serde_norway::from_str(yaml).unwrap();
         assert_eq!(config.firecracker.binary, "/usr/local/bin/firecracker");
         assert_eq!(config.firecracker.kernel, "/opt/kernels/vmlinux");
+    }
+
+    #[test]
+    fn network_config_defaults_are_correct() {
+        let config = NetworkConfig::default();
+        assert_eq!(config.bridge_name, "nexbr0");
+        assert_eq!(config.subnet, "172.16.0.0/12");
+        assert_eq!(config.dns_servers, vec!["8.8.8.8", "1.1.1.1"]);
+    }
+
+    #[test]
+    fn network_config_loads_from_yaml() {
+        let yaml = r#"
+api:
+  listen: "127.0.0.1:9600"
+network:
+  bridge_name: "testbr0"
+  subnet: "192.168.100.0/24"
+  dns_servers:
+    - "1.1.1.1"
+"#;
+        let config: Config = serde_norway::from_str(yaml).unwrap();
+        assert_eq!(config.network.bridge_name, "testbr0");
+        assert_eq!(config.network.subnet, "192.168.100.0/24");
+        assert_eq!(config.network.dns_servers, vec!["1.1.1.1"]);
     }
 }
