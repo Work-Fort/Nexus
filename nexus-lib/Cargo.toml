@@ -32,7 +32,7 @@ libbtrfsutil = "0.7"
 tracing = "0.1"
 nix = { version = "0.30", features = ["signal", "process", "user"] }
 tempfile = { version = "3", optional = true }
-tokio = { version = "1", features = ["rt", "macros", "time", "net", "sync", "io-util"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
 chrono = "0.4"
 anyhow = "1"
 data-encoding = "2.6"
