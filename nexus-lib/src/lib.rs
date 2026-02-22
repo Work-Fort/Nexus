@@ -19,6 +19,7 @@ pub mod vm_service;
 pub mod vsock_manager;
 pub mod drive;
 pub mod drive_service;
+pub mod mcp_client;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
