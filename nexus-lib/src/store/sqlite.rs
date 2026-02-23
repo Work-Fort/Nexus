@@ -347,7 +347,7 @@ impl VmStore for SqliteStore {
         let vm = self.get_vm_by_id(id)?
             .ok_or_else(|| StoreError::Query(format!("VM with ID '{}' not found", id)))?;
 
-        if vm.state != VmState::Running && vm.state != VmState::Ready {
+        if vm.state != VmState::Running && vm.state != VmState::Ready && vm.state != VmState::Unreachable {
             return Err(StoreError::Conflict(format!(
                 "VM '{}' is not running (state: {})",
                 vm.name, vm.state

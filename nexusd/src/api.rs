@@ -1082,7 +1082,7 @@ async fn stop_vm_handler(
         ),
     };
 
-    if vm.state != VmState::Running && vm.state != VmState::Ready {
+    if vm.state != VmState::Running && vm.state != VmState::Ready && vm.state != VmState::Unreachable {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": format!("VM '{}' is not running (state: {})", vm.name, vm.state)})),
