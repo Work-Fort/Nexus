@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
@@ -92,13 +92,16 @@ impl McpConnectionPool {
 
         info!("sent CONNECT {} to Firecracker vsock for MCP", MCP_PORT);
 
-        // Firecracker responds with "OK <host_port>\n" — must consume before app data
-        let mut reader = BufReader::new(&mut stream);
-        let mut ok_line = String::new();
-        reader.read_line(&mut ok_line).await
-            .context("failed to read Firecracker MCP CONNECT response")?;
-
-        let ok_line = ok_line.trim();
+        // Firecracker responds with "OK <host_port>\n" — must consume before app data.
+        // Read byte-by-byte to avoid BufReader pre-buffering application data.
+        let mut ok_bytes = Vec::with_capacity(32);
+        loop {
+            let b = stream.read_u8().await
+                .context("failed to read Firecracker MCP CONNECT response")?;
+            if b == b'\n' { break; }
+            ok_bytes.push(b);
+        }
+        let ok_line = String::from_utf8_lossy(&ok_bytes);
         if !ok_line.starts_with("OK ") {
             anyhow::bail!("unexpected Firecracker MCP CONNECT response: {:?}", ok_line);
         }
@@ -168,18 +171,41 @@ impl VsockManager {
     /// Connect to guest-agent via vsock and wait for handshake
     pub async fn connect_and_handshake(&self, vm_id: crate::id::Id, uds_path: PathBuf) -> Result<ImageMetadata> {
         let vsock_path = uds_path.join("firecracker.vsock");
+        let deadline = tokio::time::Instant::now() + DEFAULT_CONNECT_TIMEOUT;
 
-        // Connect to Firecracker vsock UDS
-        let stream = timeout(DEFAULT_CONNECT_TIMEOUT, UnixStream::connect(&vsock_path))
-            .await
-            .context("timeout connecting to vsock UDS")?
-            .with_context(|| format!("failed to connect to vsock UDS at {}", vsock_path.display()))?;
+        // Retry CONNECT until guest-agent is listening or timeout expires.
+        // The guest needs time to boot before it accepts vsock connections.
+        // Firecracker closes the UDS connection if no guest listener exists,
+        // so each failed attempt is cheap.
+        let mut stream = loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                anyhow::bail!("timeout waiting for guest-agent vsock on VM {}", vm_id);
+            }
 
-        // Send CONNECT command to Firecracker
-        let mut stream = self.firecracker_vsock_connect(stream, CONTROL_PORT).await?;
+            let stream = match timeout(remaining, UnixStream::connect(&vsock_path)).await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    warn!("vsock UDS connect failed for VM {}, retrying: {}", vm_id, e);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+                Err(_) => anyhow::bail!("timeout connecting to vsock UDS for VM {}", vm_id),
+            };
+
+            match self.firecracker_vsock_connect(stream, CONTROL_PORT).await {
+                Ok(s) => break s,
+                Err(e) => {
+                    warn!("vsock CONNECT failed for VM {}, retrying: {}", vm_id, e);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            }
+        };
 
         // Read handshake message (newline-delimited JSON)
-        let handshake = timeout(DEFAULT_CONNECT_TIMEOUT, self.read_handshake(&mut stream))
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let handshake = timeout(remaining, self.read_handshake(&mut stream))
             .await
             .context("timeout waiting for guest handshake")?
             .context("failed to read handshake")?;
@@ -225,14 +251,16 @@ impl VsockManager {
         info!("sent CONNECT {} to Firecracker vsock", port);
 
         // Firecracker responds with "OK <host_port>\n" on successful CONNECT.
-        // We must consume this line before reading any application data,
-        // otherwise it corrupts the read buffer (e.g. handshake JSON parse failure).
-        let mut reader = BufReader::new(&mut stream);
-        let mut ok_line = String::new();
-        reader.read_line(&mut ok_line).await
-            .context("failed to read Firecracker CONNECT response")?;
-
-        let ok_line = ok_line.trim();
+        // Read byte-by-byte to avoid BufReader pre-buffering application data
+        // (handshake JSON) that would be lost when the BufReader is dropped.
+        let mut ok_bytes = Vec::with_capacity(32);
+        loop {
+            let b = stream.read_u8().await
+                .context("failed to read Firecracker CONNECT response")?;
+            if b == b'\n' { break; }
+            ok_bytes.push(b);
+        }
+        let ok_line = String::from_utf8_lossy(&ok_bytes);
         if !ok_line.starts_with("OK ") {
             anyhow::bail!("unexpected Firecracker CONNECT response: {:?}", ok_line);
         }
