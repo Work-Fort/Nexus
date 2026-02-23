@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 nexus-lib = { path = "../nexus-lib" }
 clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
 serde = { version = "1", features = ["derive"] }
 serde_norway = "0.9"
 dirs = "6"
