@@ -7,7 +7,9 @@ use ipnetwork::Ipv4Network;
 use rtnetlink::{new_connection, Handle, LinkUnspec};
 use futures::stream::TryStreamExt;
 use tun_tap::{Iface, Mode};
-use rtnetlink::packet_route::link::LinkAttribute;
+use rtnetlink::packet_route::link::{
+    InfoBridgePort, InfoPortData, InfoPortKind, LinkAttribute,
+};
 use std::os::fd::AsRawFd;
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -29,8 +31,6 @@ fn set_tap_persistent(iface: &Iface) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-// TODO: investigate TCP connectivity through NAT — ICMP works, TCP doesn't.
-// Checksum offloading was ruled out as the cause (ethtool -K tx off didn't fix it).
 
 /// Helper to execute async netlink operations in a sync context.
 struct NetlinkHelper {
@@ -304,6 +304,22 @@ impl NetworkService {
 
                 tracing::info!("Attached tap {} to bridge {}", actual_tap_name, bridge_name);
 
+                // Isolate tap port — prevents L2 traffic between VMs on the same bridge.
+                // Must use set_port() not set() — bridge port config needs RTM_NEWLINK.
+                helper.handle
+                    .link()
+                    .set_port(LinkUnspec::new_with_index(tap_index)
+                        .set_port_kind(InfoPortKind::Bridge)
+                        .set_port_data(InfoPortData::BridgePort(vec![
+                            InfoBridgePort::Isolated(true),
+                        ]))
+                        .build())
+                    .execute()
+                    .await
+                    .map_err(|e| NetworkError::Tap(format!("failed to set bridge port isolation: {e}")))?;
+
+                tracing::info!("Bridge port isolation enabled for tap {}", actual_tap_name);
+
                 // Bring tap up
                 helper.handle
                     .link()
@@ -505,14 +521,19 @@ impl NetworkService {
         fwd_rule.add_expr(&nft_expr!(verdict accept));
         batch.add(&fwd_rule, nftnl::MsgType::Add);
 
-        // Rule 4 (forward): iifname == bridge, oifname == bridge → drop (VM isolation)
-        let mut iso_rule = nftnl::Rule::new(&forward);
-        iso_rule.add_expr(&nft_expr!(meta iifname));
-        iso_rule.add_expr(&nft_expr!(cmp == iface_buf.as_slice()));
-        iso_rule.add_expr(&nft_expr!(meta oifname));
-        iso_rule.add_expr(&nft_expr!(cmp == iface_buf.as_slice()));
-        iso_rule.add_expr(&nft_expr!(verdict drop));
-        batch.add(&iso_rule, nftnl::MsgType::Add);
+        // TODO: VM-to-VM communication (post-alpha). Same-bridge traffic is switched
+        // at L2 and never hits the inet forward chain, so nftables can't filter it.
+        // VM isolation is enforced via IFLA_BRPORT_ISOLATED on each tap instead.
+        // When we need selective VM-to-VM traffic (work↔service, work↔work), consider
+        // nftables bridge family rules or bridge groups/VLANs for fine-grained control.
+        //
+        // let mut iso_rule = nftnl::Rule::new(&forward);
+        // iso_rule.add_expr(&nft_expr!(meta iifname));
+        // iso_rule.add_expr(&nft_expr!(cmp == iface_buf.as_slice()));
+        // iso_rule.add_expr(&nft_expr!(meta oifname));
+        // iso_rule.add_expr(&nft_expr!(cmp == iface_buf.as_slice()));
+        // iso_rule.add_expr(&nft_expr!(verdict drop));
+        // batch.add(&iso_rule, nftnl::MsgType::Add);
 
         // Send batch via netlink
         let finalized = batch.finalize();
