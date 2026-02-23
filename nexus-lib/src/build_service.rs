@@ -353,18 +353,17 @@ impl<'a> BuildService<'a> {
             String::new()
         };
 
-        // Build appropriate inittab content
+        // Build appropriate inittab content — always write our complete inittab
+        // for purpose-built VM images. Stock distro inittabs (e.g. Alpine's OpenRC
+        // references) cause boot errors and slow down guest-agent startup.
+        // TODO: Revisit when implementing full OpenRC support — will need to
+        // preserve/generate proper OpenRC inittab entries instead of replacing.
         let new_inittab = if existing_inittab.contains("/usr/local/bin/guest-agent") {
             writeln!(log, "  guest-agent entry already in inittab, skipping").ok();
             existing_inittab
-        } else if existing_inittab.trim().is_empty() {
-            // Empty or missing inittab - write complete system init + guest-agent
+        } else {
             writeln!(log, "  writing complete BusyBox inittab (system init + guest-agent)").ok();
             format!("{}{}", crate::embedded::BUSYBOX_SYSTEM_INIT, crate::embedded::GUEST_AGENT_INITTAB_ENTRY)
-        } else {
-            // Existing inittab present - only append guest-agent entry
-            writeln!(log, "  appending guest-agent entry to existing inittab").ok();
-            format!("{}{}", existing_inittab, crate::embedded::GUEST_AGENT_INITTAB_ENTRY)
         };
 
         std::fs::create_dir_all(inittab_path.parent().unwrap())
