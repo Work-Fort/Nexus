@@ -1221,6 +1221,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/templates/{name_or_id}/build", post(trigger_build))
         .route("/v1/builds", get(list_builds_handler))
         .route("/v1/builds/{id}", get(get_build_handler))
+        .route("/mcp", post(crate::mcp_handler::handle_mcp_request))
         .with_state(state)
 }
 

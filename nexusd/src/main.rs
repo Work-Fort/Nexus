@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 mod api;
 mod logging;
+mod mcp_handler;
 mod monitor;
 mod server;
 
