@@ -82,6 +82,8 @@ enum Commands {
         #[command(subcommand)]
         action: BuildAction,
     },
+    /// MCP stdio to HTTP bridge (for Claude Desktop integration)
+    McpBridge,
 }
 
 #[derive(Subcommand)]
@@ -336,6 +338,7 @@ async fn main() -> ExitCode {
         Commands::Firecracker { action } => cmd_firecracker(&daemon_addr, action).await,
         Commands::Template { action } => cmd_template(&daemon_addr, action).await,
         Commands::Build { action } => cmd_build(&daemon_addr, action).await,
+        Commands::McpBridge => cmd_mcp_bridge(&daemon_addr).await,
     }
 }
 
@@ -1445,4 +1448,78 @@ fn format_timestamp(epoch_secs: i64) -> String {
     chrono::DateTime::from_timestamp(epoch_secs, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| epoch_secs.to_string())
+}
+
+async fn cmd_mcp_bridge(daemon_addr: &str) -> ExitCode {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let stdin = tokio::io::stdin();
+    let mut stdout = tokio::io::stdout();
+    let mut reader = BufReader::new(stdin);
+
+    let client = reqwest::Client::new();
+    let mcp_url = format!("http://{}/mcp", daemon_addr);
+
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+
+        // Read JSON-RPC request from stdin
+        match reader.read_line(&mut line).await {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Error reading stdin: {}", e);
+                return ExitCode::from(EXIT_GENERAL_ERROR);
+            }
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Forward to nexusd via HTTP POST
+        let response = match client
+            .post(&mcp_url)
+            .header("Content-Type", "application/json")
+            .body(trimmed.to_string())
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                eprintln!("Error connecting to nexusd: {}", e);
+                return ExitCode::from(EXIT_GENERAL_ERROR);
+            }
+        };
+
+        // Get response body
+        let body = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                eprintln!("Error reading response: {}", e);
+                return ExitCode::from(EXIT_GENERAL_ERROR);
+            }
+        };
+
+        // Write JSON-RPC response to stdout
+        if let Err(e) = stdout.write_all(body.as_bytes()).await {
+            eprintln!("Error writing to stdout: {}", e);
+            return ExitCode::from(EXIT_GENERAL_ERROR);
+        }
+
+        if let Err(e) = stdout.write_all(b"\n").await {
+            eprintln!("Error writing newline: {}", e);
+            return ExitCode::from(EXIT_GENERAL_ERROR);
+        }
+
+        if let Err(e) = stdout.flush().await {
+            eprintln!("Error flushing stdout: {}", e);
+            return ExitCode::from(EXIT_GENERAL_ERROR);
+        }
+    }
+
+    ExitCode::SUCCESS
 }
