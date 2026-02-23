@@ -84,6 +84,8 @@ enum Commands {
     },
     /// MCP stdio to HTTP bridge (for Claude Desktop integration)
     McpBridge,
+    /// Configure host firewall for VM networking (requires sudo)
+    SetupFirewall,
 }
 
 #[derive(Subcommand)]
@@ -339,6 +341,7 @@ async fn main() -> ExitCode {
         Commands::Template { action } => cmd_template(&daemon_addr, action).await,
         Commands::Build { action } => cmd_build(&daemon_addr, action).await,
         Commands::McpBridge => cmd_mcp_bridge(&daemon_addr).await,
+        Commands::SetupFirewall => cmd_setup_firewall().await,
     }
 }
 
@@ -1448,6 +1451,64 @@ fn format_timestamp(epoch_secs: i64) -> String {
     chrono::DateTime::from_timestamp(epoch_secs, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| epoch_secs.to_string())
+}
+
+// TODO: read bridge_name and subnet from a preferences table once it exists
+const BRIDGE_NAME: &str = "nexbr0";
+const VM_SUBNET: &str = "172.16.0.0/12";
+
+async fn cmd_setup_firewall() -> ExitCode {
+    use std::process::Command;
+
+    // Must run as root
+    // SAFETY: getuid is always safe to call
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("Error: setup-firewall requires root privileges\n  Run with: sudo nexusctl setup-firewall");
+        return ExitCode::from(EXIT_GENERAL_ERROR);
+    }
+
+    // Check UFW is available and active
+    let ufw_status = match Command::new("ufw").arg("status").output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("Error: cannot run ufw: {e}\n  Is ufw installed?");
+            return ExitCode::from(EXIT_GENERAL_ERROR);
+        }
+    };
+    let status_text = String::from_utf8_lossy(&ufw_status.stdout);
+    if !status_text.contains("Status: active") {
+        eprintln!("Error: ufw is not active\n  Enable it with: sudo ufw enable");
+        return ExitCode::from(EXIT_GENERAL_ERROR);
+    }
+
+    // Check if the rule already exists
+    if status_text.contains(BRIDGE_NAME) {
+        println!("Firewall rule for {BRIDGE_NAME} already exists, nothing to do.");
+        return ExitCode::SUCCESS;
+    }
+
+    // Add the UFW route rule
+    let rule_args = [
+        "route", "allow", "in", "on", BRIDGE_NAME, "from", VM_SUBNET,
+    ];
+    println!("Adding UFW rule: ufw {}", rule_args.join(" "));
+    let result = match Command::new("ufw").args(&rule_args).output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("Error: failed to run ufw: {e}");
+            return ExitCode::from(EXIT_GENERAL_ERROR);
+        }
+    };
+    if !result.status.success() {
+        let err = String::from_utf8_lossy(&result.stderr);
+        eprintln!("Error: ufw rule failed: {err}");
+        return ExitCode::from(EXIT_GENERAL_ERROR);
+    }
+
+    let output = String::from_utf8_lossy(&result.stdout);
+    println!("{}", output.trim());
+    println!("\nVM traffic from {VM_SUBNET} will now be forwarded through {BRIDGE_NAME}.");
+    ExitCode::SUCCESS
 }
 
 async fn cmd_mcp_bridge(daemon_addr: &str) -> ExitCode {
