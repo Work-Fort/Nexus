@@ -92,6 +92,18 @@ impl McpConnectionPool {
 
         info!("sent CONNECT {} to Firecracker vsock for MCP", MCP_PORT);
 
+        // Firecracker responds with "OK <host_port>\n" — must consume before app data
+        let mut reader = BufReader::new(&mut stream);
+        let mut ok_line = String::new();
+        reader.read_line(&mut ok_line).await
+            .context("failed to read Firecracker MCP CONNECT response")?;
+
+        let ok_line = ok_line.trim();
+        if !ok_line.starts_with("OK ") {
+            anyhow::bail!("unexpected Firecracker MCP CONNECT response: {:?}", ok_line);
+        }
+
+        info!("Firecracker MCP CONNECT acknowledged: {}", ok_line);
         Ok(stream)
     }
 
@@ -212,7 +224,20 @@ impl VsockManager {
 
         info!("sent CONNECT {} to Firecracker vsock", port);
 
-        // Firecracker doesn't send a response to CONNECT; connection is ready immediately
+        // Firecracker responds with "OK <host_port>\n" on successful CONNECT.
+        // We must consume this line before reading any application data,
+        // otherwise it corrupts the read buffer (e.g. handshake JSON parse failure).
+        let mut reader = BufReader::new(&mut stream);
+        let mut ok_line = String::new();
+        reader.read_line(&mut ok_line).await
+            .context("failed to read Firecracker CONNECT response")?;
+
+        let ok_line = ok_line.trim();
+        if !ok_line.starts_with("OK ") {
+            anyhow::bail!("unexpected Firecracker CONNECT response: {:?}", ok_line);
+        }
+
+        info!("Firecracker CONNECT acknowledged: {}", ok_line);
         Ok(stream)
     }
 
