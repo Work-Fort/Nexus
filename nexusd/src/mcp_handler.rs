@@ -86,8 +86,8 @@ pub async fn handle_mcp_request(
         Err(McpError::Internal(msg)) => error_response(id, INTERNAL_ERROR, msg),
     };
 
-    Ok(serde_json::to_string(&response)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?)
+    serde_json::to_string(&response)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 async fn handle_initialize(params: Value) -> Result<Value> {
