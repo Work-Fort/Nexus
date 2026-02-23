@@ -356,12 +356,19 @@ pub async fn stop_vm(client: &Client, vm_id: &str, expected_pid: u32) -> Result<
     // Wait for graceful shutdown
     thread::sleep(Duration::from_secs(2));
 
-    // Verify PID no longer exists
-    let proc_path = PathBuf::from(format!("/proc/{}", expected_pid));
-    if proc_path.exists() {
-        bail!("PID {} still exists after VM stop", expected_pid);
+    // Verify process is no longer running (zombies may linger in /proc)
+    let status_path = PathBuf::from(format!("/proc/{}/status", expected_pid));
+    if status_path.exists() {
+        let status = fs::read_to_string(&status_path).unwrap_or_default();
+        let is_zombie = status.lines()
+            .any(|l| l.starts_with("State:") && l.contains("zombie"));
+        if !is_zombie {
+            bail!("PID {} still running after VM stop", expected_pid);
+        }
+        println!("  ✓ Previous PID {} is zombie (will be reaped)", expected_pid);
+    } else {
+        println!("  ✓ Previous PID {} no longer in process table", expected_pid);
     }
-    println!("  ✓ Previous PID {} no longer in process table", expected_pid);
 
     // Verify PID is null in database
     let response = client

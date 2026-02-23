@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use integration_tests::{prerequisites, smoke_test, vm_lifecycle};
+use integration_tests::{networking, prerequisites, smoke_test, vm_lifecycle};
+use std::fs;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -36,23 +37,28 @@ async fn run_integration_tests() -> Result<()> {
     clean_environment()?;
     println!();
 
-    // Step 3: Start daemon (direct execution, not systemd)
+    // Step 3: Write nexus.yaml config (must exist before daemon starts)
+    // TODO: remove once VM start resolves firecracker/kernel from the asset store
+    write_config()?;
+    println!();
+
+    // Step 4: Start daemon (direct execution, not systemd)
     let mut daemon_handle = start_daemon()?;
     println!();
 
-    // Step 4: Verify clean state
+    // Step 5: Verify clean state
     smoke_test::verify_clean_state()?;
     println!();
 
-    // Step 5: Execute real downloads
+    // Step 6: Execute real downloads
     smoke_test::execute_downloads().await?;
     println!();
 
-    // Step 6: Verify downloads present
+    // Step 7: Verify downloads present
     smoke_test::verify_downloads_present()?;
     println!();
 
-    // Step 7: Build pipeline — template → build → drive → VM
+    // Step 8: Build pipeline — template → build → drive → VM
     let client = reqwest::Client::new();
     let _template_id = vm_lifecycle::create_template(&client).await?;
     let master_image_id = vm_lifecycle::build_template(&client).await?;
@@ -60,26 +66,47 @@ async fn run_integration_tests() -> Result<()> {
     let vm_id = vm_lifecycle::create_vm(&client, &drive_id).await?;
     println!();
 
-    // Step 8: Start VM and verify (comprehensive checks)
+    // Step 9: Start VM and verify (comprehensive checks)
     let pid1 = vm_lifecycle::start_vm(&client, &vm_id).await?;
     vm_lifecycle::verify_process(pid1, &vm_id).await?;
     vm_lifecycle::verify_vm_ready(&client, &vm_id).await?;
     println!();
 
-    // Step 9: Stop VM and verify cleanup
+    // Step 10: Stop VM and verify cleanup
     vm_lifecycle::stop_vm(&client, &vm_id, pid1).await?;
     println!();
 
-    // Step 10: Restart VM and verify new process
+    // Step 11: Restart VM and verify new process
     let pid2 = vm_lifecycle::restart_vm(&client, &vm_id, pid1).await?;
     vm_lifecycle::verify_process(pid2, &vm_id).await?;
     vm_lifecycle::verify_vm_ready(&client, &vm_id).await?;
     println!();
 
-    // Step 11: Final cleanup
-    vm_lifecycle::stop_vm(&client, &vm_id, pid2).await?;
+    // Step 12: Networking — external connectivity
+    networking::test_external_icmp(&client, "integration-test-vm").await?;
+    networking::test_external_tcp(&client, "integration-test-vm").await?;
+    println!();
 
-    // Step 12: Stop daemon
+    // Step 13: Networking — bridge port isolation flag
+    networking::test_bridge_port_isolation_flag("integration-test-vm")?;
+    println!();
+
+    // Step 14: Networking — VM-to-VM isolation (requires second VM)
+    let (vm2_id, _drive2_id) = networking::create_second_vm(&client, &master_image_id).await?;
+    networking::test_bridge_port_isolation_flag("integration-test-vm-2")?;
+    networking::test_vm_isolation(&client, "integration-test-vm", "integration-test-vm-2").await?;
+    println!();
+
+    // Step 15: Stop both VMs
+    networking::stop_second_vm(&client, &vm2_id).await?;
+    vm_lifecycle::stop_vm(&client, &vm_id, pid2).await?;
+    println!();
+
+    // Step 16: Cleanup network
+    networking::test_cleanup_network(&client).await?;
+    println!();
+
+    // Step 17: Stop daemon
     println!("🛑 Stopping daemon...");
     daemon_handle.kill().context("Failed to stop daemon")?;
     daemon_handle.wait().context("Failed to wait for daemon")?;
@@ -104,6 +131,32 @@ fn clean_environment() -> Result<()> {
     }
 
     println!("  ✓ Environment cleaned");
+    Ok(())
+}
+
+/// Write nexus.yaml with paths to downloaded assets.
+/// TODO: remove once VM start resolves firecracker/kernel from the asset store
+fn write_config() -> Result<()> {
+    println!("📝 Writing nexus.yaml config...");
+
+    let assets_dir = dirs::data_dir()
+        .context("Cannot determine XDG_DATA_HOME")?
+        .join("nexus")
+        .join("assets");
+
+    let config_dir = dirs::config_dir()
+        .context("Cannot determine XDG_CONFIG_HOME")?
+        .join("nexus");
+    fs::create_dir_all(&config_dir)?;
+
+    let config = format!(
+        "firecracker:\n  binary: \"{}/firecracker/firecracker-v1.14.1-x86_64\"\n  kernel: \"{}/kernels/vmlinux-6.1.164-x86_64\"\n",
+        assets_dir.display(),
+        assets_dir.display(),
+    );
+
+    fs::write(config_dir.join("nexus.yaml"), &config)?;
+    println!("  ✓ Config written");
     Ok(())
 }
 
