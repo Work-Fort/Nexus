@@ -120,7 +120,7 @@ fn clean_environment() -> Result<()> {
 
     let output = Command::new("mise")
         .arg("run")
-        .arg("clean")
+        .arg("wipe")
         .current_dir(std::env::var("HOME")? + "/Work/WorkFort/nexus")
         .output()
         .context("Failed to run mise clean")?;

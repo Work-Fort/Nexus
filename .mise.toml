@@ -1,5 +1,6 @@
 [tools]
 rust = { version = "latest", targets = "x86_64-unknown-linux-musl" }
+"cargo:cargo-sweep" = "latest"
 
 [tasks.build]
 description = "Build all crates (debug)"
@@ -138,6 +139,13 @@ description = "Remove built rootfs artifacts"
 run = "rm -rf artifacts/rootfs.ext4"
 
 [tasks.clean]
+description = "Remove stale build artifacts (incremental cache + old dep hashes)"
+run = """
+rm -rf target/debug/incremental target/release/incremental
+cargo sweep --toolchains stable-x86_64-unknown-linux-gnu
+"""
+
+[tasks.wipe]
 description = "Remove all Nexus state (database, config, cache, drives)"
 run = """
 #!/usr/bin/env bash
