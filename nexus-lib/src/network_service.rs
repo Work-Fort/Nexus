@@ -398,10 +398,7 @@ impl NetworkService {
                 let mut report = CleanupReport::default();
 
                 // Delete all tap devices attached to the bridge
-                let bridge_index = match helper.get_link_index(&bridge_name).await {
-                    Ok(idx) => Some(idx),
-                    Err(_) => None,
-                };
+                let bridge_index = helper.get_link_index(&bridge_name).await.ok();
 
                 if let Some(bridge_idx) = bridge_index {
                     // List all links and find taps mastered to our bridge

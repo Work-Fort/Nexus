@@ -1492,7 +1492,7 @@ async fn cmd_setup_firewall() -> ExitCode {
         "route", "allow", "in", "on", BRIDGE_NAME, "from", VM_SUBNET,
     ];
     println!("Adding UFW rule: ufw {}", rule_args.join(" "));
-    let result = match Command::new("ufw").args(&rule_args).output() {
+    let result = match Command::new("ufw").args(rule_args).output() {
         Ok(o) => o,
         Err(e) => {
             eprintln!("Error: failed to run ufw: {e}");

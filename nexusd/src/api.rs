@@ -1756,7 +1756,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn delete_vm_returns_204() {
         let state = test_state();
 
