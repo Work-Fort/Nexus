@@ -203,6 +203,22 @@ if [ -d "$HOME/.local/share/nexus/drives" ]; then
     rm -rf "$HOME/.local/share/nexus/drives"
 fi
 
+# Clean network interfaces via nexusd API (uses daemon's CAP_NET_ADMIN, no sudo)
+# Removes tap devices, bridge, and nftables rules
+if curl -s http://localhost:9600/v1/health >/dev/null 2>&1; then
+    echo "  → Cleaning network via API"
+    result=$(curl -s -X POST http://localhost:9600/v1/admin/cleanup-network)
+    echo "    $result"
+else
+    echo "  → Daemon not running, skipping network cleanup (start nexusd first or clean manually)"
+fi
+
+# Remove runtime directory
+if [ -d "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/nexus" ]; then
+    echo "  → Removing runtime directory"
+    rm -rf "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/nexus"
+fi
+
 echo "✅ Nexus state cleaned"
 """
 

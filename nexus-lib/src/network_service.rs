@@ -10,6 +10,13 @@ use tun_tap::{Iface, Mode};
 use rtnetlink::packet_route::link::LinkAttribute;
 use std::os::fd::AsRawFd;
 
+#[derive(Debug, Default, serde::Serialize)]
+pub struct CleanupReport {
+    pub taps_deleted: u32,
+    pub bridge_deleted: bool,
+    pub nftables_flushed: bool,
+}
+
 /// Set IFF_PERSIST flag on a tap device to prevent kernel from destroying it when the fd closes.
 /// This allows Firecracker to attach to the pre-created tap device.
 fn set_tap_persistent(iface: &Iface) -> Result<(), std::io::Error> {
@@ -21,6 +28,9 @@ fn set_tap_persistent(iface: &Iface) -> Result<(), std::io::Error> {
     }
     Ok(())
 }
+
+// TODO: investigate TCP connectivity through NAT — ICMP works, TCP doesn't.
+// Checksum offloading was ruled out as the cause (ethtool -K tx off didn't fix it).
 
 /// Helper to execute async netlink operations in a sync context.
 struct NetlinkHelper {
@@ -359,6 +369,75 @@ impl NetworkService {
     /// Get DNS servers as a comma-separated string.
     pub fn dns_servers(&self) -> String {
         self.config.dns_servers.join(",")
+    }
+
+    /// Tear down all network state: tap devices on the bridge, nftables rules, and the bridge.
+    /// Used by the cleanup endpoint to reset networking without sudo.
+    pub fn cleanup_network(&self) -> Result<CleanupReport, NetworkError> {
+        let bridge_name = self.config.bridge_name.clone();
+
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let helper = NetlinkHelper::new()?;
+                let mut report = CleanupReport::default();
+
+                // Delete all tap devices attached to the bridge
+                let bridge_index = match helper.get_link_index(&bridge_name).await {
+                    Ok(idx) => Some(idx),
+                    Err(_) => None,
+                };
+
+                if let Some(bridge_idx) = bridge_index {
+                    // List all links and find taps mastered to our bridge
+                    let mut links = helper.handle.link().get().execute();
+                    while let Ok(Some(msg)) = links.try_next().await {
+                        let mut name = None;
+                        let mut is_our_tap = false;
+                        for attr in &msg.attributes {
+                            match attr {
+                                LinkAttribute::IfName(n) if n.starts_with("tap") => name = Some(n.clone()),
+                                LinkAttribute::Controller(idx) if *idx == bridge_idx => is_our_tap = true,
+                                _ => {}
+                            }
+                        }
+                        if let (Some(tap_name), true) = (name, is_our_tap) {
+                            let tap_idx = msg.header.index;
+                            if let Err(e) = helper.handle.link().del(tap_idx).execute().await {
+                                tracing::warn!("Failed to delete tap {}: {}", tap_name, e);
+                            } else {
+                                tracing::info!("Deleted tap device {}", tap_name);
+                                report.taps_deleted += 1;
+                            }
+                        }
+                    }
+
+                    // Delete the bridge
+                    if let Err(e) = helper.handle.link().del(bridge_idx).execute().await {
+                        tracing::warn!("Failed to delete bridge {}: {}", bridge_name, e);
+                    } else {
+                        tracing::info!("Deleted bridge {}", bridge_name);
+                        report.bridge_deleted = true;
+                    }
+                }
+
+                // Flush nftables table
+                report.nftables_flushed = self.flush_nftables().is_ok();
+
+                Ok(report)
+            })
+        })
+    }
+
+    /// Delete the nexus nftables table entirely.
+    fn flush_nftables(&self) -> Result<(), NetworkError> {
+        let mut batch = nftnl::Batch::new();
+        let table = nftnl::Table::new(c"nexus", nftnl::ProtoFamily::Inet);
+        batch.add(&table, nftnl::MsgType::Del);
+        let finalized = batch.finalize();
+        send_nftables_batch(&finalized)
+            .map_err(|e| NetworkError::Nftables(format!("failed to flush nftables: {e}")))?;
+        tracing::info!("Flushed nftables table nexus");
+        Ok(())
     }
 
     /// Initialize nftables rules for NAT and VM isolation.

@@ -164,6 +164,11 @@ async fn delete_vm(
         ),
     };
 
+    // Clean up tap device and release IP (best-effort, don't block deletion)
+    if let Err(e) = state.network_service.destroy_tap(vm.id.as_i64()) {
+        tracing::warn!("Failed to destroy tap device for VM {}: {}", vm.name, e);
+    }
+
     match state.store.delete_vm(vm.id) {
         Ok(true) => (StatusCode::NO_CONTENT, Json(serde_json::json!(null))),
         Ok(false) => (
@@ -1191,9 +1196,25 @@ async fn vm_history_handler(
     }
 }
 
+// TODO: expose as `nexusctl admin cleanup-network` in nexusctl
+// Gate with #[cfg(debug_assertions)] to exclude from release builds
+async fn cleanup_network_handler(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.network_service.cleanup_network() {
+        Ok(report) => (StatusCode::OK, Json(serde_json::json!(report))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
+        // Gate with #[cfg(debug_assertions)] to exclude from release builds
+        .route("/v1/admin/cleanup-network", post(cleanup_network_handler))
         .route("/v1/vms", post(create_vm).get(list_vms))
         .route("/v1/vms/{name_or_id}", get(get_vm).delete(delete_vm))
         .route("/v1/vms/{name_or_id}/start", post(start_vm_handler))
