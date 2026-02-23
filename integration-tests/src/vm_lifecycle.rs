@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
@@ -27,12 +27,15 @@ struct VmResponse {
 enum GuestMessage {
     #[serde(rename = "handshake")]
     Handshake {
+        #[allow(dead_code)]
         vm_id: Option<String>,
+        #[allow(dead_code)]
         metadata: ImageMetadata,
     },
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ImageMetadata {
     image_id: String,
     image_name: String,
@@ -172,7 +175,7 @@ pub async fn verify_vm_ready(client: &Client, vm_id: &str) -> Result<()> {
 }
 
 /// Verify vsock connection to guest agent
-async fn verify_vsock_connection(vm_id: &str, workspace_path: &PathBuf) -> Result<()> {
+async fn verify_vsock_connection(_vm_id: &str, workspace_path: &std::path::Path) -> Result<()> {
     println!("🔌 Verifying vsock connection to guest agent...");
 
     let vsock_path = workspace_path.join("firecracker.vsock");
@@ -292,7 +295,7 @@ fn get_vm_workspace_path(vm_id: &str) -> Result<PathBuf> {
     Ok(drives_dir.join(vm_id))
 }
 
-fn verify_socket_ownership(pid: u32, socket_path: &PathBuf) -> Result<()> {
+fn verify_socket_ownership(pid: u32, socket_path: &std::path::Path) -> Result<()> {
     use std::process::Command;
 
     let output = Command::new("lsof")
