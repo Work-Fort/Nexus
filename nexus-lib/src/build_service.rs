@@ -130,10 +130,26 @@ impl<'a> BuildService<'a> {
         writeln!(log, "Downloading: {}", build.source_identifier).ok();
         let tarball_path = build_dir.join("rootfs.tar.gz");
 
+        let is_url = build.source_identifier.starts_with("http://")
+            || build.source_identifier.starts_with("https://");
+
+        // For local files, resolve the source_identifier to the full asset path
+        let source_path = if is_url {
+            build.source_identifier.clone()
+        } else {
+            let images = self.store.list_rootfs_images()
+                .map_err(|e| BuildServiceError::BuildFailed(format!("cannot list rootfs images: {e}")))?;
+            images.iter()
+                .find(|img| img.path_on_host.ends_with(&build.source_identifier))
+                .map(|img| img.path_on_host.clone())
+                .ok_or_else(|| BuildServiceError::BuildFailed(
+                    format!("rootfs asset not found for: {}", build.source_identifier)
+                ))?
+        };
+
         let pipeline_stages = vec![
             PipelineStage::Transport {
-                transport: if build.source_identifier.starts_with("http://")
-                    || build.source_identifier.starts_with("https://") { "http" } else { "file" }.to_string(),
+                transport: if is_url { "http" } else { "file" }.to_string(),
                 credentials: serde_json::Value::Object(Default::default()),
                 host: String::new(),
                 encrypted: build.source_identifier.starts_with("https://"),
@@ -144,7 +160,7 @@ impl<'a> BuildService<'a> {
         ];
 
         self.executor.execute(
-            &build.source_identifier,
+            &source_path,
             &tarball_path,
             &pipeline_stages,
             &ChecksumSet::default(),
