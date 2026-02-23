@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-const DAEMON_URL: &str = "http://localhost:3030";
+const DAEMON_URL: &str = "http://localhost:9600";
 const ALPINE_VERSION: &str = "3.23.3";
 const GUEST_AGENT_TIMEOUT: Duration = Duration::from_secs(20);
 const VM_BOOT_EXPECTED: Duration = Duration::from_millis(150);
@@ -48,7 +48,7 @@ pub async fn create_vm(client: &Client) -> Result<String> {
     println!("🔧 Creating minimal Alpine VM...");
 
     let response = client
-        .post(format!("{}/v1/vms/create", DAEMON_URL))
+        .post(format!("{}/v1/vms", DAEMON_URL))
         .json(&json!({
             "name": "integration-test-vm",
             "kernel": {

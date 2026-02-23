@@ -114,7 +114,7 @@ pub fn verify_downloads_present() -> Result<()> {
     bail!("Firecracker binary not found in {}", paths.firecracker.display());
 }
 
-const DAEMON_URL: &str = "http://localhost:3030";
+const DAEMON_URL: &str = "http://localhost:9600";
 const ALPINE_VERSION: &str = "3.23.3"; // CRITICAL: Pre-alpha constraint
 
 /// Download kernel via Nexus API
@@ -124,10 +124,7 @@ async fn download_kernel(client: &Client) -> Result<()> {
     let response = client
         .post(format!("{}/v1/kernels/download", DAEMON_URL))
         .json(&json!({
-            "provider": "github",
-            "repository": "firecracker-microvm/firecracker",
-            "ref": "main",
-            "kernel_path": "resources/guest_configs/microvm-kernel-ci-x86_64-5.10.223.bin"
+            "version": "6.1.164"
         }))
         .timeout(Duration::from_secs(300)) // 5 minute timeout
         .send()
@@ -147,12 +144,10 @@ async fn download_rootfs(client: &Client) -> Result<()> {
     println!("⬇️  Downloading rootfs...");
 
     let response = client
-        .post(format!("{}/v1/rootfs/download", DAEMON_URL))
+        .post(format!("{}/v1/rootfs-images/download", DAEMON_URL))
         .json(&json!({
-            "provider": "alpine",
-            "version": ALPINE_VERSION,
-            "arch": "x86_64",
-            "variant": "standard"
+            "distro": "alpine",
+            "version": ALPINE_VERSION
         }))
         .timeout(Duration::from_secs(300))
         .send()
@@ -174,7 +169,7 @@ async fn download_firecracker(client: &Client) -> Result<()> {
     let response = client
         .post(format!("{}/v1/firecracker/download", DAEMON_URL))
         .json(&json!({
-            "version": "latest"
+            "version": "1.14.1"
         }))
         .timeout(Duration::from_secs(300))
         .send()

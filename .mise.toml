@@ -164,18 +164,18 @@ if command -v systemctl >/dev/null 2>&1; then
     fi
 fi
 
-# Remove database
-if [ -f "$HOME/.local/share/nexus/nexus.db" ]; then
+# Remove database (XDG_STATE_HOME, not XDG_DATA_HOME)
+if [ -f "$HOME/.local/state/nexus/nexus.db" ]; then
     echo "  → Removing database"
-    rm -f "$HOME/.local/share/nexus/nexus.db"
-    rm -f "$HOME/.local/share/nexus/nexus.db-shm"
-    rm -f "$HOME/.local/share/nexus/nexus.db-wal"
+    rm -f "$HOME/.local/state/nexus/nexus.db"
+    rm -f "$HOME/.local/state/nexus/nexus.db-shm"
+    rm -f "$HOME/.local/state/nexus/nexus.db-wal"
 fi
 
 # Remove config
-if [ -f "$HOME/.config/nexus/config.yaml" ]; then
+if [ -f "$HOME/.config/nexus/nexus.yaml" ]; then
     echo "  → Removing config"
-    rm -f "$HOME/.config/nexus/config.yaml"
+    rm -f "$HOME/.config/nexus/nexus.yaml"
 fi
 
 # Remove cache and assets
@@ -184,18 +184,22 @@ if [ -d "$HOME/.local/share/nexus/assets" ]; then
     rm -rf "$HOME/.local/share/nexus/assets"
 fi
 
-# Remove drives (btrfs subvolumes)
+# Remove drives (btrfs subvolumes) using VFS workaround (no sudo needed)
+# Same approach as btrfs.rs: unset read-only, remove contents, rmdir empty subvolume
 if [ -d "$HOME/.local/share/nexus/drives" ]; then
     echo "  → Removing drives"
-    # Check if directory contains btrfs subvolumes
-    if command -v btrfs >/dev/null 2>&1; then
-        for subvol in "$HOME/.local/share/nexus/drives"/*; do
-            if [ -d "$subvol" ] && btrfs subvolume show "$subvol" >/dev/null 2>&1; then
-                echo "    → Deleting btrfs subvolume: $(basename "$subvol")"
-                btrfs subvolume delete "$subvol"
+    for subvol in "$HOME/.local/share/nexus/drives"/@*; do
+        if [ -d "$subvol" ]; then
+            echo "    → Deleting subvolume: $(basename "$subvol")"
+            # Make writable if read-only (same as libbtrfsutil::set_subvolume_read_only(false))
+            if btrfs property get "$subvol" ro 2>/dev/null | grep -q 'ro=true'; then
+                btrfs property set "$subvol" ro false
             fi
-        done
-    fi
+            # Remove contents via VFS, then rmdir the empty subvolume (kernel 4.18+)
+            rm -rf "$subvol"/*
+            rmdir "$subvol"
+        fi
+    done
     rm -rf "$HOME/.local/share/nexus/drives"
 fi
 
@@ -216,7 +220,6 @@ echo "  - btrfs filesystem"
 echo "  - Network connectivity"
 echo ""
 
-cd integration-tests
-cargo build --release
+cargo build -p integration-tests --release
 exec ./target/release/integration-test-runner
 """
