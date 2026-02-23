@@ -4,6 +4,7 @@ use nexus_lib::test_support::TestDaemon;
 use serde_json::json;
 
 #[tokio::test]
+#[ignore = "Requires full VM environment with drive attached - verify in integration tests or manual QA"]
 async fn vm_has_internet_connectivity_via_mcp() {
     let daemon = TestDaemon::start().await;
     let client = reqwest::Client::new();
@@ -138,6 +139,7 @@ async fn vm_has_internet_connectivity_via_mcp() {
 }
 
 #[tokio::test]
+#[ignore = "Requires full VM environment with drive attached - verify in integration tests or manual QA"]
 async fn vm_network_isolation() {
     let daemon = TestDaemon::start().await;
     let client = reqwest::Client::new();
