@@ -2137,6 +2137,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "mnl"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528ab362254419b09757228dc96e0d834e75392c52870d759df2274753007065"
+dependencies = [
+ "libc",
+ "log",
+ "mnl-sys",
+]
+
+[[package]]
+name = "mnl-sys"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0f3c607af12ed53f3cade8ee7adeced5533800abc0b07f5b6bdc7081d1e0d4c"
+dependencies = [
+ "libc",
+ "pkg-config",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2243,8 +2264,9 @@ dependencies = [
  "futures-util",
  "ipnetwork",
  "libbtrfsutil",
+ "mnl",
  "nexus-protocol",
- "nftables",
+ "nftnl",
  "nix 0.30.1",
  "pgp",
  "rand 0.10.0",
@@ -2316,17 +2338,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "nftables"
-version = "0.5.0"
+name = "nftnl"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c7288de9ee11086e792d89ee45adf490a5a778ff0fddc7e086ce1521989e657"
+checksum = "a530f904e31675dc9d2e3a5c166a844dffc3dad644205fe5abb638f4e9e75d9b"
 dependencies = [
- "serde",
- "serde_json",
- "serde_path_to_error",
- "strum",
- "strum_macros",
- "thiserror 1.0.69",
+ "bitflags 2.11.0",
+ "log",
+ "nftnl-sys",
+ "nix 0.30.1",
+]
+
+[[package]]
+name = "nftnl-sys"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cffa28b4c81eea6a8a4fd454634d425e1a559250a50a926de4517dd9607fe9a4"
+dependencies = [
+ "cfg-if 1.0.4",
+ "libc",
+ "mnl-sys",
+ "pkg-config",
 ]
 
 [[package]]
@@ -3533,25 +3565,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "strum"
-version = "0.26.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
-
-[[package]]
-name = "strum_macros"
-version = "0.26.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "rustversion",
- "syn",
-]
 
 [[package]]
 name = "subtle"

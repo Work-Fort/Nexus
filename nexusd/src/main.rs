@@ -133,20 +133,14 @@ async fn main() {
         config.network.clone(),
     );
 
-    // Check nftables version
-    if let Err(e) = nexus_lib::network_service::NetworkService::check_nftables_version() {
-        tracing::error!("nftables check failed: {}", e);
-        tracing::warn!("Networking features will not be available");
-    } else {
-        // Initialize bridge and nftables rules
-        if let Err(e) = network_service.ensure_bridge() {
-            tracing::error!("Failed to create bridge: {}", e);
-            tracing::warn!("VMs will not have network connectivity");
-        }
-        if let Err(e) = network_service.init_nftables() {
-            tracing::error!("Failed to initialize nftables: {}", e);
-            tracing::warn!("NAT and firewall rules not configured");
-        }
+    // Initialize bridge and nftables rules
+    if let Err(e) = network_service.ensure_bridge() {
+        tracing::error!("Failed to create bridge: {}", e);
+        tracing::warn!("VMs will not have network connectivity");
+    }
+    if let Err(e) = network_service.init_nftables() {
+        tracing::error!("Failed to initialize nftables: {}", e);
+        tracing::warn!("NAT and firewall rules not configured");
     }
 
     let state = Arc::new(api::AppState {

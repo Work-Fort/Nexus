@@ -4,8 +4,6 @@
 use crate::config::NetworkConfig;
 use crate::store::traits::{NetworkStore, StoreError};
 use ipnetwork::Ipv4Network;
-use std::process::Command;
-use serde_json::json;
 use rtnetlink::{new_connection, Handle, LinkUnspec};
 use futures::stream::TryStreamExt;
 use tun_tap::{Iface, Mode};
@@ -47,6 +45,33 @@ impl NetlinkHelper {
             .ok_or_else(|| NetworkError::Bridge(format!("link {} not found", name)))?;
         Ok(link.header.index)
     }
+}
+
+/// Send a finalized nftables batch to the kernel via netlink.
+fn send_nftables_batch(batch: &nftnl::FinalizedBatch) -> std::io::Result<()> {
+    let socket = mnl::Socket::new(mnl::Bus::Netfilter)?;
+    let portid = socket.portid();
+    socket.send_all(batch)?;
+    let mut buffer = vec![0; nftnl::nft_nlmsg_maxsize() as usize];
+    let mut expected_seqs = batch.sequence_numbers();
+    while !expected_seqs.is_empty() {
+        for message in socket.recv(&mut buffer[..])? {
+            let message = message?;
+            let expected_seq = expected_seqs.next().expect("unexpected netlink ACK");
+            mnl::cb_run(message, expected_seq, portid)?;
+        }
+    }
+    Ok(())
+}
+
+/// Pad an interface name with null terminator and align to 4 bytes for nftables comparison.
+fn pad_iface_name(name: &str) -> Vec<u8> {
+    let mut buf = name.as_bytes().to_vec();
+    buf.push(0); // null terminator
+    while !buf.len().is_multiple_of(4) {
+        buf.push(0);
+    }
+    buf
 }
 
 /// Errors from network service operations.
@@ -338,236 +363,84 @@ impl NetworkService {
 
     /// Initialize nftables rules for NAT and VM isolation.
     /// Creates the `nexus` table with postrouting (NAT) and forward (filter) chains.
-    /// Requires CAP_NET_ADMIN.
+    /// Uses nftnl batch API via netlink (in-process, inherits CAP_NET_ADMIN).
     pub fn init_nftables(&self) -> Result<(), NetworkError> {
+        use ipnetwork::IpNetwork;
+        use nftnl::{nft_expr, nftnl_sys::libc as nftnl_libc};
+
         let bridge_name = &self.config.bridge_name;
         let subnet = &self.config.subnet;
 
-        // Parse subnet to get correct CIDR format
         let network: ipnetwork::Ipv4Network = subnet.parse()
             .map_err(|e| NetworkError::Nftables(format!("invalid subnet: {e}")))?;
-        let subnet_cidr = format!("{}/{}", network.network(), network.prefix());
+        let network = IpNetwork::V4(network);
+        let iface_buf = pad_iface_name(bridge_name);
 
-        // Create complete nftables ruleset via JSON
-        let ruleset_json = json!({
-            "nftables": [
-                {
-                    "add": {
-                        "table": {
-                            "family": "inet",
-                            "name": "nexus"
-                        }
-                    }
-                },
-                {
-                    "add": {
-                        "chain": {
-                            "family": "inet",
-                            "table": "nexus",
-                            "name": "postrouting",
-                            "type": "nat",
-                            "hook": "postrouting",
-                            "prio": 100,
-                            "policy": "accept"
-                        }
-                    }
-                },
-                {
-                    "add": {
-                        "chain": {
-                            "family": "inet",
-                            "table": "nexus",
-                            "name": "forward",
-                            "type": "filter",
-                            "hook": "forward",
-                            "prio": 0,
-                            "policy": "drop"
-                        }
-                    }
-                },
-                {
-                    "add": {
-                        "rule": {
-                            "family": "inet",
-                            "table": "nexus",
-                            "chain": "postrouting",
-                            "expr": [
-                                {
-                                    "match": {
-                                        "op": "==",
-                                        "left": {
-                                            "payload": {
-                                                "protocol": "ip",
-                                                "field": "saddr"
-                                            }
-                                        },
-                                        "right": subnet_cidr
-                                    }
-                                },
-                                {
-                                    "match": {
-                                        "op": "!=",
-                                        "left": {
-                                            "meta": {
-                                                "key": "oifname"
-                                            }
-                                        },
-                                        "right": bridge_name
-                                    }
-                                },
-                                {
-                                    "masquerade": null
-                                }
-                            ]
-                        }
-                    }
-                },
-                {
-                    "add": {
-                        "rule": {
-                            "family": "inet",
-                            "table": "nexus",
-                            "chain": "forward",
-                            "expr": [
-                                {
-                                    "match": {
-                                        "op": "in",
-                                        "left": {
-                                            "ct": {
-                                                "key": "state"
-                                            }
-                                        },
-                                        "right": ["established", "related"]
-                                    }
-                                },
-                                {
-                                    "accept": null
-                                }
-                            ]
-                        }
-                    }
-                },
-                {
-                    "add": {
-                        "rule": {
-                            "family": "inet",
-                            "table": "nexus",
-                            "chain": "forward",
-                            "expr": [
-                                {
-                                    "match": {
-                                        "op": "==",
-                                        "left": {
-                                            "meta": {
-                                                "key": "iifname"
-                                            }
-                                        },
-                                        "right": bridge_name
-                                    }
-                                },
-                                {
-                                    "match": {
-                                        "op": "!=",
-                                        "left": {
-                                            "meta": {
-                                                "key": "oifname"
-                                            }
-                                        },
-                                        "right": bridge_name
-                                    }
-                                },
-                                {
-                                    "accept": null
-                                }
-                            ]
-                        }
-                    }
-                },
-                {
-                    "add": {
-                        "rule": {
-                            "family": "inet",
-                            "table": "nexus",
-                            "chain": "forward",
-                            "expr": [
-                                {
-                                    "match": {
-                                        "op": "==",
-                                        "left": {
-                                            "meta": {
-                                                "key": "iifname"
-                                            }
-                                        },
-                                        "right": bridge_name
-                                    }
-                                },
-                                {
-                                    "match": {
-                                        "op": "==",
-                                        "left": {
-                                            "meta": {
-                                                "key": "oifname"
-                                            }
-                                        },
-                                        "right": bridge_name
-                                    }
-                                },
-                                {
-                                    "drop": null
-                                }
-                            ]
-                        }
-                    }
-                }
-            ]
-        });
+        let mut batch = nftnl::Batch::new();
 
-        // Write JSON to temp file and apply via `nft -j -f`
-        let json_str = serde_json::to_string(&ruleset_json)
-            .map_err(|e| NetworkError::Nftables(format!("failed to serialize ruleset: {e}")))?;
+        // Table: inet nexus
+        let table = nftnl::Table::new(c"nexus", nftnl::ProtoFamily::Inet);
+        batch.add(&table, nftnl::MsgType::Add);
 
-        let temp_file = std::env::temp_dir().join("nexus-nftables-init.json");
-        std::fs::write(&temp_file, json_str)
-            .map_err(|e| NetworkError::Nftables(format!("failed to write temp file: {e}")))?;
+        // Chain: postrouting (nat, hook postrouting, prio 100, accept)
+        let mut postrouting = nftnl::Chain::new(c"postrouting", &table);
+        postrouting.set_type(nftnl::ChainType::Nat);
+        postrouting.set_hook(nftnl::Hook::PostRouting, 100);
+        postrouting.set_policy(nftnl::Policy::Accept);
+        batch.add(&postrouting, nftnl::MsgType::Add);
 
-        let apply = Command::new("nft")
-            .args(["-j", "-f", temp_file.to_str().unwrap()])
-            .output()
-            .map_err(|e| NetworkError::Nftables(format!("failed to run nft: {e}")))?;
+        // Chain: forward (filter, hook forward, prio 0, drop)
+        let mut forward = nftnl::Chain::new(c"forward", &table);
+        forward.set_type(nftnl::ChainType::Filter);
+        forward.set_hook(nftnl::Hook::Forward, 0);
+        forward.set_policy(nftnl::Policy::Drop);
+        batch.add(&forward, nftnl::MsgType::Add);
 
-        if !apply.status.success() {
-            let stderr = String::from_utf8_lossy(&apply.stderr);
-            return Err(NetworkError::Nftables(format!("nft -j -f failed: {stderr}")));
-        }
+        // Rule 1 (postrouting): ip saddr in subnet, oifname != bridge → masquerade
+        let mut masq_rule = nftnl::Rule::new(&postrouting);
+        masq_rule.add_expr(&nft_expr!(meta nfproto));
+        masq_rule.add_expr(&nft_expr!(cmp == nftnl_libc::NFPROTO_IPV4 as u8));
+        masq_rule.add_expr(&nft_expr!(payload ipv4 saddr));
+        masq_rule.add_expr(&nft_expr!(bitwise mask network.mask(), xor 0u32));
+        masq_rule.add_expr(&nft_expr!(cmp == network.ip()));
+        masq_rule.add_expr(&nft_expr!(meta oifname));
+        masq_rule.add_expr(&nft_expr!(cmp != iface_buf.as_slice()));
+        masq_rule.add_expr(&nft_expr!(masquerade));
+        batch.add(&masq_rule, nftnl::MsgType::Add);
 
-        Ok(())
-    }
+        // Rule 2 (forward): ct state established,related → accept
+        let mut est_rule = nftnl::Rule::new(&forward);
+        est_rule.add_expr(&nft_expr!(ct state));
+        // CT state bitmask: established=2, related=4
+        est_rule.add_expr(&nft_expr!(bitwise mask 6u32, xor 0u32));
+        est_rule.add_expr(&nft_expr!(cmp != 0u32));
+        est_rule.add_expr(&nft_expr!(verdict accept));
+        batch.add(&est_rule, nftnl::MsgType::Add);
 
-    /// Check if nftables is available and meets version requirements (>= 0.9.3).
-    pub fn check_nftables_version() -> Result<(), NetworkError> {
-        let output = Command::new("nft")
-            .arg("--version")
-            .output()
-            .map_err(|e| NetworkError::Nftables(format!("nft not found: {e}")))?;
+        // Rule 3 (forward): iifname == bridge, oifname != bridge → accept
+        let mut fwd_rule = nftnl::Rule::new(&forward);
+        fwd_rule.add_expr(&nft_expr!(meta iifname));
+        fwd_rule.add_expr(&nft_expr!(cmp == iface_buf.as_slice()));
+        fwd_rule.add_expr(&nft_expr!(meta oifname));
+        fwd_rule.add_expr(&nft_expr!(cmp != iface_buf.as_slice()));
+        fwd_rule.add_expr(&nft_expr!(verdict accept));
+        batch.add(&fwd_rule, nftnl::MsgType::Add);
 
-        if !output.status.success() {
-            return Err(NetworkError::Nftables("nft --version failed".to_string()));
-        }
+        // Rule 4 (forward): iifname == bridge, oifname == bridge → drop (VM isolation)
+        let mut iso_rule = nftnl::Rule::new(&forward);
+        iso_rule.add_expr(&nft_expr!(meta iifname));
+        iso_rule.add_expr(&nft_expr!(cmp == iface_buf.as_slice()));
+        iso_rule.add_expr(&nft_expr!(meta oifname));
+        iso_rule.add_expr(&nft_expr!(cmp == iface_buf.as_slice()));
+        iso_rule.add_expr(&nft_expr!(verdict drop));
+        batch.add(&iso_rule, nftnl::MsgType::Add);
 
-        let version_str = String::from_utf8_lossy(&output.stdout);
-        // Parse version (e.g., "nftables v1.1.1 (Old Doc Yak)")
-        if let Some(version) = version_str.split_whitespace().nth(1) {
-            let version = version.trim_start_matches('v');
-            tracing::info!("nftables version: {}", version);
-            // Version check: >= 0.9.3
-            // Simple string comparison works for nftables versioning
-            if version < "0.9.3" {
-                return Err(NetworkError::Nftables(
-                    format!("nftables version {} is too old (need >= 0.9.3)", version)
-                ));
-            }
-        }
+        // Send batch via netlink
+        let finalized = batch.finalize();
+        send_nftables_batch(&finalized)
+            .map_err(|e| NetworkError::Nftables(format!("failed to send nftables batch: {e}")))?;
 
+        tracing::info!("nftables rules initialized for bridge {}", bridge_name);
         Ok(())
     }
 }
@@ -670,13 +543,4 @@ mod tests {
         assert_eq!(service.dns_servers(), "8.8.8.8,1.1.1.1");
     }
 
-    #[test]
-    fn check_nftables_version_succeeds_if_installed() {
-        // This test only passes if nftables is installed on the test system
-        // Skip if not available
-        let result = NetworkService::check_nftables_version();
-        if result.is_err() {
-            eprintln!("Skipping nftables test: {}", result.unwrap_err());
-        }
-    }
 }

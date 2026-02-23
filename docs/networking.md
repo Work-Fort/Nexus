@@ -7,10 +7,10 @@ Nexus uses native Linux APIs for network configuration:
 - **Bridge management**: rtnetlink crate (RTM_NEWLINK/RTM_DELLINK messages, IP address assignment)
 - **Tap device creation**: tun-tap crate (ioctl on `/dev/net/tun`)
 - **Tap device configuration**: rtnetlink crate (bridge attachment, link state management)
-- **Firewall rules**: nftables JSON API (`nft -j -f`)
+- **Firewall rules**: nftnl crate (netlink to kernel nf_tables subsystem, in-process)
 
-All operations except nftables rules are performed in-process without child processes,
-ensuring that `CAP_NET_ADMIN` capability is not inherited to external commands.
+All operations are performed in-process via netlink and ioctl without child processes,
+ensuring that `CAP_NET_ADMIN` capability is inherited directly.
 
 **Why tun-tap crate instead of rtnetlink for tap creation?**
 
@@ -22,15 +22,14 @@ link up/down, deletion).
 
 ## Requirements
 
-Nexus requires `CAP_NET_ADMIN` capability for network bridge and tap device management.
-The `nft` command must be available in PATH for firewall rule configuration.
+Nexus requires `CAP_NET_ADMIN` capability for network bridge, tap device, and firewall management.
 
 ### System Dependencies
 
-- nftables >= 0.9.3 installed and `nft` command available
-- Linux kernel with netlink support (all modern kernels)
+- `libnftnl` and `libmnl` system libraries (standard Linux netfilter packages)
+- Linux kernel with nf_tables subsystem and netlink support (all modern kernels)
 - Linux kernel with tun module loaded (`modprobe tun` if not built-in)
-- No `ip` command required (uses native netlink and ioctl)
+- No `ip` or `nft` commands required (all operations use in-process netlink/ioctl)
 
 ### Option 1: setcap (recommended for development)
 
@@ -64,15 +63,6 @@ Reload systemd and restart the service:
 ```bash
 systemctl --user daemon-reload
 systemctl --user restart nexusd
-```
-
-### Verification
-
-Check that nftables is installed and meets version requirements:
-
-```bash
-nft --version
-# Should output: nftables v1.0.0 or higher (need >= 0.9.3)
 ```
 
 ## Network Configuration
