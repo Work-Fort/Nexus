@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 use crate::backend::traits::DriveBackend;
 use crate::drive::ImportImageParams;
-use crate::embedded::{GUEST_AGENT_BINARY, GUEST_AGENT_SYSTEMD_UNIT, PLACEHOLDER_IMAGE_YAML};
+use crate::embedded::{GUEST_AGENT_BINARY, PLACEHOLDER_IMAGE_YAML};
 use crate::pipeline::{ChecksumSet, PipelineExecutor, PipelineStage};
 use crate::store::traits::StoreError;
 use crate::template::{Build, BuildStatus};
@@ -198,34 +198,8 @@ impl<'a> BuildService<'a> {
                 ))?;
         }
 
-        // Write systemd service unit (programmatic string write)
-        writeln!(log, "Writing guest-agent systemd service unit").ok();
-        let service_path = rootfs_dir.join("etc/systemd/system/nexus-guest-agent.service");
-        std::fs::create_dir_all(service_path.parent().unwrap())
-            .map_err(|e| BuildServiceError::BuildFailed(
-                format!("failed to create /etc/systemd/system directory: {e}")
-            ))?;
-        std::fs::write(&service_path, GUEST_AGENT_SYSTEMD_UNIT)
-            .map_err(|e| BuildServiceError::BuildFailed(
-                format!("failed to write guest-agent systemd unit: {e}")
-            ))?;
-
-        // Enable service by creating symlink (programmatic symlink creation)
-        writeln!(log, "Enabling guest-agent systemd service").ok();
-        let wants_dir = rootfs_dir.join("etc/systemd/system/multi-user.target.wants");
-        std::fs::create_dir_all(&wants_dir)
-            .map_err(|e| BuildServiceError::BuildFailed(
-                format!("failed to create multi-user.target.wants directory: {e}")
-            ))?;
-        let symlink_path = wants_dir.join("nexus-guest-agent.service");
-
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink("/etc/systemd/system/nexus-guest-agent.service", &symlink_path)
-                .map_err(|e| BuildServiceError::BuildFailed(
-                    format!("failed to create systemd service symlink: {e}")
-                ))?;
-        }
+        // Configure init system (BusyBox, OpenRC, or systemd)
+        self.configure_init_system(&rootfs_dir, &build.source_identifier, &mut log)?;
 
         // Write placeholder image metadata (programmatic file write)
         writeln!(log, "Writing placeholder image metadata").ok();
@@ -322,6 +296,226 @@ impl<'a> BuildService<'a> {
         writeln!(log, "  mke2fs succeeded").ok();
         Ok(())
     }
+
+    /// Configure init system for guest-agent based on detected init system
+    fn configure_init_system(
+        &self,
+        rootfs_dir: &Path,
+        source_identifier: &str,
+        log: &mut std::fs::File,
+    ) -> Result<(), BuildServiceError> {
+        // Phase 1: Filename heuristics
+        let init_hint = InitSystem::detect_from_source(source_identifier);
+        writeln!(log, "Init system hint from source: {:?}", init_hint).ok();
+
+        // Phase 2: Inspect extracted rootfs
+        let init_system = InitSystem::detect_from_rootfs(rootfs_dir);
+        writeln!(log, "Init system detected from rootfs: {:?}", init_system).ok();
+
+        match init_system {
+            InitSystem::BusyBox => self.configure_busybox_init(rootfs_dir, log),
+            InitSystem::OpenRC => self.configure_openrc_init(rootfs_dir, log),
+            InitSystem::Systemd => self.configure_systemd_init(rootfs_dir, log),
+        }
+    }
+
+    /// Configure BusyBox init via /etc/inittab
+    fn configure_busybox_init(
+        &self,
+        rootfs_dir: &Path,
+        log: &mut std::fs::File,
+    ) -> Result<(), BuildServiceError> {
+        writeln!(log, "Configuring BusyBox init system").ok();
+
+        let inittab_path = rootfs_dir.join("etc/inittab");
+
+        // Read existing inittab if it exists
+        let existing_inittab = if inittab_path.exists() {
+            std::fs::read_to_string(&inittab_path)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Build appropriate inittab content
+        let new_inittab = if existing_inittab.contains("/usr/local/bin/guest-agent") {
+            writeln!(log, "  guest-agent entry already in inittab, skipping").ok();
+            existing_inittab
+        } else if existing_inittab.trim().is_empty() {
+            // Empty or missing inittab - write complete system init + guest-agent
+            writeln!(log, "  writing complete BusyBox inittab (system init + guest-agent)").ok();
+            format!("{}{}", crate::embedded::BUSYBOX_SYSTEM_INIT, crate::embedded::GUEST_AGENT_INITTAB_ENTRY)
+        } else {
+            // Existing inittab present - only append guest-agent entry
+            writeln!(log, "  appending guest-agent entry to existing inittab").ok();
+            format!("{}{}", existing_inittab, crate::embedded::GUEST_AGENT_INITTAB_ENTRY)
+        };
+
+        std::fs::create_dir_all(inittab_path.parent().unwrap())
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to create /etc directory: {e}")
+            ))?;
+
+        std::fs::write(&inittab_path, new_inittab)
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to write /etc/inittab: {e}")
+            ))?;
+
+        writeln!(log, "  BusyBox init configured").ok();
+        Ok(())
+    }
+
+    /// Configure OpenRC init via /etc/init.d/ service script
+    fn configure_openrc_init(
+        &self,
+        rootfs_dir: &Path,
+        log: &mut std::fs::File,
+    ) -> Result<(), BuildServiceError> {
+        writeln!(log, "Configuring OpenRC init system").ok();
+
+        // Write service script to /etc/init.d/nexus-guest-agent
+        let service_path = rootfs_dir.join("etc/init.d/nexus-guest-agent");
+        std::fs::create_dir_all(service_path.parent().unwrap())
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to create /etc/init.d directory: {e}")
+            ))?;
+
+        std::fs::write(&service_path, crate::embedded::GUEST_AGENT_OPENRC_SCRIPT)
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to write OpenRC service script: {e}")
+            ))?;
+
+        // Set executable permissions (0o755 = rwxr-xr-x)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&service_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| BuildServiceError::BuildFailed(
+                    format!("failed to set OpenRC script executable permissions: {e}")
+                ))?;
+        }
+
+        writeln!(log, "  wrote OpenRC service script").ok();
+
+        // Enable service by creating symlink in /etc/runlevels/default/
+        let runlevel_dir = rootfs_dir.join("etc/runlevels/default");
+        std::fs::create_dir_all(&runlevel_dir)
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to create /etc/runlevels/default directory: {e}")
+            ))?;
+
+        let symlink_path = runlevel_dir.join("nexus-guest-agent");
+
+        #[cfg(unix)]
+        {
+            // Remove existing symlink if present
+            let _ = std::fs::remove_file(&symlink_path);
+
+            std::os::unix::fs::symlink("/etc/init.d/nexus-guest-agent", &symlink_path)
+                .map_err(|e| BuildServiceError::BuildFailed(
+                    format!("failed to create OpenRC service symlink: {e}")
+                ))?;
+        }
+
+        writeln!(log, "  enabled OpenRC service in default runlevel").ok();
+        Ok(())
+    }
+
+    /// Configure systemd init (existing logic)
+    fn configure_systemd_init(
+        &self,
+        rootfs_dir: &Path,
+        log: &mut std::fs::File,
+    ) -> Result<(), BuildServiceError> {
+        writeln!(log, "Configuring systemd init system").ok();
+
+        // Write systemd service unit
+        let service_path = rootfs_dir.join("etc/systemd/system/nexus-guest-agent.service");
+        std::fs::create_dir_all(service_path.parent().unwrap())
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to create /etc/systemd/system directory: {e}")
+            ))?;
+
+        std::fs::write(&service_path, crate::embedded::GUEST_AGENT_SYSTEMD_UNIT)
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to write guest-agent systemd unit: {e}")
+            ))?;
+
+        writeln!(log, "  wrote systemd service unit").ok();
+
+        // Enable service by creating symlink
+        let wants_dir = rootfs_dir.join("etc/systemd/system/multi-user.target.wants");
+        std::fs::create_dir_all(&wants_dir)
+            .map_err(|e| BuildServiceError::BuildFailed(
+                format!("failed to create multi-user.target.wants directory: {e}")
+            ))?;
+
+        let symlink_path = wants_dir.join("nexus-guest-agent.service");
+
+        #[cfg(unix)]
+        {
+            // Remove existing symlink if present
+            let _ = std::fs::remove_file(&symlink_path);
+
+            std::os::unix::fs::symlink("/etc/systemd/system/nexus-guest-agent.service", &symlink_path)
+                .map_err(|e| BuildServiceError::BuildFailed(
+                    format!("failed to create systemd service symlink: {e}")
+                ))?;
+        }
+
+        writeln!(log, "  enabled systemd service").ok();
+        Ok(())
+    }
+}
+
+/// Supported init systems for guest VMs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitSystem {
+    BusyBox,
+    OpenRC,
+    Systemd,
+}
+
+impl InitSystem {
+    /// Detect init system from source identifier (Phase 1: filename heuristics)
+    fn detect_from_source(source: &str) -> Self {
+        let source_lower = source.to_lowercase();
+
+        // Alpine minirootfs uses BusyBox init
+        if source_lower.contains("alpine-minirootfs") {
+            return InitSystem::BusyBox;
+        }
+
+        // Full Alpine install uses OpenRC
+        if source_lower.contains("alpine") && !source_lower.contains("minirootfs") {
+            return InitSystem::OpenRC;
+        }
+
+        // Debian and Ubuntu use systemd
+        if source_lower.contains("debian") || source_lower.contains("ubuntu") {
+            return InitSystem::Systemd;
+        }
+
+        // Default to BusyBox (safest minimal option)
+        InitSystem::BusyBox
+    }
+
+    /// Detect init system by inspecting extracted rootfs (Phase 2: filesystem markers)
+    fn detect_from_rootfs(rootfs_dir: &Path) -> Self {
+        // Check for systemd
+        if rootfs_dir.join("lib/systemd/systemd").exists()
+            || rootfs_dir.join("usr/lib/systemd/systemd").exists() {
+            return InitSystem::Systemd;
+        }
+
+        // Check for OpenRC
+        if rootfs_dir.join("sbin/openrc").exists() {
+            return InitSystem::OpenRC;
+        }
+
+        // Default to pure BusyBox
+        InitSystem::BusyBox
+    }
 }
 
 /// Recursively compute the total size of files in a directory.
@@ -337,6 +531,75 @@ fn dir_size(path: &Path) -> std::io::Result<u64> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod init_system_tests {
+    use super::*;
+
+    #[test]
+    fn detect_alpine_minirootfs_from_source() {
+        assert_eq!(
+            InitSystem::detect_from_source("alpine-minirootfs-3.21.3-x86_64.tar.gz"),
+            InitSystem::BusyBox
+        );
+    }
+
+    #[test]
+    fn detect_alpine_full_from_source() {
+        assert_eq!(
+            InitSystem::detect_from_source("alpine-3.21-x86_64.iso"),
+            InitSystem::OpenRC
+        );
+    }
+
+    #[test]
+    fn detect_debian_from_source() {
+        assert_eq!(
+            InitSystem::detect_from_source("debian-12-amd64.tar.gz"),
+            InitSystem::Systemd
+        );
+    }
+
+    #[test]
+    fn detect_ubuntu_from_source() {
+        assert_eq!(
+            InitSystem::detect_from_source("ubuntu-22.04-amd64.tar.gz"),
+            InitSystem::Systemd
+        );
+    }
+
+    #[test]
+    fn default_fallback_to_busybox() {
+        assert_eq!(
+            InitSystem::detect_from_source("custom-rootfs.tar.gz"),
+            InitSystem::BusyBox
+        );
+    }
+
+    #[test]
+    fn detect_systemd_from_rootfs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("lib/systemd")).unwrap();
+        std::fs::write(tmp.path().join("lib/systemd/systemd"), "").unwrap();
+
+        assert_eq!(InitSystem::detect_from_rootfs(tmp.path()), InitSystem::Systemd);
+    }
+
+    #[test]
+    fn detect_openrc_from_rootfs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("sbin")).unwrap();
+        std::fs::write(tmp.path().join("sbin/openrc"), "").unwrap();
+
+        assert_eq!(InitSystem::detect_from_rootfs(tmp.path()), InitSystem::OpenRC);
+    }
+
+    #[test]
+    fn detect_busybox_from_rootfs() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(InitSystem::detect_from_rootfs(tmp.path()), InitSystem::BusyBox);
+    }
 }
 
 #[cfg(test)]

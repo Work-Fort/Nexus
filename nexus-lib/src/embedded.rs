@@ -7,6 +7,38 @@ pub const GUEST_AGENT_BINARY: &[u8] = include_bytes!(
     )
 );
 
+/// BusyBox system initialization for Alpine minirootfs
+/// This provides basic system init when no inittab exists.
+/// Alpine minirootfs does NOT include OpenRC, so this handles
+/// mount /proc, /sys, /dev and basic system services.
+/// Format: <id>:<runlevels>:<action>:<process>
+pub const BUSYBOX_SYSTEM_INIT: &str = r#"::sysinit:/bin/mkdir -p /dev /proc /sys
+::sysinit:/bin/mount -t proc proc /proc
+::sysinit:/bin/mount -t sysfs sys /sys
+::sysinit:/bin/mount -t devtmpfs dev /dev
+ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/umount -a -r
+"#;
+
+/// Guest-agent entry for BusyBox inittab (appended to existing inittab)
+pub const GUEST_AGENT_INITTAB_ENTRY: &str = "::respawn:/usr/local/bin/guest-agent\n";
+
+/// OpenRC service script for guest-agent
+pub const GUEST_AGENT_OPENRC_SCRIPT: &str = r#"#!/sbin/openrc-run
+
+name="nexus-guest-agent"
+description="Nexus Guest Agent"
+command="/usr/local/bin/guest-agent"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+    need net
+    after firewall
+}
+"#;
+
 /// Systemd service unit for guest-agent
 pub const GUEST_AGENT_SYSTEMD_UNIT: &str = r#"[Unit]
 Description=Nexus Guest Agent
