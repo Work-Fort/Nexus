@@ -52,9 +52,12 @@ async fn run_integration_tests() -> Result<()> {
     smoke_test::verify_downloads_present()?;
     println!();
 
-    // Step 7: Create minimal VM
+    // Step 7: Build pipeline — template → build → drive → VM
     let client = reqwest::Client::new();
-    let vm_id = vm_lifecycle::create_vm(&client).await?;
+    let _template_id = vm_lifecycle::create_template(&client).await?;
+    let master_image_id = vm_lifecycle::build_template(&client).await?;
+    let drive_id = vm_lifecycle::create_drive(&client, &master_image_id).await?;
+    let vm_id = vm_lifecycle::create_vm(&client, &drive_id).await?;
     println!();
 
     // Step 8: Start VM and verify (comprehensive checks)

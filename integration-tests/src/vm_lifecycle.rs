@@ -13,6 +13,9 @@ const DAEMON_URL: &str = "http://localhost:9600";
 const ALPINE_VERSION: &str = "3.23.3";
 const GUEST_AGENT_TIMEOUT: Duration = Duration::from_secs(20);
 const VM_BOOT_EXPECTED: Duration = Duration::from_millis(150);
+const TEMPLATE_NAME: &str = "integration-test-template";
+const VM_NAME: &str = "integration-test-vm";
+const DRIVE_NAME: &str = "integration-test-drive";
 
 #[derive(Debug, Deserialize)]
 struct VmResponse {
@@ -43,36 +46,142 @@ struct ImageMetadata {
     built_at: i64,
 }
 
-/// Create minimal Alpine VM
-pub async fn create_vm(client: &Client) -> Result<String> {
-    println!("🔧 Creating minimal Alpine VM...");
+/// Create template from downloaded rootfs
+pub async fn create_template(client: &Client) -> Result<String> {
+    println!("📋 Creating template from Alpine rootfs...");
+
+    let source = format!("alpine-minirootfs-{}-x86_64.tar.gz", ALPINE_VERSION);
+    let response = client
+        .post(format!("{}/v1/templates", DAEMON_URL))
+        .json(&json!({
+            "name": TEMPLATE_NAME,
+            "source_identifier": source,
+            "source_type": "rootfs"
+        }))
+        .send()
+        .await
+        .context("Failed to create template")?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Template creation failed: {}", body);
+    }
+
+    let tmpl: serde_json::Value = response.json().await?;
+    let id = tmpl["id"].as_str().context("missing template id")?;
+    println!("  ✓ Template created: {}", id);
+    Ok(id.to_string())
+}
+
+/// Trigger build and wait for completion
+pub async fn build_template(client: &Client) -> Result<String> {
+    println!("🔨 Building template...");
+
+    let response = client
+        .post(format!("{}/v1/templates/{}/build", DAEMON_URL, TEMPLATE_NAME))
+        .send()
+        .await
+        .context("Failed to trigger build")?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Build trigger failed: {}", body);
+    }
+
+    let build: serde_json::Value = response.json().await?;
+    let build_id = build["id"].as_str().context("missing build id")?.to_string();
+    println!("  → Build triggered: {}", build_id);
+
+    // Poll for completion
+    let start = std::time::Instant::now();
+    loop {
+        let response = client
+            .get(format!("{}/v1/builds/{}", DAEMON_URL, build_id))
+            .send()
+            .await?;
+
+        let build: serde_json::Value = response.json().await?;
+        let status = build["status"].as_str().unwrap_or("unknown");
+
+        match status {
+            "success" => {
+                let master_image = build["master_image_id"].as_str()
+                    .context("missing master_image_id")?;
+                println!("  ✓ Build complete, master image: {}", master_image);
+                return Ok(master_image.to_string());
+            }
+            "failed" => bail!("Build failed"),
+            _ => {
+                if start.elapsed() > Duration::from_secs(30) {
+                    bail!("Build timed out after 30s (status: {})", status);
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
+/// Create drive from master image
+pub async fn create_drive(client: &Client, master_image_id: &str) -> Result<String> {
+    println!("💾 Creating drive from master image...");
+
+    let response = client
+        .post(format!("{}/v1/drives", DAEMON_URL))
+        .json(&json!({
+            "base": master_image_id,
+            "name": DRIVE_NAME
+        }))
+        .send()
+        .await
+        .context("Failed to create drive")?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Drive creation failed: {}", body);
+    }
+
+    let drive: serde_json::Value = response.json().await?;
+    let id = drive["id"].as_str().context("missing drive id")?;
+    println!("  ✓ Drive created: {}", id);
+    Ok(id.to_string())
+}
+
+/// Create VM and attach root drive
+pub async fn create_vm(client: &Client, drive_id: &str) -> Result<String> {
+    println!("🔧 Creating VM and attaching root drive...");
 
     let response = client
         .post(format!("{}/v1/vms", DAEMON_URL))
-        .json(&json!({
-            "name": "integration-test-vm",
-            "kernel": {
-                "provider": "github",
-                "version": "5.10.223"
-            },
-            "rootfs": {
-                "provider": "alpine",
-                "version": ALPINE_VERSION,
-                "arch": "x86_64"
-            },
-            "memory_mib": 128,
-            "vcpus": 1
-        }))
+        .json(&json!({ "name": VM_NAME }))
         .send()
         .await
         .context("Failed to create VM")?;
 
     if !response.status().is_success() {
-        bail!("VM creation failed: {}", response.status());
+        let body = response.text().await.unwrap_or_default();
+        bail!("VM creation failed: {}", body);
     }
 
     let vm: VmResponse = response.json().await?;
     println!("  ✓ VM created: {}", vm.id);
+
+    // Attach drive as root device
+    let response = client
+        .post(format!("{}/v1/drives/{}/attach", DAEMON_URL, drive_id))
+        .json(&json!({
+            "vm_id": vm.id,
+            "is_root_device": true
+        }))
+        .send()
+        .await
+        .context("Failed to attach drive")?;
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("Drive attach failed: {}", body);
+    }
+
+    println!("  ✓ Root drive attached");
     Ok(vm.id)
 }
 
@@ -180,7 +289,7 @@ async fn verify_vsock_connection(_vm_id: &str, workspace_path: &std::path::Path)
 
     let vsock_path = workspace_path.join("firecracker.vsock");
 
-    let stream = tokio::time::timeout(
+    let mut stream = tokio::time::timeout(
         GUEST_AGENT_TIMEOUT,
         UnixStream::connect(&vsock_path)
     )
@@ -188,13 +297,25 @@ async fn verify_vsock_connection(_vm_id: &str, workspace_path: &std::path::Path)
     .context("timeout connecting to vsock UDS")?
     .context("failed to connect to vsock UDS")?;
 
-    // Send CONNECT command to vsock CID 100 (guest agent)
-    let mut stream = stream;
+    // Send CONNECT command to vsock port 100 (guest agent control)
     stream.write_all(b"CONNECT 100\n").await
         .context("Failed to send CONNECT command")?;
     stream.flush().await?;
 
-    // Read handshake using BufReader (newline-delimited JSON, NOT EOF-delimited)
+    // Consume "OK <port>\n" response byte-by-byte (no BufReader pre-buffering)
+    use tokio::io::AsyncReadExt;
+    let mut ok_bytes = Vec::with_capacity(32);
+    loop {
+        let b = stream.read_u8().await.context("failed to read CONNECT response")?;
+        if b == b'\n' { break; }
+        ok_bytes.push(b);
+    }
+    let ok_line = String::from_utf8_lossy(&ok_bytes);
+    if !ok_line.starts_with("OK ") {
+        bail!("unexpected CONNECT response: {:?}", ok_line);
+    }
+
+    // Read handshake (newline-delimited JSON)
     let mut reader = BufReader::new(&mut stream);
     let mut line = String::new();
 
@@ -206,7 +327,6 @@ async fn verify_vsock_connection(_vm_id: &str, workspace_path: &std::path::Path)
     .context("timeout reading handshake")?
     .context("failed to read handshake line")?;
 
-    // Parse handshake message
     let msg: GuestMessage = serde_json::from_str(&line)
         .context("failed to parse handshake JSON")?;
 
@@ -287,12 +407,13 @@ pub async fn restart_vm(client: &Client, vm_id: &str, old_pid: u32) -> Result<u3
 // Helper functions
 
 fn get_vm_workspace_path(vm_id: &str) -> Result<PathBuf> {
-    let drives_dir = dirs::data_dir()
-        .context("Cannot determine XDG_DATA_HOME")?
+    let runtime_dir = dirs::runtime_dir()
+        .context("Cannot determine XDG_RUNTIME_DIR")?
         .join("nexus")
-        .join("drives");
+        .join("vms")
+        .join(vm_id);
 
-    Ok(drives_dir.join(vm_id))
+    Ok(runtime_dir)
 }
 
 fn verify_socket_ownership(pid: u32, socket_path: &std::path::Path) -> Result<()> {
