@@ -5,8 +5,8 @@ use crate::asset::{
 };
 use crate::drive::{Drive, ImportImageParams, MasterImage};
 use crate::id::Id;
-use crate::store::schema::{seed_default_providers, SCHEMA_SQL, SCHEMA_VERSION};
-use crate::store::traits::{AssetStore, Bridge, BuildStore, DbStatus, DriveStore, ImageStore, NetworkStore, StateStore, StoreError, VmNetwork, VmStore};
+use crate::store::schema::{seed_default_providers, seed_default_settings, SCHEMA_SQL, SCHEMA_VERSION};
+use crate::store::traits::{AssetStore, Bridge, BuildStore, DbStatus, DriveStore, ImageStore, NetworkStore, SettingsStore, StateStore, StoreError, VmNetwork, VmStore};
 use crate::template::{Build, BuildStatus, CreateTemplateParams, Template};
 use crate::vm::{CreateVmParams, Vm, VmState};
 use rusqlite::Connection;
@@ -907,6 +907,10 @@ impl StateStore for SqliteStore {
         seed_default_providers(&conn)
             .map_err(|e| StoreError::Init(format!("cannot seed default providers: {e}")))?;
 
+        // Seed default settings
+        seed_default_settings(&conn)
+            .map_err(|e| StoreError::Init(format!("cannot seed default settings: {e}")))?;
+
         Ok(())
     }
 
@@ -930,17 +934,7 @@ impl StateStore for SqliteStore {
         Ok(())
     }
 
-    fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
-        let conn = self.conn.lock().unwrap();
-        let value: Option<String> = conn.query_row(
-            "SELECT value FROM settings WHERE key = ?",
-            rusqlite::params![key],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| StoreError::Query(format!("cannot get setting: {e}")))?;
-        Ok(value)
-    }
+    // NOTE: get_setting() removed from StateStore - now provided by SettingsStore trait
 }
 
 impl AssetStore for SqliteStore {
@@ -1569,6 +1563,286 @@ impl NetworkStore for SqliteStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| StoreError::Query(e.to_string()))?;
         Ok(ips)
+    }
+}
+
+impl SettingsStore for SqliteStore {
+    fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let result: Result<String, _> = conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1 AND is_current = 1",
+            [key],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StoreError::Query(format!("cannot get setting {}: {}", key, e))),
+        }
+    }
+
+    fn set_setting(&self, key: &str, value: &str, value_type: &str) -> Result<(), StoreError> {
+        // Validate value_type
+        if !matches!(value_type, "string" | "int" | "bool" | "json") {
+            return Err(StoreError::InvalidInput(format!(
+                "invalid value_type: {}",
+                value_type
+            )));
+        }
+
+        // Validate value against schema
+        self.validate_setting(key, value)?;
+
+        let conn = self.conn.lock().unwrap();
+
+        // Mark all existing versions as not current
+        conn.execute(
+            "UPDATE settings SET is_current = 0 WHERE key = ?1",
+            [key],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot update is_current: {}", e)))?;
+
+        // Insert new version
+        conn.execute(
+            "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![key, value, value_type, 1],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot insert setting: {}", e)))?;
+
+        Ok(())
+    }
+
+    fn rollback_setting(&self, key: &str, version: i64) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        // For JSON settings, find the row with matching version
+        // For non-JSON settings, find the most recent non-current row
+        let target_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM settings WHERE key = ?1 AND (
+                    (type = 'json' AND version = ?2) OR
+                    (type != 'json' AND is_current = 0)
+                ) ORDER BY created_at DESC LIMIT 1",
+                rusqlite::params![key, version],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StoreError::Query(format!("cannot find version to rollback: {}", e)))?;
+
+        let target_id = target_id.ok_or_else(|| {
+            StoreError::InvalidInput(format!(
+                "no version {} found for setting {}",
+                version, key
+            ))
+        })?;
+
+        // Mark all versions as not current
+        conn.execute(
+            "UPDATE settings SET is_current = 0 WHERE key = ?1",
+            [key],
+        )
+        .map_err(|e| StoreError::Query(format!("cannot update is_current: {}", e)))?;
+
+        // Mark target version as current
+        conn.execute("UPDATE settings SET is_current = 1 WHERE id = ?1", [target_id])
+            .map_err(|e| StoreError::Query(format!("cannot set is_current: {}", e)))?;
+
+        Ok(())
+    }
+
+    fn list_settings(&self) -> Result<Vec<(String, String, String)>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT key, value, type FROM settings WHERE is_current = 1 ORDER BY key")
+            .map_err(|e| StoreError::Query(format!("cannot prepare list settings: {}", e)))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| StoreError::Query(format!("cannot query settings: {}", e)))?;
+
+        let mut settings = Vec::new();
+        for row in rows {
+            settings.push(
+                row.map_err(|e| StoreError::Query(format!("cannot read setting row: {}", e)))?,
+            );
+        }
+
+        Ok(settings)
+    }
+
+    fn validate_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        // Validate based on setting key (see config-schemas.md)
+        match key {
+            // Runtime behavior settings
+            "agent_ready_timeout" => {
+                let timeout: i64 = value.parse()
+                    .map_err(|_| StoreError::InvalidInput(format!("agent_ready_timeout must be an integer, got: {}", value)))?;
+                if timeout < 1 || timeout > 300 {
+                    return Err(StoreError::InvalidInput(
+                        "agent_ready_timeout must be between 1 and 300 seconds".to_string()
+                    ));
+                }
+            }
+            "unreachable_vm_action" => {
+                if !matches!(value, "keep" | "kill") {
+                    return Err(StoreError::InvalidInput(
+                        "unreachable_vm_action must be 'keep' or 'kill'".to_string()
+                    ));
+                }
+            }
+
+            // Network configuration
+            "bridge_name" => {
+                if value.is_empty() {
+                    return Err(StoreError::InvalidInput("bridge_name cannot be empty".to_string()));
+                }
+                // Pattern: ^[a-z0-9]+$
+                if !value.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
+                    return Err(StoreError::InvalidInput(
+                        "bridge_name must match pattern ^[a-z0-9]+$ (lowercase alphanumeric only)".to_string()
+                    ));
+                }
+                if value.len() > 15 {
+                    return Err(StoreError::InvalidInput(
+                        "bridge_name must be at most 15 characters".to_string()
+                    ));
+                }
+            }
+            "vm_subnet" => {
+                if value.is_empty() {
+                    return Err(StoreError::InvalidInput("vm_subnet cannot be empty".to_string()));
+                }
+                // Basic CIDR validation: must match pattern ^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$
+                let parts: Vec<&str> = value.split('/').collect();
+                if parts.len() != 2 {
+                    return Err(StoreError::InvalidInput(
+                        "vm_subnet must be in CIDR notation (e.g., 172.16.0.0/12)".to_string()
+                    ));
+                }
+                // Validate IP part
+                let ip_parts: Vec<&str> = parts[0].split('.').collect();
+                if ip_parts.len() != 4 {
+                    return Err(StoreError::InvalidInput("vm_subnet IP must have 4 octets".to_string()));
+                }
+                for octet in ip_parts {
+                    let _: u8 = octet.parse().map_err(|_| {
+                        StoreError::InvalidInput(format!("vm_subnet IP octet must be 0-255, got: {}", octet))
+                    })?;
+                }
+                // Validate prefix
+                let prefix: u8 = parts[1].parse().map_err(|_| {
+                    StoreError::InvalidInput("vm_subnet prefix must be an integer".to_string())
+                })?;
+                if prefix > 32 {
+                    return Err(StoreError::InvalidInput("vm_subnet prefix must be 0-32".to_string()));
+                }
+            }
+            "dns_servers" => {
+                if value.is_empty() {
+                    return Err(StoreError::InvalidInput("dns_servers cannot be empty".to_string()));
+                }
+
+                // Validate against oneOf schema (see config-schemas.md):
+                // Option 1: Special string "from-host" (enum: ["from-host"])
+                if value == "from-host" {
+                    return Ok(());
+                }
+
+                // Option 2: JSON object with version + servers array
+                let json: serde_json::Value = serde_json::from_str(value)
+                    .map_err(|e| StoreError::InvalidInput(format!("dns_servers must be valid JSON or 'from-host': {}", e)))?;
+
+                // Check required fields (type: object, required: ["version", "servers"])
+                if !json.is_object() {
+                    return Err(StoreError::InvalidInput("dns_servers must be a JSON object or 'from-host'".to_string()));
+                }
+
+                // Validate version field (const: 1)
+                let version = json.get("version")
+                    .ok_or_else(|| StoreError::InvalidInput("dns_servers missing 'version' field".to_string()))?;
+                if version.as_i64() != Some(1) {
+                    return Err(StoreError::InvalidInput("dns_servers version must be 1".to_string()));
+                }
+
+                // Validate servers array
+                let servers = json.get("servers")
+                    .ok_or_else(|| StoreError::InvalidInput("dns_servers missing 'servers' array".to_string()))?;
+
+                if !servers.is_array() {
+                    return Err(StoreError::InvalidInput("dns_servers 'servers' must be an array".to_string()));
+                }
+
+                let servers_array = servers.as_array().unwrap();
+                if servers_array.is_empty() {
+                    return Err(StoreError::InvalidInput("dns_servers must have at least 1 server".to_string()));
+                }
+                if servers_array.len() > 5 {
+                    return Err(StoreError::InvalidInput("dns_servers maximum 5 servers allowed".to_string()));
+                }
+
+                // Validate each server is a valid IPv4 address
+                for (i, server) in servers_array.iter().enumerate() {
+                    let server_str = server.as_str().ok_or_else(|| {
+                        StoreError::InvalidInput(format!("dns_servers[{}] must be a string", i))
+                    })?;
+
+                    // Validate IPv4 format: 4 octets, each 0-255, dot-separated
+                    let octets: Vec<&str> = server_str.split('.').collect();
+                    if octets.len() != 4 {
+                        return Err(StoreError::InvalidInput(
+                            format!("dns_servers[{}] must be a valid IPv4 address (4 octets)", i)
+                        ));
+                    }
+
+                    for (octet_idx, octet) in octets.iter().enumerate() {
+                        let octet_val: u8 = octet.parse().map_err(|_| {
+                            StoreError::InvalidInput(
+                                format!("dns_servers[{}] octet {} must be 0-255, got: {}", i, octet_idx, octet)
+                            )
+                        })?;
+                        // u8 range check is automatic (0-255)
+                        let _ = octet_val;
+                    }
+                }
+            }
+
+            // Asset defaults
+            "default_firecracker_version" | "default_kernel_version" => {
+                if value.is_empty() {
+                    return Err(StoreError::InvalidInput(format!("{} cannot be empty", key)));
+                }
+                // Pattern: ^\d+\.\d+\.\d+$ (semantic version)
+                let parts: Vec<&str> = value.split('.').collect();
+                if parts.len() != 3 {
+                    return Err(StoreError::InvalidInput(
+                        format!("{} must match pattern ^\\d+\\.\\d+\\.\\d+$ (e.g., 1.14.1)", key)
+                    ));
+                }
+                for part in parts {
+                    if part.parse::<u32>().is_err() {
+                        return Err(StoreError::InvalidInput(
+                            format!("{} version components must be integers", key)
+                        ));
+                    }
+                }
+            }
+
+            // Unknown setting key - allow but warn
+            _ => {
+                // For unknown keys, just check it's not empty
+                if value.is_empty() {
+                    return Err(StoreError::InvalidInput(format!("{} cannot be empty", key)));
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -2960,5 +3234,252 @@ mod tests {
         assert_eq!(allocated.len(), 2);
         assert!(allocated.contains(&"172.16.0.2".to_string()));
         assert!(allocated.contains(&"172.16.0.3".to_string()));
+    }
+
+    // SettingsStore tests
+
+    #[test]
+    fn get_setting_returns_current_value() {
+        let store = test_store();
+
+        let bridge_name = store.get_setting("bridge_name").unwrap().unwrap();
+        assert_eq!(bridge_name, "nexbr0");
+    }
+
+    #[test]
+    fn get_setting_returns_none_for_missing_key() {
+        let store = test_store();
+
+        let result = store.get_setting("nonexistent_key").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn set_setting_creates_new_version() {
+        let store = test_store();
+
+        // Set a new value
+        store
+            .set_setting("bridge_name", "testbr0", "string")
+            .unwrap();
+
+        // Verify new value is current
+        let value = store.get_setting("bridge_name").unwrap().unwrap();
+        assert_eq!(value, "testbr0");
+
+        // Verify old version still exists (2 total rows for bridge_name)
+        let conn = store.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM settings WHERE key = ?1",
+                ["bridge_name"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn set_setting_json_extracts_version() {
+        let store = test_store();
+
+        // Verify the default dns_servers setting has version extracted correctly from JSON
+        let conn = store.conn.lock().unwrap();
+        let version: Option<i64> = conn
+            .query_row(
+                "SELECT version FROM settings WHERE key = ?1 AND is_current = 1",
+                ["dns_servers"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, Some(1));
+    }
+
+    #[test]
+    fn rollback_setting_restores_previous_version() {
+        let store = test_store();
+
+        // Change setting
+        store.set_setting("bridge_name", "newbr0", "string").unwrap();
+        assert_eq!(
+            store.get_setting("bridge_name").unwrap().unwrap(),
+            "newbr0"
+        );
+
+        // Rollback
+        store.rollback_setting("bridge_name", 1).unwrap();
+
+        // Verify original value restored
+        let value = store.get_setting("bridge_name").unwrap().unwrap();
+        assert_eq!(value, "nexbr0");
+    }
+
+    #[test]
+    fn validate_setting_accepts_valid_bridge_name() {
+        let store = test_store();
+
+        let result = store.validate_setting("bridge_name", "nexbr0");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_setting_rejects_empty_string() {
+        let store = test_store();
+
+        let result = store.validate_setting("bridge_name", "");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn validate_setting_rejects_invalid_json() {
+        let store = test_store();
+
+        let result = store.validate_setting("dns_servers", "{invalid json");
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("JSON") || error_msg.contains("json"), "Expected JSON error, got: {}", error_msg);
+    }
+
+    #[test]
+    fn validate_setting_rejects_json_without_version() {
+        let store = test_store();
+
+        let result = store.validate_setting("dns_servers", r#"{"servers": ["8.8.8.8"]}"#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing 'version' field"));
+    }
+
+    #[test]
+    fn validate_setting_rejects_json_without_servers() {
+        let store = test_store();
+
+        let result = store.validate_setting("dns_servers", r#"{"version": 1}"#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing 'servers' array"));
+    }
+
+    #[test]
+    fn validate_setting_rejects_empty_dns_servers() {
+        let store = test_store();
+
+        let result = store.validate_setting("dns_servers", r#"{"version": 1, "servers": []}"#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must have at least 1 server"));
+    }
+
+    #[test]
+    fn validate_setting_rejects_too_many_dns_servers() {
+        let store = test_store();
+
+        let result = store.validate_setting(
+            "dns_servers",
+            r#"{"version": 1, "servers": ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9", "208.67.222.222"]}"#
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("maximum 5 servers"));
+    }
+
+    #[test]
+    fn validate_setting_rejects_invalid_dns_servers_version() {
+        let store = test_store();
+
+        // Version must be const: 1
+        let result = store.validate_setting("dns_servers", r#"{"version": 2, "servers": ["8.8.8.8"]}"#);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("version must be 1"));
+    }
+
+    #[test]
+    fn validate_setting_rejects_invalid_version_pattern() {
+        let store = test_store();
+
+        let result = store.validate_setting("default_firecracker_version", "1.14");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must match pattern"));
+    }
+
+    #[test]
+    fn validate_setting_rejects_invalid_bridge_name_pattern() {
+        let store = test_store();
+
+        let result = store.validate_setting("bridge_name", "NEX-BR0");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must match pattern"));
+    }
+
+    #[test]
+    fn validate_setting_accepts_valid_integer() {
+        let store = test_store();
+
+        let result = store.validate_setting("agent_ready_timeout", "30");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_setting_rejects_out_of_range_integer() {
+        let store = test_store();
+
+        let result = store.validate_setting("agent_ready_timeout", "500");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must be between 1 and 300"));
+    }
+
+    #[test]
+    fn validate_setting_rejects_invalid_ipv4_in_dns_servers() {
+        let store = test_store();
+
+        // Test invalid IP format
+        let result = store.validate_setting(
+            "dns_servers",
+            r#"{"version": 1, "servers": ["not-an-ip"]}"#
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must be a valid IPv4 address"));
+
+        // Test out-of-range octet
+        let result = store.validate_setting(
+            "dns_servers",
+            r#"{"version": 1, "servers": ["999.999.999.999"]}"#
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must be 0-255"));
+
+        // Test too few octets
+        let result = store.validate_setting(
+            "dns_servers",
+            r#"{"version": 1, "servers": ["8.8.8"]}"#
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("4 octets"));
+    }
+
+    #[test]
+    fn validate_setting_accepts_valid_ipv4_in_dns_servers() {
+        let store = test_store();
+
+        let result = store.validate_setting(
+            "dns_servers",
+            r#"{"version": 1, "servers": ["8.8.8.8", "1.1.1.1"]}"#
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_setting_accepts_from_host_for_dns_servers() {
+        let store = test_store();
+
+        let result = store.validate_setting("dns_servers", "from-host");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_setting_rejects_invalid_dns_servers_format() {
+        let store = test_store();
+
+        // Not JSON and not "from-host"
+        let result = store.validate_setting("dns_servers", "invalid-string");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must be valid JSON or 'from-host'"));
     }
 }

@@ -308,12 +308,38 @@ pub trait NetworkStore {
     fn list_allocated_ips(&self, bridge_name: &str) -> Result<Vec<String>, StoreError>;
 }
 
+/// Settings store for runtime preferences (versioned key-value store).
+pub trait SettingsStore {
+    /// Get the current value for a setting key.
+    /// Returns None if the key does not exist.
+    fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError>;
+
+    /// Set a setting value, creating a new version.
+    /// Marks the new version as current and marks all other versions as not current.
+    /// `value_type` must be one of: 'string', 'int', 'bool', 'json'.
+    fn set_setting(&self, key: &str, value: &str, value_type: &str) -> Result<(), StoreError>;
+
+    /// Rollback a setting to a specific version.
+    /// Marks the target version as current and marks all other versions as not current.
+    /// For non-JSON settings, version parameter is ignored (latest historical value used).
+    /// For JSON settings, version must match the `version` field in the JSON value.
+    fn rollback_setting(&self, key: &str, version: i64) -> Result<(), StoreError>;
+
+    /// List all settings with their current values.
+    fn list_settings(&self) -> Result<Vec<(String, String, String)>, StoreError>;
+
+    /// Validate a setting value against its schema.
+    /// Returns Ok(()) if valid, Err with detailed message if invalid.
+    /// See config-schemas.md for validation rules per setting.
+    fn validate_setting(&self, key: &str, value: &str) -> Result<(), StoreError>;
+}
+
 /// Convenience super-trait for code that needs the full store.
 ///
 /// All state persistence goes through this trait. The pre-alpha
 /// implementation is SQLite; this trait exists so the backend can
 /// be swapped to Postgres or etcd for clustering later.
-pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStore + NetworkStore {
+pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStore + NetworkStore + SettingsStore {
     /// Initialize the store (create schema if needed, run migrations).
     fn init(&self) -> Result<(), StoreError>;
 
@@ -323,8 +349,7 @@ pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStor
     /// Close the store and release resources.
     fn close(&self) -> Result<(), StoreError>;
 
-    /// Get setting value from settings table
-    fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError>;
+    // NOTE: get_setting() removed from StateStore - now provided by SettingsStore trait
 }
 
 #[cfg(test)]
