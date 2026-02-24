@@ -2,14 +2,17 @@
 /// Schema version — increment when the schema changes.
 /// Pre-alpha migration strategy: if the stored version doesn't match,
 /// delete the DB and recreate.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// Database schema. Executed as a single batch on first start.
 /// Domain tables are added by later steps — each step bumps SCHEMA_VERSION
 /// and appends its tables here. Pre-alpha migration (delete + recreate)
 /// means all tables are always created from this single constant.
 pub const SCHEMA_SQL: &str = r#"
--- Nexus Database Schema v10 (Pre-Alpha)
+-- Nexus Database Schema v11 (Pre-Alpha)
+--
+-- Schema v11 changes:
+-- - Removed idx_settings_key_version UNIQUE constraint (JSON schema version is informational only)
 --
 -- Schema v10 changes:
 -- - Added versioned settings table with rollback support
@@ -40,9 +43,6 @@ CREATE TABLE settings (
         CASE WHEN type = 'json' THEN json_extract(value, '$.version') ELSE NULL END
     ) VIRTUAL
 );
-
--- No duplicate (key, version) pairs
-CREATE UNIQUE INDEX idx_settings_key_version ON settings(key, version) WHERE version IS NOT NULL;
 
 -- Only one current version per key
 CREATE UNIQUE INDEX idx_settings_current ON settings(key) WHERE is_current = 1;
