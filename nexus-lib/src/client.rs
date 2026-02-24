@@ -7,6 +7,8 @@ pub enum ClientError {
     Connect(String),
     /// Connected but got an unexpected response
     Api(String),
+    /// Resource not found (404)
+    NotFound(String),
 }
 
 impl std::fmt::Display for ClientError {
@@ -14,6 +16,7 @@ impl std::fmt::Display for ClientError {
         match self {
             ClientError::Connect(e) => write!(f, "connection error: {e}"),
             ClientError::Api(e) => write!(f, "API error: {e}"),
+            ClientError::NotFound(e) => write!(f, "not found: {e}"),
         }
     }
 }
@@ -23,6 +26,10 @@ impl std::error::Error for ClientError {}
 impl ClientError {
     pub fn is_connect(&self) -> bool {
         matches!(self, ClientError::Connect(_))
+    }
+
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, ClientError::NotFound(_))
     }
 }
 
@@ -741,6 +748,81 @@ impl NexusClient {
         }
 
         resp.json().await.map(Some).map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    // Settings management
+    pub async fn get_setting(&self, key: &str) -> Result<String, ClientError> {
+        let url = format!("{}/v1/settings/{}", self.base_url, key);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                ClientError::Connect(e.to_string())
+            } else {
+                ClientError::Api(e.to_string())
+            }
+        })?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(ClientError::NotFound(format!("setting '{}' not found", key)));
+        }
+
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct SettingResponse {
+            value: String,
+        }
+
+        let setting: SettingResponse = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+        Ok(setting.value)
+    }
+
+    pub async fn set_setting(&self, key: &str, value: &str) -> Result<(), ClientError> {
+        let url = format!("{}/v1/settings/{}", self.base_url, key);
+        let resp = self.http.put(&url)
+            .json(&serde_json::json!({"value": value}))
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() || e.is_timeout() {
+                    ClientError::Connect(e.to_string())
+                } else {
+                    ClientError::Api(e.to_string())
+                }
+            })?;
+
+        if !resp.status().is_success() {
+            let error_text = resp.text().await.unwrap_or_else(|_| "unknown error".to_string());
+            return Err(ClientError::Api(error_text));
+        }
+
+        Ok(())
+    }
+
+    pub async fn list_settings(&self) -> Result<Vec<(String, String, String)>, ClientError> {
+        let url = format!("{}/v1/settings", self.base_url);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                ClientError::Connect(e.to_string())
+            } else {
+                ClientError::Api(e.to_string())
+            }
+        })?;
+
+        if !resp.status().is_success() {
+            return Err(ClientError::Api(format!("unexpected status: {}", resp.status())));
+        }
+
+        #[derive(serde::Deserialize)]
+        struct SettingResponse {
+            key: String,
+            value: String,
+            value_type: String,
+        }
+
+        let settings: Vec<SettingResponse> = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+        Ok(settings.into_iter().map(|s| (s.key, s.value, s.value_type)).collect())
     }
 }
 

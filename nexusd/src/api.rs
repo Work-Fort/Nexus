@@ -1271,6 +1271,117 @@ async fn cleanup_network_handler(
     }
 }
 
+// Settings handlers
+async fn list_settings_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<SettingResponse>>, (StatusCode, Json<serde_json::Value>)> {
+    match state.store.list_settings() {
+        Ok(settings) => {
+            let response: Vec<SettingResponse> = settings
+                .into_iter()
+                .map(|(key, value, value_type)| SettingResponse {
+                    key,
+                    value,
+                    value_type,
+                })
+                .collect();
+            Ok(Json(response))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )),
+    }
+}
+
+async fn get_setting_handler(
+    Path(key): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SettingResponse>, (StatusCode, Json<serde_json::Value>)> {
+    match state.store.get_setting(&key) {
+        Ok(Some(value)) => {
+            // Get type from database
+            let value_type = match state.store.list_settings() {
+                Ok(settings) => settings
+                    .iter()
+                    .find(|(k, _, _)| k == &key)
+                    .map(|(_, _, t)| t.clone())
+                    .unwrap_or_else(|| "string".to_string()),
+                Err(_) => "string".to_string(),
+            };
+
+            Ok(Json(SettingResponse {
+                key,
+                value,
+                value_type,
+            }))
+        }
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("setting '{}' not found", key)})),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )),
+    }
+}
+
+async fn update_setting_handler(
+    Path(key): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<UpdateSettingRequest>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    // Infer type from current setting (or default to "string" for new settings)
+    let value_type = state
+        .store
+        .get_setting(&key)
+        .ok()
+        .flatten()
+        .and_then(|_| {
+            state
+                .store
+                .list_settings()
+                .ok()
+                .and_then(|settings| {
+                    settings
+                        .iter()
+                        .find(|(k, _, _)| k == &key)
+                        .map(|(_, _, t)| t.clone())
+                })
+        })
+        .unwrap_or_else(|| "string".to_string());
+
+    // Validate before updating
+    if let Err(e) = state.store.validate_setting(&key, &payload.value) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("validation failed: {}", e)})),
+        ));
+    }
+
+    // Update setting
+    match state.store.set_setting(&key, &payload.value, &value_type) {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )),
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct SettingResponse {
+    key: String,
+    value: String,
+    value_type: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct UpdateSettingRequest {
+    value: String,
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
@@ -1303,6 +1414,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/templates/{name_or_id}/build", post(trigger_build))
         .route("/v1/builds", get(list_builds_handler))
         .route("/v1/builds/{id}", get(get_build_handler))
+        .route("/v1/settings", get(list_settings_handler))
+        .route("/v1/settings/{key}", get(get_setting_handler).put(update_setting_handler))
         .route("/mcp", post(crate::mcp_handler::handle_mcp_request))
         .with_state(state)
 }
@@ -1435,6 +1548,14 @@ mod tests {
         fn list_allocated_ips(&self, _bridge_name: &str) -> Result<Vec<String>, StoreError> { unimplemented!() }
     }
 
+    impl nexus_lib::store::traits::SettingsStore for MockStore {
+        fn get_setting(&self, _key: &str) -> Result<Option<String>, StoreError> { Ok(None) }
+        fn set_setting(&self, _key: &str, _value: &str, _value_type: &str) -> Result<(), StoreError> { unimplemented!() }
+        fn rollback_setting(&self, _key: &str, _version: i64) -> Result<(), StoreError> { unimplemented!() }
+        fn list_settings(&self) -> Result<Vec<(String, String, String)>, StoreError> { Ok(vec![]) }
+        fn validate_setting(&self, _key: &str, _value: &str) -> Result<(), StoreError> { unimplemented!() }
+    }
+
     impl StateStore for MockStore {
         fn init(&self) -> Result<(), StoreError> { Ok(()) }
         fn status(&self) -> Result<DbStatus, StoreError> {
@@ -1445,7 +1566,6 @@ mod tests {
             })
         }
         fn close(&self) -> Result<(), StoreError> { Ok(()) }
-        fn get_setting(&self, _: &str) -> Result<Option<String>, StoreError> { Ok(None) }
     }
 
     struct FailingStore;
@@ -1559,13 +1679,20 @@ mod tests {
         fn list_allocated_ips(&self, _bridge_name: &str) -> Result<Vec<String>, StoreError> { unimplemented!() }
     }
 
+    impl nexus_lib::store::traits::SettingsStore for FailingStore {
+        fn get_setting(&self, _key: &str) -> Result<Option<String>, StoreError> { Ok(None) }
+        fn set_setting(&self, _key: &str, _value: &str, _value_type: &str) -> Result<(), StoreError> { unimplemented!() }
+        fn rollback_setting(&self, _key: &str, _version: i64) -> Result<(), StoreError> { unimplemented!() }
+        fn list_settings(&self) -> Result<Vec<(String, String, String)>, StoreError> { Ok(vec![]) }
+        fn validate_setting(&self, _key: &str, _value: &str) -> Result<(), StoreError> { unimplemented!() }
+    }
+
     impl StateStore for FailingStore {
         fn init(&self) -> Result<(), StoreError> { Ok(()) }
         fn status(&self) -> Result<DbStatus, StoreError> {
             Err(StoreError::Query("disk I/O error".to_string()))
         }
         fn close(&self) -> Result<(), StoreError> { Ok(()) }
-        fn get_setting(&self, _: &str) -> Result<Option<String>, StoreError> { Ok(None) }
     }
 
     fn mock_state_with_store(store: impl StateStore + Send + Sync + 'static) -> Arc<AppState> {
@@ -1581,7 +1708,6 @@ mod tests {
             drives_root: std::path::PathBuf::from("/tmp/mock-ws"),
             assets_dir: std::path::PathBuf::from("/tmp/mock-assets"),
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
-            firecracker: nexus_lib::config::FirecrackerConfig::default(),
             vsock_manager,
             network_service,
             processes: tokio::sync::Mutex::new(HashMap::new()),
@@ -1674,7 +1800,6 @@ mod tests {
             drives_root,
             assets_dir,
             executor: nexus_lib::pipeline::PipelineExecutor::new(),
-            firecracker: nexus_lib::config::FirecrackerConfig::default(),
             vsock_manager,
             network_service,
             processes: tokio::sync::Mutex::new(HashMap::new()),

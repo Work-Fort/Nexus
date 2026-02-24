@@ -4,6 +4,7 @@ use nexus_lib::client::NexusClient;
 use nexus_lib::drive::{CreateDriveParams, ImportImageParams};
 use nexus_lib::template::CreateTemplateParams;
 use nexus_lib::vm::{CreateVmParams, VmRole};
+use serde_json::json;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -86,6 +87,27 @@ enum Commands {
     McpBridge,
     /// Configure host firewall for VM networking (requires sudo)
     SetupFirewall,
+    /// Manage configuration settings
+    #[command(subcommand)]
+    Config(ConfigCommands),
+}
+
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Get a configuration setting
+    Get {
+        /// Setting key (e.g., bridge-name, default-kernel-version)
+        key: String,
+    },
+    /// Set a configuration setting
+    Set {
+        /// Setting key
+        key: String,
+        /// Setting value
+        value: String,
+    },
+    /// List all configuration settings
+    List,
 }
 
 #[derive(Subcommand)]
@@ -342,6 +364,7 @@ async fn main() -> ExitCode {
         Commands::Build { action } => cmd_build(&daemon_addr, action).await,
         Commands::McpBridge => cmd_mcp_bridge(&daemon_addr).await,
         Commands::SetupFirewall => cmd_setup_firewall().await,
+        Commands::Config(cmd) => cmd_config(&daemon_addr, cmd).await,
     }
 }
 
@@ -1456,6 +1479,90 @@ fn format_timestamp(epoch_secs: i64) -> String {
 // TODO: read bridge_name and subnet from a preferences table once it exists
 const BRIDGE_NAME: &str = "nexbr0";
 const VM_SUBNET: &str = "172.16.0.0/12";
+
+async fn cmd_config(daemon_addr: &str, cmd: ConfigCommands) -> ExitCode {
+    let client = NexusClient::new(daemon_addr);
+
+    match cmd {
+        ConfigCommands::Get { key } => {
+            // Convert kebab-case to snake_case for internal setting names
+            let setting_key = key.replace('-', "_");
+
+            match client.get_setting(&setting_key).await {
+                Ok(value) => {
+                    println!("{}", value);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_not_found() => {
+                    eprintln!("Setting '{}' not found", key);
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+
+        ConfigCommands::Set { key, value } => {
+            // Convert kebab-case to snake_case for internal setting names
+            let setting_key = key.replace('-', "_");
+
+            // Special handling for dns_servers: convert comma-separated IPs to JSON
+            let final_value = if setting_key == "dns_servers" && value != "from-host" && !value.starts_with('{') {
+                // Assume comma-separated IPs, convert to JSON
+                let servers: Vec<&str> = value.split(',').map(|s| s.trim()).collect();
+                let json_value = json!({
+                    "version": 1,
+                    "servers": servers
+                });
+                json_value.to_string()
+            } else {
+                value
+            };
+
+            match client.set_setting(&setting_key, &final_value).await {
+                Ok(_) => {
+                    println!("Setting '{}' updated", key);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Validation error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+
+        ConfigCommands::List => {
+            match client.list_settings().await {
+                Ok(settings) => {
+                    for (key, value, _type) in settings {
+                        // Convert snake_case to kebab-case for display
+                        let display_key = key.replace('_', "-");
+                        println!("{}: {}", display_key, value);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+    }
+}
 
 async fn cmd_setup_firewall() -> ExitCode {
     use std::process::Command;
