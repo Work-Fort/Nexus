@@ -179,6 +179,7 @@ pub fn cleanup_runtime_dir(vm_id: &crate::id::Id) {
 
 /// Resolve Firecracker binary path from asset store using default version from settings.
 /// Private helper used by VM start logic.
+#[allow(dead_code)]
 fn resolve_firecracker_binary(
     asset_store: &dyn crate::store::traits::AssetStore,
     settings_store: &dyn crate::store::traits::SettingsStore,
@@ -193,7 +194,7 @@ fn resolve_firecracker_binary(
     // Use get_firecracker (not get_firecracker_version) with Some(arch)
     let fc = asset_store
         .get_firecracker(&version, Some(arch))
-        .map_err(|e| VmServiceError::Store(e))?
+        .map_err(VmServiceError::Store)?
         .ok_or_else(|| VmServiceError::FirecrackerError(format!("Firecracker version {} for {} not found in asset store", version, arch)))?;
 
     Ok(fc.path_on_host)
@@ -201,6 +202,7 @@ fn resolve_firecracker_binary(
 
 /// Resolve kernel path from asset store using default version from settings.
 /// Private helper used by VM start logic.
+#[allow(dead_code)]
 fn resolve_kernel_path(
     asset_store: &dyn crate::store::traits::AssetStore,
     settings_store: &dyn crate::store::traits::SettingsStore,
@@ -215,7 +217,7 @@ fn resolve_kernel_path(
     // Use get_kernel (not get_kernel_by_version) with Some(arch)
     let kernel = asset_store
         .get_kernel(&version, Some(arch))
-        .map_err(|e| VmServiceError::Store(e))?
+        .map_err(VmServiceError::Store)?
         .ok_or_else(|| VmServiceError::FirecrackerError(format!("Kernel version {} for {} not found in asset store", version, arch)))?;
 
     Ok(kernel.path_on_host)

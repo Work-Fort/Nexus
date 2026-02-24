@@ -1683,7 +1683,7 @@ impl SettingsStore for SqliteStore {
             "agent_ready_timeout" => {
                 let timeout: i64 = value.parse()
                     .map_err(|_| StoreError::InvalidInput(format!("agent_ready_timeout must be an integer, got: {}", value)))?;
-                if timeout < 1 || timeout > 300 {
+                if !(1..=300).contains(&timeout) {
                     return Err(StoreError::InvalidInput(
                         "agent_ready_timeout must be between 1 and 300 seconds".to_string()
                     ));
