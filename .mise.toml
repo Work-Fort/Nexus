@@ -70,7 +70,7 @@ systemctl --user daemon-reload
 
 # Grant CAP_NET_ADMIN for networking features
 if command -v setcap &> /dev/null; then
-    sudo setcap cap_net_admin=+ep ~/.local/bin/nexusd
+    sudo setcap cap_net_admin=+eip ~/.local/bin/nexusd
     echo "Granted CAP_NET_ADMIN to nexusd"
 else
     echo "WARNING: setcap not found. Networking features will require manual capability grant."
@@ -92,7 +92,7 @@ systemctl --user daemon-reload
 
 # Grant CAP_NET_ADMIN for networking features
 if command -v setcap &> /dev/null; then
-    sudo setcap cap_net_admin=+ep ~/.local/bin/nexusd
+    sudo setcap cap_net_admin=+eip ~/.local/bin/nexusd
     echo "Granted CAP_NET_ADMIN to nexusd"
 else
     echo "WARNING: setcap not found. Networking features will require manual capability grant."

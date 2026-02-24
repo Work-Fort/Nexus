@@ -36,7 +36,7 @@ Nexus requires `CAP_NET_ADMIN` capability for network bridge, tap device, and fi
 Grant the capability to the nexusd binary:
 
 ```bash
-sudo setcap cap_net_admin=+ep ~/.local/bin/nexusd
+sudo setcap cap_net_admin=+eip ~/.local/bin/nexusd
 ```
 
 Verify:
