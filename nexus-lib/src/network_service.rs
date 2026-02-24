@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // nexus/nexus-lib/src/network_service.rs
 
-use crate::config::NetworkConfig;
-use crate::store::traits::{NetworkStore, StoreError};
+use crate::store::traits::{NetworkStore, SettingsStore, StoreError};
 use ipnetwork::Ipv4Network;
 use rtnetlink::{new_connection, Handle, LinkUnspec};
 use futures::stream::TryStreamExt;
@@ -117,22 +116,91 @@ impl From<StoreError> for NetworkError {
 /// Service for managing VM networking (bridge, tap, IP allocation, NAT).
 pub struct NetworkService {
     store: std::sync::Arc<dyn NetworkStore + Send + Sync>,
-    config: NetworkConfig,
+    settings_store: std::sync::Arc<dyn SettingsStore + Send + Sync>,
 }
 
 impl NetworkService {
     pub fn new(
         store: std::sync::Arc<dyn NetworkStore + Send + Sync>,
-        config: NetworkConfig,
+        settings_store: std::sync::Arc<dyn SettingsStore + Send + Sync>,
     ) -> Self {
-        NetworkService { store, config }
+        NetworkService { store, settings_store }
+    }
+
+    /// Get bridge name from settings table.
+    fn bridge_name(&self) -> Result<String, NetworkError> {
+        self.settings_store
+            .get_setting("bridge_name")
+            .map_err(NetworkError::Store)?
+            .ok_or_else(|| NetworkError::Bridge("bridge_name setting not found".to_string()))
+    }
+
+    /// Get VM subnet from settings table.
+    fn vm_subnet(&self) -> Result<String, NetworkError> {
+        self.settings_store
+            .get_setting("vm_subnet")
+            .map_err(NetworkError::Store)?
+            .ok_or_else(|| NetworkError::Bridge("vm_subnet setting not found".to_string()))
+    }
+
+    /// Get DNS servers from settings table (JSON array or "from-host" string).
+    fn get_dns_servers_vec(&self) -> Result<Vec<String>, NetworkError> {
+        let dns_value = self
+            .settings_store
+            .get_setting("dns_servers")
+            .map_err(NetworkError::Store)?
+            .ok_or_else(|| NetworkError::Bridge("dns_servers setting not found".to_string()))?;
+
+        // Handle special "from-host" value
+        if dns_value == "from-host" {
+            return self.read_host_dns_servers();
+        }
+
+        // Otherwise, parse as JSON
+        let json: serde_json::Value = serde_json::from_str(&dns_value)
+            .map_err(|e| NetworkError::Bridge(format!("invalid dns_servers JSON: {}", e)))?;
+
+        let servers = json["servers"]
+            .as_array()
+            .ok_or_else(|| NetworkError::Bridge("dns_servers missing 'servers' array".to_string()))?
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+
+        Ok(servers)
+    }
+
+    /// Read DNS nameservers from host's /etc/resolv.conf.
+    fn read_host_dns_servers(&self) -> Result<Vec<String>, NetworkError> {
+        let resolv_conf = std::fs::read_to_string("/etc/resolv.conf")
+            .map_err(|e| NetworkError::Bridge(format!("cannot read /etc/resolv.conf: {}", e)))?;
+
+        let nameservers: Vec<String> = resolv_conf
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.starts_with("nameserver ") {
+                    line.strip_prefix("nameserver ").map(|s| s.trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if nameservers.is_empty() {
+            return Err(NetworkError::Bridge(
+                "no nameservers found in /etc/resolv.conf".to_string()
+            ));
+        }
+
+        Ok(nameservers)
     }
 
     /// Ensure the bridge exists (create if needed, configure IP).
     /// Requires CAP_NET_ADMIN.
     pub fn ensure_bridge(&self) -> Result<(), NetworkError> {
-        let bridge_name = self.config.bridge_name.clone();
-        let subnet = self.config.subnet.clone();
+        let bridge_name = self.bridge_name()?;
+        let subnet = self.vm_subnet()?;
 
         // Use block_in_place to run async rtnetlink in sync context
         tokio::task::block_in_place(|| {
@@ -224,8 +292,11 @@ impl NetworkService {
 
     /// Allocate an IP for a VM and return the assigned IP.
     pub fn allocate_ip(&self, vm_id: i64) -> Result<String, NetworkError> {
+        let bridge_name = self.bridge_name()?;
+        let subnet = self.vm_subnet()?;
+
         // Parse the subnet to get available IP range
-        let network: Ipv4Network = self.config.subnet.parse()
+        let network: Ipv4Network = subnet.parse()
             .map_err(|e| NetworkError::IpAllocation(format!("invalid subnet: {e}")))?;
 
         // Get the gateway IP (first host IP, e.g., 172.16.0.1)
@@ -234,18 +305,18 @@ impl NetworkService {
         })?;
 
         // Get already allocated IPs for this bridge
-        let bridge = self.store.get_bridge(&self.config.bridge_name)?;
+        let bridge = self.store.get_bridge(&bridge_name)?;
         if bridge.is_none() {
             // Bridge doesn't exist yet, create it
             self.store.create_bridge(
-                &self.config.bridge_name,
-                &self.config.subnet,
+                &bridge_name,
+                &subnet,
                 &gateway.to_string(),
-                &self.config.bridge_name,
+                &bridge_name,
             )?;
         }
 
-        let allocated = self.store.list_allocated_ips(&self.config.bridge_name)?;
+        let allocated = self.store.list_allocated_ips(&bridge_name)?;
 
         // Find first available IP (skip network address and gateway)
         for i in 2..network.size() {
@@ -257,7 +328,7 @@ impl NetworkService {
                 }
                 if !allocated.contains(&ip_str) {
                     // Found an available IP, assign it
-                    self.store.assign_vm_ip(vm_id, &ip_str, &self.config.bridge_name)?;
+                    self.store.assign_vm_ip(vm_id, &ip_str, &bridge_name)?;
                     return Ok(ip_str);
                 }
             }
@@ -271,7 +342,7 @@ impl NetworkService {
     /// Requires CAP_NET_ADMIN.
     pub fn create_tap(&self, vm_id: i64) -> Result<String, NetworkError> {
         let tap_name = format!("tap{}", vm_id);
-        let bridge_name = self.config.bridge_name.clone();
+        let bridge_name = self.bridge_name()?;
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
@@ -377,20 +448,22 @@ impl NetworkService {
 
     /// Get the gateway IP for the bridge.
     pub fn gateway_ip(&self) -> Result<String, NetworkError> {
-        let bridge = self.store.get_bridge(&self.config.bridge_name)?
+        let bridge_name = self.bridge_name()?;
+        let bridge = self.store.get_bridge(&bridge_name)?
             .ok_or_else(|| NetworkError::Bridge("bridge not found".to_string()))?;
         Ok(bridge.gateway)
     }
 
     /// Get DNS servers as a comma-separated string.
-    pub fn dns_servers(&self) -> String {
-        self.config.dns_servers.join(",")
+    pub fn dns_servers(&self) -> Result<String, NetworkError> {
+        let servers = self.get_dns_servers_vec()?;
+        Ok(servers.join(","))
     }
 
     /// Tear down all network state: tap devices on the bridge, nftables rules, and the bridge.
     /// Used by the cleanup endpoint to reset networking without sudo.
     pub fn cleanup_network(&self) -> Result<CleanupReport, NetworkError> {
-        let bridge_name = self.config.bridge_name.clone();
+        let bridge_name = self.bridge_name()?;
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
@@ -460,13 +533,13 @@ impl NetworkService {
         use ipnetwork::IpNetwork;
         use nftnl::{nft_expr, nftnl_sys::libc as nftnl_libc};
 
-        let bridge_name = &self.config.bridge_name;
-        let subnet = &self.config.subnet;
+        let bridge_name = self.bridge_name()?;
+        let subnet = self.vm_subnet()?;
 
         let network: ipnetwork::Ipv4Network = subnet.parse()
             .map_err(|e| NetworkError::Nftables(format!("invalid subnet: {e}")))?;
         let network = IpNetwork::V4(network);
-        let iface_buf = pad_iface_name(bridge_name);
+        let iface_buf = pad_iface_name(&bridge_name);
 
         let mut batch = nftnl::Batch::new();
 
@@ -558,13 +631,14 @@ mod tests {
     }
 
     fn test_service(store: std::sync::Arc<SqliteStore>) -> NetworkService {
+        // Update settings to match test expectations
+        store.set_setting("bridge_name", "testbr0", "string").unwrap();
+        store.set_setting("vm_subnet", "192.168.100.0/24", "string").unwrap();
+        store.set_setting("dns_servers", r#"{"version": 1, "servers": ["1.1.1.1"]}"#, "json").unwrap();
+
         NetworkService::new(
-            store,
-            NetworkConfig {
-                bridge_name: "testbr0".to_string(),
-                subnet: "192.168.100.0/24".to_string(),
-                dns_servers: vec!["1.1.1.1".to_string()],
-            },
+            store.clone(),
+            store.clone(), // StateStore implements both NetworkStore and SettingsStore
         )
     }
 
@@ -627,17 +701,10 @@ mod tests {
 
     #[test]
     fn dns_servers_joins_with_comma() {
-        let store = test_store();
-        let service = NetworkService::new(
-            Arc::new(store),
-            NetworkConfig {
-                bridge_name: "testbr0".to_string(),
-                subnet: "192.168.100.0/24".to_string(),
-                dns_servers: vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()],
-            },
-        );
+        let store = Arc::new(test_store());
+        let service = test_service(store.clone());
 
-        assert_eq!(service.dns_servers(), "8.8.8.8,1.1.1.1");
+        assert_eq!(service.dns_servers().unwrap(), "1.1.1.1");
     }
 
 }

@@ -177,6 +177,50 @@ pub fn cleanup_runtime_dir(vm_id: &crate::id::Id) {
     let _ = fs::remove_dir_all(&runtime_dir);
 }
 
+/// Resolve Firecracker binary path from asset store using default version from settings.
+/// Private helper used by VM start logic.
+fn resolve_firecracker_binary(
+    asset_store: &dyn crate::store::traits::AssetStore,
+    settings_store: &dyn crate::store::traits::SettingsStore,
+) -> Result<String, VmServiceError> {
+    let version = settings_store
+        .get_setting("default_firecracker_version")
+        .map_err(|e| VmServiceError::FirecrackerError(format!("cannot read default_firecracker_version: {}", e)))?
+        .ok_or_else(|| VmServiceError::FirecrackerError("default_firecracker_version not set".to_string()))?;
+
+    let arch = std::env::consts::ARCH;
+
+    // Use get_firecracker (not get_firecracker_version) with Some(arch)
+    let fc = asset_store
+        .get_firecracker(&version, Some(arch))
+        .map_err(|e| VmServiceError::Store(e))?
+        .ok_or_else(|| VmServiceError::FirecrackerError(format!("Firecracker version {} for {} not found in asset store", version, arch)))?;
+
+    Ok(fc.path_on_host)
+}
+
+/// Resolve kernel path from asset store using default version from settings.
+/// Private helper used by VM start logic.
+fn resolve_kernel_path(
+    asset_store: &dyn crate::store::traits::AssetStore,
+    settings_store: &dyn crate::store::traits::SettingsStore,
+) -> Result<String, VmServiceError> {
+    let version = settings_store
+        .get_setting("default_kernel_version")
+        .map_err(|e| VmServiceError::FirecrackerError(format!("cannot read default_kernel_version: {}", e)))?
+        .ok_or_else(|| VmServiceError::FirecrackerError("default_kernel_version not set".to_string()))?;
+
+    let arch = std::env::consts::ARCH;
+
+    // Use get_kernel (not get_kernel_by_version) with Some(arch)
+    let kernel = asset_store
+        .get_kernel(&version, Some(arch))
+        .map_err(|e| VmServiceError::Store(e))?
+        .ok_or_else(|| VmServiceError::FirecrackerError(format!("Kernel version {} for {} not found in asset store", version, arch)))?;
+
+    Ok(kernel.path_on_host)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

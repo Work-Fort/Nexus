@@ -130,7 +130,7 @@ async fn main() {
     // Initialize network service
     let network_service = nexus_lib::network_service::NetworkService::new(
         store_arc.clone(),
-        config.network.clone(),
+        store_arc.clone(), // StateStore implements SettingsStore
     );
 
     // Initialize bridge and nftables rules
@@ -149,7 +149,6 @@ async fn main() {
         drives_root,
         assets_dir,
         executor,
-        firecracker: config.firecracker.clone(),
         vsock_manager,
         network_service,
         processes: tokio::sync::Mutex::new(std::collections::HashMap::new()),
