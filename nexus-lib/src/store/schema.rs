@@ -2,18 +2,18 @@
 /// Schema version — increment when the schema changes.
 /// Pre-alpha migration strategy: if the stored version doesn't match,
 /// delete the DB and recreate.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// Database schema. Executed as a single batch on first start.
 /// Domain tables are added by later steps — each step bumps SCHEMA_VERSION
 /// and appends its tables here. Pre-alpha migration (delete + recreate)
 /// means all tables are always created from this single constant.
 pub const SCHEMA_SQL: &str = r#"
--- Nexus Database Schema v9 (Pre-Alpha)
+-- Nexus Database Schema v10 (Pre-Alpha)
 --
--- Schema v9 changes:
--- - Renamed 'workspaces' table to 'drives'
--- - Renamed 'storage.workspaces' config key to 'storage.drives'
+-- Schema v10 changes:
+-- - Added versioned settings table with rollback support
+-- - Added default settings for networking and asset resolution
 --
 -- During pre-alpha, schema changes are applied by:
 -- 1. Updating this file
@@ -26,12 +26,26 @@ CREATE TABLE schema_meta (
     value TEXT NOT NULL
 );
 
--- Application settings (key-value store)
+-- Application settings with version history (key-value store)
+-- Supports rollback: multiple versions per key, one marked is_current
+-- See [Configuration Schemas](./config-schemas.md) for detailed schema documentation
 CREATE TABLE settings (
-    key TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL,
     value TEXT NOT NULL,
-    type TEXT NOT NULL CHECK(type IN ('string', 'int', 'bool', 'json'))
+    type TEXT NOT NULL CHECK(type IN ('string', 'int', 'bool', 'json')),
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    is_current INTEGER NOT NULL DEFAULT 0 CHECK(is_current IN (0, 1)),
+    version INTEGER GENERATED ALWAYS AS (
+        CASE WHEN type = 'json' THEN json_extract(value, '$.version') ELSE NULL END
+    ) VIRTUAL
 );
+
+-- No duplicate (key, version) pairs
+CREATE UNIQUE INDEX idx_settings_key_version ON settings(key, version) WHERE version IS NOT NULL;
+
+-- Only one current version per key
+CREATE UNIQUE INDEX idx_settings_current ON settings(key) WHERE is_current = 1;
 
 -- Tags for organizational categorization
 CREATE TABLE tags (
@@ -351,4 +365,148 @@ pub fn seed_default_providers(conn: &rusqlite::Connection) -> Result<(), rusqlit
     )?;
 
     Ok(())
+}
+
+/// Seed the default settings on first daemon start.
+/// Called after schema creation (idempotent -- skips if settings already exist).
+pub fn seed_default_settings(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM settings", [], |r| r.get(0))?;
+    if count > 0 {
+        return Ok(());
+    }
+
+    // Runtime behavior
+    conn.execute(
+        "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params!["agent_ready_timeout", "20", "int", 1],
+    )?;
+
+    conn.execute(
+        "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params!["unreachable_vm_action", "keep", "string", 1],
+    )?;
+
+    // Network configuration
+    conn.execute(
+        "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params!["bridge_name", "nexbr0", "string", 1],
+    )?;
+
+    conn.execute(
+        "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params!["vm_subnet", "172.16.0.0/12", "string", 1],
+    )?;
+
+    conn.execute(
+        "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            "dns_servers",
+            r#"{"version": 1, "servers": ["8.8.8.8", "1.1.1.1"]}"#,
+            "json",
+            1
+        ],
+    )?;
+
+    // Asset defaults
+    conn.execute(
+        "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params!["default_firecracker_version", "1.14.1", "string", 1],
+    )?;
+
+    conn.execute(
+        "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params!["default_kernel_version", "6.1.164", "string", 1],
+    )?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn settings_table_supports_versioning() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+
+        // Insert two versions of dns_servers
+        conn.execute(
+            "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "dns_servers",
+                r#"{"version": 1, "servers": ["8.8.8.8"]}"#,
+                "json",
+                0,
+            ],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "dns_servers",
+                r#"{"version": 2, "servers": ["1.1.1.1"]}"#,
+                "json",
+                1,
+            ],
+        )
+        .unwrap();
+
+        // Verify only one current version per key
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM settings WHERE key = ?1 AND is_current = 1",
+                ["dns_servers"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        // Verify version extracted correctly
+        let version: Option<i64> = conn
+            .query_row(
+                "SELECT version FROM settings WHERE key = ?1 AND is_current = 1",
+                ["dns_servers"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, Some(2));
+    }
+
+    #[test]
+    fn default_settings_seed() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+        seed_default_settings(&conn).unwrap();
+
+        // Verify all 7 settings exist
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM settings WHERE is_current = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 7);
+
+        // Verify agent_ready_timeout
+        let timeout: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1 AND is_current = 1",
+                ["agent_ready_timeout"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(timeout, "20");
+
+        // Verify dns_servers is JSON with version
+        let dns_json: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1 AND is_current = 1",
+                ["dns_servers"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let dns: serde_json::Value = serde_json::from_str(&dns_json).unwrap();
+        assert_eq!(dns["version"], 1);
+        assert_eq!(dns["servers"][0], "8.8.8.8");
+    }
 }
