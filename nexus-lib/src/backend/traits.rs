@@ -70,4 +70,13 @@ pub trait DriveBackend: Send + Sync {
 
     /// Set whether a subvolume is read-only.
     fn set_read_only(&self, path: &Path, read_only: bool) -> Result<(), BackendError>;
+
+    /// Resize the ext4 image inside a drive subvolume to the given size in bytes.
+    ///
+    /// The image file is always named `rootfs.ext4` inside the subvolume.
+    /// Uses `truncate` to extend the file, then `e2fsck` + `resize2fs` to
+    /// grow the filesystem.
+    ///
+    /// Returns an error if the requested size is smaller than the current file size.
+    fn resize_drive(&self, subvolume_path: &Path, size_bytes: u64) -> Result<(), BackendError>;
 }

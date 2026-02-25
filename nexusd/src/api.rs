@@ -1776,6 +1776,7 @@ mod tests {
             Ok(SubvolumeInfo { path: path.to_path_buf(), read_only: false, size_bytes: None })
         }
         fn set_read_only(&self, _path: &std::path::Path, _read_only: bool) -> Result<(), BackendError> { Ok(()) }
+        fn resize_drive(&self, _subvolume_path: &std::path::Path, _size_bytes: u64) -> Result<(), BackendError> { Ok(()) }
     }
 
     fn test_state() -> Arc<AppState> {

@@ -189,6 +189,79 @@ impl DriveBackend for BtrfsBackend {
             ))
         })
     }
+
+    fn resize_drive(&self, subvolume_path: &Path, size_bytes: u64) -> Result<(), BackendError> {
+        let ext4_path = subvolume_path.join("rootfs.ext4");
+
+        if !ext4_path.exists() {
+            return Err(BackendError::NotFound(format!(
+                "rootfs.ext4 not found in {}",
+                subvolume_path.display()
+            )));
+        }
+
+        // Check current size
+        let current_size = std::fs::metadata(&ext4_path)
+            .map_err(|e| BackendError::Io(format!(
+                "cannot stat {}: {e}", ext4_path.display()
+            )))?
+            .len();
+
+        if size_bytes < current_size {
+            return Err(BackendError::Unsupported(format!(
+                "requested size {} bytes is smaller than current image size {} bytes (shrinking not supported)",
+                size_bytes, current_size
+            )));
+        }
+
+        if size_bytes == current_size {
+            return Ok(());  // No resize needed
+        }
+
+        // Step 1: Extend the file with truncate
+        let output = std::process::Command::new("truncate")
+            .arg("-s")
+            .arg(size_bytes.to_string())
+            .arg(&ext4_path)
+            .output()
+            .map_err(|e| BackendError::Io(format!("cannot run truncate: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(BackendError::Io(format!("truncate failed: {stderr}")));
+        }
+
+        // Step 2: Check and repair filesystem before resize
+        let output = std::process::Command::new("e2fsck")
+            .arg("-fy")
+            .arg(&ext4_path)
+            .output()
+            .map_err(|e| BackendError::Io(format!("cannot run e2fsck: {e}")))?;
+
+        // e2fsck exit codes are bitmasks: bit 0 = errors corrected (OK),
+        // bit 1 = reboot needed (irrelevant for offline images), bit 2 = uncorrected errors.
+        // Reject only if bit 2 (uncorrected errors) or higher bits are set.
+        let code = output.status.code().unwrap_or(-1);
+        if code < 0 || code & 0xFC != 0 {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(BackendError::Io(format!(
+                "e2fsck failed (exit {}): {}", code, stderr
+            )));
+        }
+
+        // Step 3: Resize the filesystem to fill the file
+        let output = std::process::Command::new("resize2fs")
+            .arg(&ext4_path)
+            .output()
+            .map_err(|e| BackendError::Io(format!("cannot run resize2fs: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(BackendError::Io(format!("resize2fs failed: {stderr}")));
+        }
+
+        Ok(())
+    }
 }
 
 /// Recursively copy directory contents from src to dest.
