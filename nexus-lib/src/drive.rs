@@ -66,6 +66,41 @@ impl ImportImageParams {
     }
 }
 
+/// Parse a human-readable size string into bytes.
+///
+/// Accepts: plain bytes ("67108864"), megabytes ("256M", "256MB"),
+/// gigabytes ("1G", "1GB"). Case-insensitive.
+pub fn parse_size(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("size cannot be empty".to_string());
+    }
+
+    // Find where digits end and suffix begins
+    let digit_end = s
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(s.len());
+
+    let (num_str, suffix) = s.split_at(digit_end);
+    let num: u64 = num_str
+        .parse()
+        .map_err(|_| format!("invalid size number: '{num_str}'"))?;
+
+    if num == 0 {
+        return Err("size must be greater than zero".to_string());
+    }
+
+    let multiplier: u64 = match suffix.to_uppercase().as_str() {
+        "" => 1,
+        "M" | "MB" => 1024 * 1024,
+        "G" | "GB" => 1024 * 1024 * 1024,
+        other => return Err(format!("unknown size suffix: '{other}' (use M, MB, G, or GB)")),
+    };
+
+    num.checked_mul(multiplier)
+        .ok_or_else(|| format!("size overflow: {num}{suffix}"))
+}
+
 /// Parameters for creating a drive from a master image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateDriveParams {
@@ -73,6 +108,10 @@ pub struct CreateDriveParams {
     pub name: Option<String>,
     /// Name of the master image to snapshot from
     pub base: String,
+    /// Desired drive size in bytes (optional, defaults to master image size).
+    /// Must be >= the master image's ext4 file size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
 }
 
 #[cfg(test)]
@@ -137,5 +176,47 @@ mod tests {
         let params: CreateDriveParams = serde_json::from_str(json).unwrap();
         assert!(params.name.is_none());
         assert_eq!(params.base, "base-agent");
+    }
+
+    #[test]
+    fn parse_size_megabytes() {
+        assert_eq!(parse_size("256M").unwrap(), 256 * 1024 * 1024);
+        assert_eq!(parse_size("256m").unwrap(), 256 * 1024 * 1024);
+        assert_eq!(parse_size("64MB").unwrap(), 64 * 1024 * 1024);
+        assert_eq!(parse_size("64mb").unwrap(), 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_gigabytes() {
+        assert_eq!(parse_size("1G").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size("2g").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(parse_size("1GB").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parse_size_plain_bytes() {
+        assert_eq!(parse_size("67108864").unwrap(), 67108864);
+    }
+
+    #[test]
+    fn parse_size_invalid() {
+        assert!(parse_size("").is_err());
+        assert!(parse_size("abc").is_err());
+        assert!(parse_size("-100M").is_err());
+        assert!(parse_size("0M").is_err());
+    }
+
+    #[test]
+    fn create_drive_params_with_size() {
+        let json = r#"{"base": "base-agent", "size": 268435456}"#;
+        let params: CreateDriveParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.size, Some(268435456));
+    }
+
+    #[test]
+    fn create_drive_params_without_size() {
+        let json = r#"{"base": "base-agent"}"#;
+        let params: CreateDriveParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.size, None);
     }
 }

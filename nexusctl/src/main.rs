@@ -813,6 +813,7 @@ async fn cmd_drive(daemon_addr: &str, action: DriveAction) -> ExitCode {
             let params = CreateDriveParams {
                 name: name.clone(),
                 base: base.clone(),
+                size: None,
             };
             match client.create_drive(&params).await {
                 Ok(drive) => {
