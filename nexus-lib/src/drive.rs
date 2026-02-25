@@ -219,4 +219,39 @@ mod tests {
         let params: CreateDriveParams = serde_json::from_str(json).unwrap();
         assert_eq!(params.size, None);
     }
+
+    #[test]
+    fn create_drive_params_name_validation_passes_when_size_present() {
+        let params = CreateDriveParams {
+            name: Some("my-drive".to_string()),
+            base: "base-agent".to_string(),
+            size: Some(256 * 1024 * 1024),
+        };
+        assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn create_drive_params_size_serialization_roundtrip() {
+        let params = CreateDriveParams {
+            name: None,
+            base: "base-agent".to_string(),
+            size: Some(1024 * 1024 * 1024),
+        };
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(json.contains("1073741824"));
+
+        let parsed: CreateDriveParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.size, Some(1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn create_drive_params_without_size_omits_field() {
+        let params = CreateDriveParams {
+            name: None,
+            base: "base-agent".to_string(),
+            size: None,
+        };
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(!json.contains("size"));
+    }
 }
