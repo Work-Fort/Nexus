@@ -219,6 +219,9 @@ enum DriveAction {
         /// Base image name
         #[arg(long)]
         base: String,
+        /// Drive size (e.g., "256M", "1G"). Defaults to master image size.
+        #[arg(long)]
+        size: Option<String>,
     },
     /// Show drive details
     Inspect {
@@ -809,11 +812,23 @@ async fn cmd_drive(daemon_addr: &str, action: DriveAction) -> ExitCode {
                 }
             }
         }
-        DriveAction::Create { name, base } => {
+        DriveAction::Create { name, base, size } => {
+            // Parse size if provided
+            let size_bytes = match size {
+                Some(ref s) => match nexus_lib::drive::parse_size(s) {
+                    Ok(bytes) => Some(bytes),
+                    Err(e) => {
+                        eprintln!("Error: invalid size '{}': {}", s, e);
+                        return ExitCode::from(EXIT_GENERAL_ERROR);
+                    }
+                },
+                None => None,
+            };
+
             let params = CreateDriveParams {
                 name: name.clone(),
                 base: base.clone(),
-                size: None,
+                size: size_bytes,
             };
             match client.create_drive(&params).await {
                 Ok(drive) => {
@@ -821,6 +836,10 @@ async fn cmd_drive(daemon_addr: &str, action: DriveAction) -> ExitCode {
                     let drive_name = drive.name.as_deref().unwrap_or(&id_fallback);
                     println!("Created drive \"{}\" from base \"{}\"", drive_name, base);
                     println!("  Path: {}", drive.subvolume_path);
+                    if let Some(s) = size_bytes {
+                        let mb = s / (1024 * 1024);
+                        println!("  Size: {}M", mb);
+                    }
                     println!("\n  Inspect it: nexusctl drive inspect {}", drive_name);
                     ExitCode::SUCCESS
                 }
