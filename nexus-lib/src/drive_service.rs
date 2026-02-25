@@ -86,11 +86,13 @@ impl<'a> DriveService<'a> {
     ///
     /// 1. Looks up the master image by name
     /// 2. Creates a btrfs snapshot
-    /// 3. Registers in the database
+    /// 3. If size is specified, resizes the ext4 image inside the snapshot
+    /// 4. Registers in the database
     pub fn create_drive(
         &self,
         base_name: &str,
         drive_name: Option<&str>,
+        size: Option<u64>,
     ) -> Result<Drive, DriveServiceError> {
         // Look up the master image
         let image = self.store.get_image(base_name)?
@@ -107,6 +109,15 @@ impl<'a> DriveService<'a> {
 
         // Create the snapshot on disk
         self.backend.create_snapshot(&source, &dest)?;
+
+        // Resize if requested
+        if let Some(requested_size) = size {
+            if let Err(e) = self.backend.resize_drive(&dest, requested_size) {
+                // Roll back the snapshot on resize failure
+                let _ = self.backend.delete_subvolume(&dest);
+                return Err(e.into());
+            }
+        }
 
         // Register in database; roll back snapshot on failure
         let drive = match self.store.create_drive(

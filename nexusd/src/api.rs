@@ -304,7 +304,7 @@ async fn create_drive_handler(
         state.backend.as_ref(),
         state.drives_root.clone(),
     );
-    match svc.create_drive(&params.base, params.name.as_deref()) {
+    match svc.create_drive(&params.base, params.name.as_deref(), params.size) {
         Ok(drive) => (StatusCode::CREATED, Json(serde_json::to_value(drive).unwrap())),
         Err(DriveServiceError::NotFound(msg)) => (
             StatusCode::NOT_FOUND,
