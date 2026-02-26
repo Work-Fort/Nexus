@@ -192,6 +192,12 @@ if [ -d "$HOME/.local/share/nexus/assets" ]; then
     rm -rf "$HOME/.local/share/nexus/assets"
 fi
 
+# Remove build logs and orphaned temp dirs
+if [ -d "$HOME/.local/share/nexus/builds" ]; then
+    echo "  → Removing build artifacts"
+    rm -rf "$HOME/.local/share/nexus/builds"
+fi
+
 # Remove drives (btrfs subvolumes) using VFS workaround (no sudo needed)
 # Same approach as btrfs.rs: unset read-only, remove contents, rmdir empty subvolume
 if [ -d "$HOME/.local/share/nexus/drives" ]; then
