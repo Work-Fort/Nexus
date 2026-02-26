@@ -1812,6 +1812,55 @@ impl SettingsStore for SqliteStore {
                 }
             }
 
+            // Host service ports
+            "service_ports" => {
+                if value.is_empty() {
+                    return Err(StoreError::InvalidInput("service_ports cannot be empty".to_string()));
+                }
+
+                let json: serde_json::Value = serde_json::from_str(value)
+                    .map_err(|e| StoreError::InvalidInput(format!("service_ports must be valid JSON: {}", e)))?;
+
+                if !json.is_object() {
+                    return Err(StoreError::InvalidInput("service_ports must be a JSON object".to_string()));
+                }
+
+                let version = json.get("version")
+                    .ok_or_else(|| StoreError::InvalidInput("service_ports missing 'version' field".to_string()))?;
+                if version.as_i64() != Some(1) {
+                    return Err(StoreError::InvalidInput("service_ports version must be 1".to_string()));
+                }
+
+                let ports = json.get("ports")
+                    .ok_or_else(|| StoreError::InvalidInput("service_ports missing 'ports' object".to_string()))?;
+                if !ports.is_object() {
+                    return Err(StoreError::InvalidInput("service_ports 'ports' must be an object".to_string()));
+                }
+
+                let ports_map = ports.as_object().unwrap();
+                if ports_map.len() > 20 {
+                    return Err(StoreError::InvalidInput("service_ports maximum 20 entries allowed".to_string()));
+                }
+
+                for (name, port) in ports_map {
+                    // Validate key: lowercase alphanumeric + hyphens
+                    if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+                        return Err(StoreError::InvalidInput(
+                            format!("service_ports key '{}' must be lowercase alphanumeric with hyphens", name)
+                        ));
+                    }
+                    // Validate value: TCP port 1-65535
+                    let port_num = port.as_i64().ok_or_else(|| {
+                        StoreError::InvalidInput(format!("service_ports['{}'] must be an integer", name))
+                    })?;
+                    if !(1..=65535).contains(&port_num) {
+                        return Err(StoreError::InvalidInput(
+                            format!("service_ports['{}'] must be a valid port (1-65535), got: {}", name, port_num)
+                        ));
+                    }
+                }
+            }
+
             // Asset defaults
             "default_firecracker_version" | "default_kernel_version" => {
                 if value.is_empty() {

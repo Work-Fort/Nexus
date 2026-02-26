@@ -143,6 +143,38 @@ impl NetworkService {
             .ok_or_else(|| NetworkError::Bridge("vm_subnet setting not found".to_string()))
     }
 
+    /// Get service ports from settings table (JSON map of name→port).
+    /// Returns Vec of (service_name, port) for host services reachable by VMs.
+    fn service_ports(&self) -> Result<Vec<(String, u16)>, NetworkError> {
+        let value = self
+            .settings_store
+            .get_setting("service_ports")
+            .map_err(NetworkError::Store)?;
+
+        let value = match value {
+            Some(v) => v,
+            None => return Ok(Vec::new()),
+        };
+
+        let json: serde_json::Value = serde_json::from_str(&value)
+            .map_err(|e| NetworkError::Nftables(format!("invalid service_ports JSON: {}", e)))?;
+
+        let ports = json["ports"]
+            .as_object()
+            .ok_or_else(|| NetworkError::Nftables("service_ports missing 'ports' object".to_string()))?;
+
+        let mut result = Vec::new();
+        for (name, port) in ports {
+            if let Some(p) = port.as_u64() {
+                if p > 0 && p <= 65535 {
+                    result.push((name.clone(), p as u16));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Get DNS servers from settings table (JSON array or "from-host" string).
     fn get_dns_servers_vec(&self) -> Result<Vec<String>, NetworkError> {
         let dns_value = self
@@ -604,6 +636,39 @@ impl NetworkService {
         // iso_rule.add_expr(&nft_expr!(cmp == iface_buf.as_slice()));
         // iso_rule.add_expr(&nft_expr!(verdict drop));
         // batch.add(&iso_rule, nftnl::MsgType::Add);
+
+        // Chain: input (filter, hook input, prio -1, accept)
+        // Allows VMs to reach specific host services through the bridge interface.
+        // Ports are read from the service_ports setting.
+        // Priority -1 evaluates before standard filter (prio 0).
+        let svc_ports = self.service_ports()?;
+        if !svc_ports.is_empty() {
+            let mut input = nftnl::Chain::new(c"input", &table);
+            input.set_type(nftnl::ChainType::Filter);
+            input.set_hook(nftnl::Hook::In, -1);
+            input.set_policy(nftnl::Policy::Accept);
+            batch.add(&input, nftnl::MsgType::Add);
+
+            for (svc_name, port) in &svc_ports {
+                let mut rule = nftnl::Rule::new(&input);
+                rule.add_expr(&nft_expr!(meta iifname));
+                rule.add_expr(&nft_expr!(cmp == iface_buf.as_slice()));
+                rule.add_expr(&nft_expr!(meta nfproto));
+                rule.add_expr(&nft_expr!(cmp == nftnl_libc::NFPROTO_IPV4 as u8));
+                rule.add_expr(&nft_expr!(payload ipv4 saddr));
+                rule.add_expr(&nft_expr!(bitwise mask network.mask(), xor 0u32));
+                rule.add_expr(&nft_expr!(cmp == network.ip()));
+                rule.add_expr(&nft_expr!(meta l4proto));
+                rule.add_expr(&nft_expr!(cmp == nftnl_libc::IPPROTO_TCP as u8));
+                // Port comparison: payload is network byte order, ToSlice uses native endian
+                rule.add_expr(&nft_expr!(payload tcp dport));
+                rule.add_expr(&nft_expr!(cmp == port.to_be()));
+                rule.add_expr(&nft_expr!(verdict accept));
+                batch.add(&rule, nftnl::MsgType::Add);
+
+                tracing::info!("nftables input: allow TCP {} ({}) from VM subnet", port, svc_name);
+            }
+        }
 
         // Send batch via netlink
         let finalized = batch.finalize();

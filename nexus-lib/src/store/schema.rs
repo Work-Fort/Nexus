@@ -418,6 +418,17 @@ pub fn seed_default_settings(conn: &rusqlite::Connection) -> Result<(), rusqlite
         rusqlite::params!["default_kernel_version", "6.1.164", "string", 1],
     )?;
 
+    // Host service ports accessible from VMs through the bridge
+    conn.execute(
+        "INSERT INTO settings (key, value, type, is_current) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            "service_ports",
+            r#"{"version": 1, "ports": {"sharkfin": 16000}}"#,
+            "json",
+            1
+        ],
+    )?;
+
     Ok(())
 }
 
@@ -485,7 +496,7 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM settings WHERE is_current = 1", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
 
         // Verify agent_ready_timeout
         let timeout: String = conn

@@ -52,8 +52,8 @@ enum Commands {
         #[command(subcommand)]
         action: ImageAction,
     },
-    /// Manage drives (alias: drive, workspace, ws)
-    #[command(alias = "workspace", alias = "ws")]
+    /// Manage drives
+
     Drive {
         #[command(subcommand)]
         action: DriveAction,
@@ -101,10 +101,12 @@ enum ConfigCommands {
     },
     /// Set a configuration setting
     Set {
-        /// Setting key
+        /// Setting key (e.g., bridge-name, dns-servers, service-port)
         key: String,
-        /// Setting value
-        value: String,
+        /// Setting value(s). Most settings take one value.
+        /// service-port takes: <name> <port>
+        #[arg(required = true, num_args = 1..)]
+        value: Vec<String>,
     },
     /// List all configuration settings
     List,
@@ -1531,6 +1533,66 @@ async fn cmd_config(daemon_addr: &str, cmd: ConfigCommands) -> ExitCode {
         ConfigCommands::Set { key, value } => {
             // Convert kebab-case to snake_case for internal setting names
             let setting_key = key.replace('-', "_");
+
+            // Special handling for service_port: read-modify-write the JSON map
+            // Usage: nexusctl config set service-port <name> <port>
+            if setting_key == "service_port" {
+                if value.len() != 2 {
+                    eprintln!("Usage: nexusctl config set service-port <name> <port>");
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+                let svc_name = &value[0];
+                let port: u16 = match value[1].parse() {
+                    Ok(p) if p > 0 => p,
+                    _ => {
+                        eprintln!("Error: port must be 1-65535");
+                        return ExitCode::from(EXIT_GENERAL_ERROR);
+                    }
+                };
+
+                // Read current service_ports (or start from default)
+                let current = client.get_setting("service_ports").await.ok();
+                let mut ports_map = match &current {
+                    Some(val) => {
+                        let json: serde_json::Value = match serde_json::from_str(val) {
+                            Ok(j) => j,
+                            Err(e) => {
+                                eprintln!("Error: invalid service_ports JSON: {e}");
+                                return ExitCode::from(EXIT_GENERAL_ERROR);
+                            }
+                        };
+                        match json.get("ports").and_then(|p| p.as_object()) {
+                            Some(m) => m.clone(),
+                            None => serde_json::Map::new(),
+                        }
+                    }
+                    None => serde_json::Map::new(),
+                };
+
+                ports_map.insert(svc_name.clone(), json!(port));
+
+                let final_value = json!({
+                    "version": 1,
+                    "ports": ports_map
+                }).to_string();
+
+                return match client.set_setting("service_ports", &final_value).await {
+                    Ok(_) => {
+                        println!("Service port '{}' set to {}", svc_name, port);
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) if e.is_connect() => {
+                        print_connect_error(daemon_addr);
+                        ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                    }
+                    Err(e) => {
+                        eprintln!("Validation error: {e}");
+                        ExitCode::from(EXIT_GENERAL_ERROR)
+                    }
+                };
+            }
+
+            let value = value.join(" ");
 
             // Special handling for dns_servers: convert comma-separated IPs to JSON
             let final_value = if setting_key == "dns_servers" && value != "from-host" && !value.starts_with('{') {
