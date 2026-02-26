@@ -240,8 +240,8 @@ pub async fn verify_process(pid: u32, vm_id: &str) -> Result<()> {
     println!("  ✓ Process is Firecracker");
 
     // Check 3: lsof shows PID owns UDS socket
-    let workspace_path = get_vm_workspace_path(vm_id)?;
-    let socket_path = workspace_path.join("firecracker.vsock");
+    let runtime_path = get_vm_runtime_path(vm_id)?;
+    let socket_path = runtime_path.join("firecracker.vsock");
     verify_socket_ownership(pid, &socket_path)?;
 
     // Check 4: UDS responds correctly
@@ -277,17 +277,17 @@ pub async fn verify_vm_ready(client: &Client, vm_id: &str) -> Result<()> {
     }
 
     // Independent vsock verification
-    let workspace_path = get_vm_workspace_path(vm_id)?;
-    verify_vsock_connection(vm_id, &workspace_path).await?;
+    let runtime_path = get_vm_runtime_path(vm_id)?;
+    verify_vsock_connection(vm_id, &runtime_path).await?;
 
     Ok(())
 }
 
 /// Verify vsock connection to guest agent
-async fn verify_vsock_connection(_vm_id: &str, workspace_path: &std::path::Path) -> Result<()> {
+async fn verify_vsock_connection(_vm_id: &str, runtime_path: &std::path::Path) -> Result<()> {
     println!("🔌 Verifying vsock connection to guest agent...");
 
-    let vsock_path = workspace_path.join("firecracker.vsock");
+    let vsock_path = runtime_path.join("firecracker.vsock");
 
     let mut stream = tokio::time::timeout(
         GUEST_AGENT_TIMEOUT,
@@ -413,7 +413,7 @@ pub async fn restart_vm(client: &Client, vm_id: &str, old_pid: u32) -> Result<u3
 
 // Helper functions
 
-fn get_vm_workspace_path(vm_id: &str) -> Result<PathBuf> {
+fn get_vm_runtime_path(vm_id: &str) -> Result<PathBuf> {
     let runtime_dir = dirs::runtime_dir()
         .context("Cannot determine XDG_RUNTIME_DIR")?
         .join("nexus")
