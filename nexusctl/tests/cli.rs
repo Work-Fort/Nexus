@@ -115,6 +115,39 @@ async fn admin_cleanup_network() {
     assert!(stdout.contains("nftables flushed:"), "expected nftables line: {stdout}");
 }
 
+#[tokio::test]
+async fn vm_tag_management() {
+    let daemon = TestDaemon::start().await;
+
+    // Create VM
+    let output = Command::new(env!("CARGO_BIN_EXE_nexusctl"))
+        .args(["--daemon", &daemon.addr, "vm", "create", "tag-cli-test"])
+        .output().expect("failed to run nexusctl");
+    assert!(output.status.success());
+
+    // Add tag
+    let output = Command::new(env!("CARGO_BIN_EXE_nexusctl"))
+        .args(["--daemon", &daemon.addr, "vm", "tag", "add", "tag-cli-test", "sharkfin_user:cli-test"])
+        .output().expect("failed to run nexusctl");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "tag add failed: stdout={stdout}, stderr={stderr}");
+
+    // List tags
+    let output = Command::new(env!("CARGO_BIN_EXE_nexusctl"))
+        .args(["--daemon", &daemon.addr, "vm", "tag", "list", "tag-cli-test"])
+        .output().expect("failed to run nexusctl");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(stdout.contains("sharkfin_user:cli-test"));
+
+    // Remove tag
+    let output = Command::new(env!("CARGO_BIN_EXE_nexusctl"))
+        .args(["--daemon", &daemon.addr, "vm", "tag", "remove", "tag-cli-test", "sharkfin_user:cli-test"])
+        .output().expect("failed to run nexusctl");
+    assert!(output.status.success());
+}
+
 #[test]
 fn version_prints_version() {
     let output = Command::new(env!("CARGO_BIN_EXE_nexusctl"))

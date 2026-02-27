@@ -921,6 +921,77 @@ impl NexusClient {
 
         Ok(true)
     }
+
+    pub async fn add_vm_tag(&self, vm: &str, tag: &str) -> Result<(), ClientError> {
+        let url = format!("{}/v1/vms/{}/tags", self.base_url, vm);
+        let resp = self.http.post(&url)
+            .json(&serde_json::json!({"tag": tag}))
+            .send().await.map_err(|e| {
+                if e.is_connect() || e.is_timeout() {
+                    ClientError::Connect(e.to_string())
+                } else {
+                    ClientError::Api(e.to_string())
+                }
+            })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::NotFound(body["error"].as_str().unwrap_or("not found").to_string()));
+        }
+        if !status.is_success() {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("unknown error").to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub async fn list_vm_tags(&self, vm: &str) -> Result<Vec<String>, ClientError> {
+        let url = format!("{}/v1/vms/{}/tags", self.base_url, vm);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                ClientError::Connect(e.to_string())
+            } else {
+                ClientError::Api(e.to_string())
+            }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::NotFound(body["error"].as_str().unwrap_or("not found").to_string()));
+        }
+        if !status.is_success() {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("unknown error").to_string()));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn remove_vm_tag(&self, vm: &str, tag: &str) -> Result<(), ClientError> {
+        let url = format!("{}/v1/vms/{}/tags/{}", self.base_url, vm, tag);
+        let resp = self.http.delete(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                ClientError::Connect(e.to_string())
+            } else {
+                ClientError::Api(e.to_string())
+            }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::NotFound(body["error"].as_str().unwrap_or("not found").to_string()));
+        }
+        if !status.is_success() {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("unknown error").to_string()));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

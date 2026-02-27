@@ -254,6 +254,11 @@ enum VmAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Manage VM tags
+    Tag {
+        #[command(subcommand)]
+        action: TagAction,
+    },
     /// Add a provision file to inject into VM on start
     AddProvisionFile {
         /// VM name or ID
@@ -286,6 +291,29 @@ enum VmAction {
         /// Guest path to remove
         #[arg(long)]
         guest_path: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum TagAction {
+    /// Add a tag to a VM
+    Add {
+        /// VM name or ID
+        vm: String,
+        /// Tag to add (e.g., 'sharkfin_user:username')
+        tag: String,
+    },
+    /// List tags on a VM
+    List {
+        /// VM name or ID
+        vm: String,
+    },
+    /// Remove a tag from a VM
+    Remove {
+        /// VM name or ID
+        vm: String,
+        /// Tag to remove
+        tag: String,
     },
 }
 
@@ -855,6 +883,52 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                 Err(e) => {
                     eprintln!("Error: {e}");
                     ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        VmAction::Tag { action: tag_action } => {
+            match tag_action {
+                TagAction::Add { vm, tag } => {
+                    match client.add_vm_tag(&vm, &tag).await {
+                        Ok(()) => {
+                            println!("Added tag '{}' to VM '{}'", tag, vm);
+                            ExitCode::SUCCESS
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {e}");
+                            ExitCode::from(EXIT_GENERAL_ERROR)
+                        }
+                    }
+                }
+                TagAction::List { vm } => {
+                    match client.list_vm_tags(&vm).await {
+                        Ok(tags) => {
+                            if tags.is_empty() {
+                                println!("No tags on VM '{}'", vm);
+                            } else {
+                                for tag in &tags {
+                                    println!("{}", tag);
+                                }
+                            }
+                            ExitCode::SUCCESS
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {e}");
+                            ExitCode::from(EXIT_GENERAL_ERROR)
+                        }
+                    }
+                }
+                TagAction::Remove { vm, tag } => {
+                    match client.remove_vm_tag(&vm, &tag).await {
+                        Ok(()) => {
+                            println!("Removed tag '{}' from VM '{}'", tag, vm);
+                            ExitCode::SUCCESS
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {e}");
+                            ExitCode::from(EXIT_GENERAL_ERROR)
+                        }
+                    }
                 }
             }
         }
