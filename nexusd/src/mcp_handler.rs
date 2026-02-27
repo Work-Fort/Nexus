@@ -351,6 +351,50 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
                     },
                     "required": ["vm", "guest_path"]
                 }
+            },
+            // --- Image Tools ---
+            {
+                "name": "image_list",
+                "version": "1.0.0",
+                "description": "List all master images",
+                "inputSchema": {"type": "object", "properties": {}, "required": []}
+            },
+            {
+                "name": "image_import",
+                "version": "1.0.0",
+                "description": "Import a directory as a master image (btrfs subvolume)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Image name"},
+                        "source_path": {"type": "string", "description": "Path to directory to import"}
+                    },
+                    "required": ["name", "source_path"]
+                }
+            },
+            {
+                "name": "image_inspect",
+                "version": "1.0.0",
+                "description": "Get detailed information about a master image",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "image": {"type": "string", "description": "Image name or ID"}
+                    },
+                    "required": ["image"]
+                }
+            },
+            {
+                "name": "image_delete",
+                "version": "1.0.0",
+                "description": "Delete a master image (fails if drives reference it)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "image": {"type": "string", "description": "Image name or ID"}
+                    },
+                    "required": ["image"]
+                }
             }
         ]
     }))
@@ -783,7 +827,87 @@ async fn handle_management_tool(
             }
         }
 
-        // Image tools -- Task 4
+        // --- Image Tools ---
+        "image_list" => {
+            let svc = nexus_lib::drive_service::DriveService::new(
+                state.store.as_ref(),
+                state.backend.as_ref(),
+                state.drives_root.clone(),
+            );
+            let images = svc
+                .list_images()
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            Ok(mcp_text_response(&images))
+        }
+
+        "image_import" => {
+            let params = nexus_lib::drive::ImportImageParams {
+                name: require_str(arguments, "name")?.to_string(),
+                source_path: require_str(arguments, "source_path")?.to_string(),
+            };
+            let svc = nexus_lib::drive_service::DriveService::new(
+                state.store.as_ref(),
+                state.backend.as_ref(),
+                state.drives_root.clone(),
+            );
+            let img = svc.import_image(&params).map_err(|e| match &e {
+                nexus_lib::drive_service::DriveServiceError::Store(
+                    nexus_lib::store::traits::StoreError::InvalidInput(_),
+                ) => McpError::InvalidParams(e.to_string()),
+                nexus_lib::drive_service::DriveServiceError::Store(
+                    nexus_lib::store::traits::StoreError::Conflict(_),
+                ) => McpError::InvalidParams(e.to_string()),
+                _ => McpError::Internal(e.to_string()),
+            })?;
+            Ok(mcp_text_response(&img))
+        }
+
+        "image_inspect" => {
+            let name_or_id = require_str(arguments, "image")?;
+            let svc = nexus_lib::drive_service::DriveService::new(
+                state.store.as_ref(),
+                state.backend.as_ref(),
+                state.drives_root.clone(),
+            );
+            let img = svc
+                .get_image(name_or_id)
+                .map_err(|e| McpError::Internal(e.to_string()))?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("image '{}' not found", name_or_id))
+                })?;
+            Ok(mcp_text_response(&img))
+        }
+
+        "image_delete" => {
+            let name_or_id = require_str(arguments, "image")?;
+            let img = state
+                .store
+                .get_image(name_or_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("image '{}' not found", name_or_id))
+                })?;
+            // Delete subvolume from filesystem
+            let path = std::path::PathBuf::from(&img.subvolume_path);
+            if path.exists() {
+                state.backend.delete_subvolume(&path).map_err(|e| {
+                    McpError::Internal(format!("failed to delete subvolume: {}", e))
+                })?;
+            }
+            let deleted = state.store.delete_image(img.id).map_err(store_err)?;
+            if deleted {
+                Ok(mcp_message_response(&format!(
+                    "Image '{}' deleted",
+                    name_or_id
+                )))
+            } else {
+                Err(McpError::InvalidParams(format!(
+                    "image '{}' not found",
+                    name_or_id
+                )))
+            }
+        }
+
         // Drive tools -- Task 5
         // Kernel tools -- Task 6
         // Rootfs tools -- Task 7
