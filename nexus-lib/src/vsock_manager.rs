@@ -219,14 +219,14 @@ impl VsockManager {
         };
         self.connections.lock().await.insert(vm_id, connection);
 
-        // Update VM state to ready
+        // Update VM state to online
         let store = self.store.clone();
         tokio::task::spawn_blocking(move || {
             store.update_vm_state(vm_id, "online", Some("guest-agent connected"))
         })
         .await
         .context("task panicked")?
-        .context("failed to update VM state to ready")?;
+        .context("failed to update VM state to online")?;
 
         let store = self.store.clone();
         let timestamp = chrono::Utc::now().timestamp();
