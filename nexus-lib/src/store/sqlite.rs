@@ -6,7 +6,7 @@ use crate::asset::{
 use crate::drive::{Drive, ImportImageParams, MasterImage};
 use crate::id::Id;
 use crate::store::schema::{seed_default_providers, seed_default_settings, SCHEMA_SQL, SCHEMA_VERSION};
-use crate::store::traits::{AssetStore, Bridge, BuildStore, DbStatus, DriveStore, ImageStore, NetworkStore, SettingsStore, StateStore, StoreError, VmNetwork, VmStore};
+use crate::store::traits::{AssetStore, Bridge, BuildStore, DbStatus, DriveStore, ImageStore, NetworkStore, ProvisionStore, SettingsStore, StateStore, StoreError, VmNetwork, VmStore};
 use crate::template::{Build, BuildStatus, CreateTemplateParams, Template};
 use crate::vm::{CreateVmParams, Vm, VmState};
 use rusqlite::Connection;
@@ -1566,6 +1566,107 @@ impl NetworkStore for SqliteStore {
     }
 }
 
+impl ProvisionStore for SqliteStore {
+    fn add_provision_file(
+        &self,
+        vm_id: Id,
+        params: &crate::vm::AddProvisionFileParams,
+    ) -> Result<crate::vm::ProvisionFile, StoreError> {
+        let conn = self.conn.lock().unwrap();
+
+        // Validate source_type
+        let source_type: crate::vm::ProvisionSourceType = params.source_type.parse()
+            .map_err(|e: String| StoreError::InvalidInput(e))?;
+
+        // Validate encoding
+        if params.encoding != "text" && params.encoding != "base64" {
+            return Err(StoreError::InvalidInput(
+                format!("encoding must be 'text' or 'base64', got '{}'", params.encoding)
+            ));
+        }
+
+        conn.execute(
+            "INSERT INTO vm_provision_files (vm_id, guest_path, source_type, source, encoding, mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                vm_id.as_i64(),
+                params.guest_path,
+                source_type.as_str(),
+                params.source,
+                params.encoding,
+                params.mode,
+            ],
+        ).map_err(|e| {
+            if let rusqlite::Error::SqliteFailure(ref err, _) = e {
+                if err.code == rusqlite::ErrorCode::ConstraintViolation {
+                    return StoreError::Conflict(
+                        format!("provision file for guest path '{}' already exists on this VM", params.guest_path)
+                    );
+                }
+            }
+            StoreError::Query(e.to_string())
+        })?;
+
+        let id = conn.last_insert_rowid();
+        let pf = conn.query_row(
+            "SELECT id, vm_id, guest_path, source_type, source, encoding, mode, created_at FROM vm_provision_files WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(crate::vm::ProvisionFile {
+                    id: Id::from_i64(row.get::<_, i64>(0)?),
+                    vm_id: Id::from_i64(row.get::<_, i64>(1)?),
+                    guest_path: row.get(2)?,
+                    source_type: row.get::<_, String>(3)?
+                        .parse()
+                        .unwrap_or(crate::vm::ProvisionSourceType::Inline),
+                    source: row.get(4)?,
+                    encoding: row.get(5)?,
+                    mode: row.get(6)?,
+                    created_at: row.get(7)?,
+                })
+            },
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+
+        Ok(pf)
+    }
+
+    fn list_provision_files(&self, vm_id: Id) -> Result<Vec<crate::vm::ProvisionFile>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, vm_id, guest_path, source_type, source, encoding, mode, created_at FROM vm_provision_files WHERE vm_id = ?1 ORDER BY guest_path"
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+
+        let rows = stmt.query_map([vm_id.as_i64()], |row| {
+            Ok(crate::vm::ProvisionFile {
+                id: Id::from_i64(row.get::<_, i64>(0)?),
+                vm_id: Id::from_i64(row.get::<_, i64>(1)?),
+                guest_path: row.get(2)?,
+                source_type: row.get::<_, String>(3)?
+                    .parse()
+                    .unwrap_or(crate::vm::ProvisionSourceType::Inline),
+                source: row.get(4)?,
+                encoding: row.get(5)?,
+                mode: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        }).map_err(|e| StoreError::Query(e.to_string()))?;
+
+        let mut files = Vec::new();
+        for row in rows {
+            files.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
+        }
+        Ok(files)
+    }
+
+    fn remove_provision_file(&self, vm_id: Id, guest_path: &str) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn.execute(
+            "DELETE FROM vm_provision_files WHERE vm_id = ?1 AND guest_path = ?2",
+            rusqlite::params![vm_id.as_i64(), guest_path],
+        ).map_err(|e| StoreError::Query(e.to_string()))?;
+        Ok(affected > 0)
+    }
+}
+
 impl SettingsStore for SqliteStore {
     fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
         let conn = self.conn.lock().unwrap();
@@ -1932,10 +2033,10 @@ mod tests {
 
         let status = store.status().unwrap();
         // Expected tables: schema_meta, settings, tags, vms, master_images, drives,
-        // vm_boot_history, vm_state_history, routes, vsock_services, bridges, vm_network,
-        // firewall_rules, vm_tags, drive_tags, templates, builds, providers, kernels,
-        // rootfs_images, firecracker_versions = 21 tables
-        assert_eq!(status.table_count, 21, "expected 21 tables, got {}", status.table_count);
+        // vm_boot_history, vm_state_history, vm_provision_files, routes, vsock_services,
+        // bridges, vm_network, firewall_rules, vm_tags, drive_tags, templates, builds,
+        // providers, kernels, rootfs_images, firecracker_versions = 22 tables
+        assert_eq!(status.table_count, 22, "expected 22 tables, got {}", status.table_count);
     }
 
     #[test]
@@ -1949,7 +2050,7 @@ mod tests {
         store.init().unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 21);
+        assert_eq!(status.table_count, 22);
     }
 
     #[test]
@@ -2013,7 +2114,7 @@ mod tests {
         let store = SqliteStore::open_and_init(&db_path).unwrap();
 
         let status = store.status().unwrap();
-        assert_eq!(status.table_count, 21, "should have all tables after recreate");
+        assert_eq!(status.table_count, 22, "should have all tables after recreate");
 
         let conn = store.conn.lock().unwrap();
         let version: String = conn
@@ -3540,5 +3641,51 @@ mod tests {
         let result = store.validate_setting("dns_servers", "invalid-string");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("must be valid JSON or 'from-host'"));
+    }
+
+    #[test]
+    fn provision_file_crud() {
+        let store = test_store();
+        let vm = store.create_vm(&CreateVmParams {
+            name: "prov-test".to_string(),
+            role: VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        let params = crate::vm::AddProvisionFileParams {
+            guest_path: "/usr/local/bin/sharkfin".to_string(),
+            source_type: "host_path".to_string(),
+            source: "/opt/workfort/sharkfin".to_string(),
+            encoding: "base64".to_string(),
+            mode: Some("0755".to_string()),
+        };
+
+        // Add
+        let pf = store.add_provision_file(vm.id, &params).unwrap();
+        assert_eq!(pf.guest_path, "/usr/local/bin/sharkfin");
+        assert_eq!(pf.source_type, crate::vm::ProvisionSourceType::HostPath);
+        assert_eq!(pf.encoding, "base64");
+        assert_eq!(pf.mode, Some("0755".to_string()));
+
+        // List
+        let files = store.list_provision_files(vm.id).unwrap();
+        assert_eq!(files.len(), 1);
+
+        // Duplicate guest_path should fail
+        let dup = store.add_provision_file(vm.id, &params);
+        assert!(dup.is_err());
+
+        // Remove
+        let removed = store.remove_provision_file(vm.id, "/usr/local/bin/sharkfin").unwrap();
+        assert!(removed);
+
+        // Remove non-existent
+        let removed = store.remove_provision_file(vm.id, "/nonexistent").unwrap();
+        assert!(!removed);
+
+        // List after removal
+        let files = store.list_provision_files(vm.id).unwrap();
+        assert!(files.is_empty());
     }
 }
