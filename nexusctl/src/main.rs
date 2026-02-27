@@ -946,7 +946,7 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                 println!("  4. Wait for build completion");
                 println!("  5. Create drive from image");
                 println!("  6. Create VM \"{}\" (role: {}, vcpu: {}, mem: {}M)",
-                    name.as_ref().unwrap_or(&format!("vm-<timestamp>")), role, vcpu, mem);
+                    name.as_ref().unwrap_or(&"vm-<timestamp>".to_string()), role, vcpu, mem);
                 println!("  7. Attach drive to VM as root device");
                 println!("\nNo changes applied (dry run)");
                 return ExitCode::SUCCESS;
@@ -1142,7 +1142,7 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                 println!("  2. Wait for build completion");
                 println!("  3. Create drive from image");
                 println!("  4. Create VM \"{}\" (role: {}, vcpu: {}, mem: {}M)",
-                    name.as_ref().unwrap_or(&format!("vm-<timestamp>")), role, vcpu, mem);
+                    name.as_ref().unwrap_or(&"vm-<timestamp>".to_string()), role, vcpu, mem);
                 println!("  5. Attach drive to VM as root device");
                 println!("\nNo changes applied (dry run)");
                 return ExitCode::SUCCESS;
@@ -1276,7 +1276,7 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                 println!("Dry run - would execute:");
                 println!("  1. Create drive from image \"{}\"", image);
                 println!("  2. Create VM \"{}\" (role: {}, vcpu: {}, mem: {}M)",
-                    name.as_ref().unwrap_or(&format!("vm-<timestamp>")), role, vcpu, mem);
+                    name.as_ref().unwrap_or(&"vm-<timestamp>".to_string()), role, vcpu, mem);
                 println!("  3. Attach drive to VM as root device");
                 println!("\nNo changes applied (dry run)");
                 return ExitCode::SUCCESS;
