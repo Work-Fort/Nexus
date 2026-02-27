@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use axum::extract::State;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
@@ -68,7 +68,7 @@ pub async fn handle_mcp_request(
     let result = match method {
         "initialize" => handle_initialize(params).await.map_err(McpError::from),
         "tools/list" => handle_tools_list(params).await.map_err(McpError::from),
-        "tools/call" => handle_tools_call(params, state).await.map_err(McpError::from),
+        "tools/call" => handle_tools_call(params, state).await,
         _ => {
             let error = error_response(
                 id,
@@ -212,39 +212,55 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
     }))
 }
 
-async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> Result<Value> {
+async fn handle_tools_call(
+    params: Value,
+    state: Arc<crate::api::AppState>,
+) -> Result<Value, McpError> {
     let tool_name = params
         .get("name")
         .and_then(|n| n.as_str())
-        .ok_or_else(|| anyhow!("missing name parameter"))?;
+        .ok_or_else(|| McpError::InvalidParams("missing name parameter".to_string()))?;
 
     let arguments = params
         .get("arguments")
         .and_then(|a| a.as_object())
-        .ok_or_else(|| anyhow!("missing arguments parameter"))?;
+        .ok_or_else(|| McpError::InvalidParams("missing arguments parameter".to_string()))?;
 
-    // Extract VM parameter (required for all tools)
+    // Two-tier dispatch: guest tools require VM + vsock, management tools operate on AppState
+    match tool_name {
+        // Guest tools (require vm parameter + vsock connection)
+        "file_read" | "file_write" | "file_delete" | "run_command" => {
+            handle_guest_tool(tool_name, arguments, &state).await
+        }
+        // Management tools (host-side operations)
+        _ => handle_management_tool(tool_name, arguments, &state).await,
+    }
+}
+
+async fn handle_guest_tool(
+    tool_name: &str,
+    arguments: &serde_json::Map<String, Value>,
+    state: &Arc<crate::api::AppState>,
+) -> Result<Value, McpError> {
+    // Extract VM parameter (required for guest tools)
     let vm_id = arguments
         .get("vm")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("missing vm parameter"))?;
+        .ok_or_else(|| McpError::InvalidParams("missing vm parameter".to_string()))?;
 
-    // Get VM from database
-    let store = state.store.clone();
-    let vm_id_clone = vm_id.to_string();
-    let vm = tokio::task::spawn_blocking(move || store.get_vm(&vm_id_clone))
-        .await
-        .map_err(|e| anyhow!("task panicked: {}", e))?
-        .map_err(|e| anyhow!("database error: {}", e))?
-        .ok_or_else(|| anyhow!("VM {} not found", vm_id))?;
+    // Get VM from database (direct call, consistent with REST handlers)
+    let vm = state
+        .store
+        .get_vm(vm_id)
+        .map_err(|e| McpError::Internal(format!("database error: {}", e)))?
+        .ok_or_else(|| McpError::InvalidParams(format!("VM {} not found", vm_id)))?;
 
     // Check VM is ready
     if vm.state.to_string() != "ready" {
-        return Err(anyhow!(
+        return Err(McpError::InvalidParams(format!(
             "VM {} is in state '{}', expected 'ready'",
-            vm.name,
-            vm.state
-        ));
+            vm.name, vm.state
+        )));
     }
 
     // Get MCP connection to guest-agent
@@ -253,24 +269,26 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
         .vsock_manager
         .get_mcp_connection(vm.id, runtime_dir)
         .await
-        .map_err(|e| anyhow!("MCP connection failed: {}", e))?;
+        .map_err(|e| McpError::Internal(format!("MCP connection failed: {}", e)))?;
 
     let mcp_client = nexus_lib::mcp_client::McpClient::new(mcp_stream);
 
-    // Dispatch to tool handler
+    // Dispatch to guest tool handler
     match tool_name {
         "file_read" => {
             let path = arguments
                 .get("path")
                 .and_then(|p| p.as_str())
-                .ok_or_else(|| anyhow!("missing path parameter"))?;
+                .ok_or_else(|| {
+                    McpError::InvalidParams("missing path parameter".to_string())
+                })?;
             let encoding = arguments.get("encoding").and_then(|e| e.as_str());
 
             if let Some(enc) = encoding {
                 let result = mcp_client
                     .file_read_encoded(path, enc)
                     .await
-                    .map_err(|e| anyhow!("file_read error: {}", e))?;
+                    .map_err(|e| McpError::Internal(format!("file_read error: {}", e)))?;
 
                 Ok(json!({
                     "content": [
@@ -284,7 +302,7 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
                 let content = mcp_client
                     .file_read(path)
                     .await
-                    .map_err(|e| anyhow!("file_read error: {}", e))?;
+                    .map_err(|e| McpError::Internal(format!("file_read error: {}", e)))?;
 
                 Ok(json!({
                     "content": [
@@ -300,11 +318,15 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
             let path = arguments
                 .get("path")
                 .and_then(|p| p.as_str())
-                .ok_or_else(|| anyhow!("missing path parameter"))?;
+                .ok_or_else(|| {
+                    McpError::InvalidParams("missing path parameter".to_string())
+                })?;
             let content = arguments
                 .get("content")
                 .and_then(|c| c.as_str())
-                .ok_or_else(|| anyhow!("missing content parameter"))?;
+                .ok_or_else(|| {
+                    McpError::InvalidParams("missing content parameter".to_string())
+                })?;
             let encoding = arguments.get("encoding").and_then(|e| e.as_str());
             let mode = arguments.get("mode").and_then(|m| m.as_str());
 
@@ -312,12 +334,12 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
                 mcp_client
                     .file_write_encoded(path, content, encoding.unwrap_or("text"), mode)
                     .await
-                    .map_err(|e| anyhow!("file_write error: {}", e))?
+                    .map_err(|e| McpError::Internal(format!("file_write error: {}", e)))?
             } else {
                 mcp_client
                     .file_write(path, content)
                     .await
-                    .map_err(|e| anyhow!("file_write error: {}", e))?
+                    .map_err(|e| McpError::Internal(format!("file_write error: {}", e)))?
             };
 
             Ok(json!({
@@ -333,12 +355,14 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
             let path = arguments
                 .get("path")
                 .and_then(|p| p.as_str())
-                .ok_or_else(|| anyhow!("missing path parameter"))?;
+                .ok_or_else(|| {
+                    McpError::InvalidParams("missing path parameter".to_string())
+                })?;
 
             mcp_client
                 .file_delete(path)
                 .await
-                .map_err(|e| anyhow!("file_delete error: {}", e))?;
+                .map_err(|e| McpError::Internal(format!("file_delete error: {}", e)))?;
 
             Ok(json!({
                 "content": [
@@ -353,7 +377,9 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
             let command = arguments
                 .get("command")
                 .and_then(|c| c.as_str())
-                .ok_or_else(|| anyhow!("missing command parameter"))?;
+                .ok_or_else(|| {
+                    McpError::InvalidParams("missing command parameter".to_string())
+                })?;
             let args: Vec<String> = arguments
                 .get("args")
                 .and_then(|a| a.as_array())
@@ -370,7 +396,7 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
                     output.push_str(&chunk);
                 })
                 .await
-                .map_err(|e| anyhow!("run_command error: {}", e))?;
+                .map_err(|e| McpError::Internal(format!("run_command error: {}", e)))?;
 
             // Return exit code in meta, not isError (MCP compliance)
             Ok(json!({
@@ -385,7 +411,78 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
                 }
             }))
         }
-        _ => Err(anyhow!("Unknown tool: {}", tool_name)),
+        _ => Err(McpError::Internal(format!(
+            "Unknown guest tool: {}",
+            tool_name
+        ))),
+    }
+}
+
+async fn handle_management_tool(
+    tool_name: &str,
+    _arguments: &serde_json::Map<String, Value>,
+    _state: &Arc<crate::api::AppState>,
+) -> Result<Value, McpError> {
+    match tool_name {
+        // VM lifecycle tools -- Task 2
+        // VM provisioning tools -- Task 3
+        // Image tools -- Task 4
+        // Drive tools -- Task 5
+        // Kernel tools -- Task 6
+        // Rootfs tools -- Task 7
+        // Firecracker tools -- Task 8
+        // Template tools -- Task 9
+        // Build tools -- Task 10
+        // Settings tools -- Task 11
+        // Admin tools -- Task 12
+        _ => Err(McpError::InvalidParams(format!(
+            "Unknown tool: {}",
+            tool_name
+        ))),
+    }
+}
+
+/// Format a serializable value as an MCP tool response.
+fn mcp_text_response<T: serde::Serialize>(value: &T) -> Value {
+    let text = serde_json::to_string_pretty(value)
+        .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e));
+    json!({
+        "content": [{"type": "text", "text": text}]
+    })
+}
+
+/// Format a plain text message as an MCP tool response.
+fn mcp_message_response(msg: &str) -> Value {
+    json!({
+        "content": [{"type": "text", "text": msg}]
+    })
+}
+
+/// Extract a required string parameter from MCP arguments.
+fn require_str<'a>(
+    args: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<&'a str, McpError> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::InvalidParams(format!("missing required parameter: {}", key)))
+}
+
+/// Extract an optional string parameter from MCP arguments.
+fn optional_str<'a>(args: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
+    args.get(key).and_then(|v| v.as_str())
+}
+
+/// Map a StoreError to an McpError.
+fn store_err(e: nexus_lib::store::traits::StoreError) -> McpError {
+    match &e {
+        nexus_lib::store::traits::StoreError::InvalidInput(_) => {
+            McpError::InvalidParams(e.to_string())
+        }
+        nexus_lib::store::traits::StoreError::Conflict(_) => {
+            McpError::InvalidParams(e.to_string())
+        }
+        _ => McpError::Internal(e.to_string()),
     }
 }
 
