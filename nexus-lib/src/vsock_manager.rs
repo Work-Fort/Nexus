@@ -370,12 +370,15 @@ impl VsockManager {
     /// Run post-boot provisioning for a VM.
     ///
     /// Transitions: online → provisioning → ready
-    /// Provisioning steps: DNS configuration via MCP file_write.
+    /// Provisioning steps:
+    /// 1. DNS configuration via MCP file_write
+    /// 2. Provision files (binaries, credentials, config) via MCP file_write/file_write_encoded
     pub async fn provision_vm(
         &self,
         vm_id: crate::id::Id,
         runtime_dir: PathBuf,
         resolv_conf: Option<String>,
+        provision_files: Vec<crate::vm::ProvisionFile>,
     ) -> Result<()> {
         // Transition to provisioning
         let store = self.store.clone();
@@ -402,6 +405,65 @@ impl VsockManager {
                 }
                 Err(e) => {
                     warn!("Failed to get MCP connection for VM {} provisioning: {}", vm_id, e);
+                }
+            }
+        }
+
+        // Provisioning step 2: Inject provision files
+        for pf in &provision_files {
+            match self.get_mcp_connection(vm_id, runtime_dir.clone()).await {
+                Ok(stream) => {
+                    let mcp_client = crate::mcp_client::McpClient::new(stream);
+                    let content = match pf.source_type {
+                        crate::vm::ProvisionSourceType::HostPath => {
+                            // Read file from host filesystem
+                            match tokio::fs::read(&pf.source).await {
+                                Ok(bytes) => {
+                                    if pf.encoding == "base64" {
+                                        data_encoding::BASE64.encode(&bytes)
+                                    } else {
+                                        match String::from_utf8(bytes) {
+                                            Ok(s) => s,
+                                            Err(e) => {
+                                                warn!("Provision file {} is not valid UTF-8 (use base64 encoding): {}", pf.guest_path, e);
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to read provision file {}: {}", pf.source, e);
+                                    continue;
+                                }
+                            }
+                        }
+                        crate::vm::ProvisionSourceType::Inline => {
+                            pf.source.clone()
+                        }
+                    };
+
+                    let result = if pf.encoding == "base64" || pf.mode.is_some() {
+                        mcp_client.file_write_encoded(
+                            &pf.guest_path,
+                            &content,
+                            &pf.encoding,
+                            pf.mode.as_deref(),
+                        ).await
+                    } else {
+                        mcp_client.file_write(&pf.guest_path, &content).await
+                    };
+
+                    match result {
+                        Ok(written) => {
+                            info!("Provisioned {} ({} bytes) for VM {}", pf.guest_path, written, vm_id);
+                        }
+                        Err(e) => {
+                            warn!("Failed to provision {} for VM {}: {}", pf.guest_path, vm_id, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to get MCP connection for provisioning {}: {}", pf.guest_path, e);
                 }
             }
         }
