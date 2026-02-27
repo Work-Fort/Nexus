@@ -243,3 +243,36 @@ async fn create_vm_rejects_base32_name() {
         "Expected error message about base32 ID, got: {}", error_msg
     );
 }
+
+#[tokio::test]
+async fn vm_tags_crud() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    // Create a VM
+    let resp = client.post(format!("http://{}/v1/vms", daemon.addr))
+        .json(&serde_json::json!({"name": "tag-vm", "role": "work"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Add tag
+    let resp = client.post(format!("http://{}/v1/vms/tag-vm/tags", daemon.addr))
+        .json(&serde_json::json!({"tag": "sharkfin_user:test-lead"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // List tags
+    let resp = client.get(format!("http://{}/v1/vms/tag-vm/tags", daemon.addr))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body, serde_json::json!(["sharkfin_user:test-lead"]));
+
+    // Delete tag
+    let resp = client.delete(format!("http://{}/v1/vms/tag-vm/tags/sharkfin_user:test-lead", daemon.addr))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+}

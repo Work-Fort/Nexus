@@ -1439,6 +1439,56 @@ struct UpdateSettingRequest {
     value: String,
 }
 
+async fn add_vm_tag_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "VM not found"}))),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+    };
+    let tag = match body["tag"].as_str() {
+        Some(t) => t,
+        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing 'tag' field"}))),
+    };
+    match state.store.add_vm_tag(vm.id, tag) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+    }
+}
+
+async fn list_vm_tags_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "VM not found"}))),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+    };
+    match state.store.list_vm_tags(vm.id) {
+        Ok(tags) => (StatusCode::OK, Json(serde_json::to_value(tags).unwrap())),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+    }
+}
+
+async fn remove_vm_tag_handler(
+    State(state): State<Arc<AppState>>,
+    Path((name_or_id, tag)): Path<(String, String)>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "VM not found"}))),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+    };
+    match state.store.remove_vm_tag(vm.id, &tag) {
+        Ok(_) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+    }
+}
+
 async fn add_provision_file_handler(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
@@ -1541,6 +1591,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/vms/{name_or_id}/stop", post(stop_vm_handler))
         .route("/v1/vms/{name_or_id}/logs", get(vm_logs_handler))
         .route("/v1/vms/{name_or_id}/history", get(vm_history_handler))
+        .route("/v1/vms/{name_or_id}/tags", post(add_vm_tag_handler).get(list_vm_tags_handler))
+        .route("/v1/vms/{name_or_id}/tags/{tag}", delete(remove_vm_tag_handler))
         .route("/v1/vms/{name_or_id}/provision-files", post(add_provision_file_handler).get(list_provision_files_handler))
         .route("/v1/vms/{name_or_id}/provision-files/remove", post(remove_provision_file_handler))
         .route("/v1/images", post(import_image).get(list_images))
