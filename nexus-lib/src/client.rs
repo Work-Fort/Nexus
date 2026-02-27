@@ -824,6 +824,86 @@ impl NexusClient {
         let settings: Vec<SettingResponse> = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
         Ok(settings.into_iter().map(|s| (s.key, s.value, s.value_type)).collect())
     }
+
+    pub async fn add_provision_file(
+        &self,
+        vm_name_or_id: &str,
+        params: &crate::vm::AddProvisionFileParams,
+    ) -> Result<crate::vm::ProvisionFile, ClientError> {
+        let url = format!("{}/v1/vms/{}/provision-files", self.base_url, vm_name_or_id);
+        let resp = self.http.post(&url).json(params).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                ClientError::Connect(e.to_string())
+            } else {
+                ClientError::Api(e.to_string())
+            }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::NotFound(body["error"].as_str().unwrap_or("not found").to_string()));
+        }
+        if !status.is_success() {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("unknown error").to_string()));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn list_provision_files(
+        &self,
+        vm_name_or_id: &str,
+    ) -> Result<Vec<crate::vm::ProvisionFile>, ClientError> {
+        let url = format!("{}/v1/vms/{}/provision-files", self.base_url, vm_name_or_id);
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                ClientError::Connect(e.to_string())
+            } else {
+                ClientError::Api(e.to_string())
+            }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::NotFound(body["error"].as_str().unwrap_or("not found").to_string()));
+        }
+        if !status.is_success() {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("unknown error").to_string()));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
+    pub async fn remove_provision_file(
+        &self,
+        vm_name_or_id: &str,
+        guest_path: &str,
+    ) -> Result<bool, ClientError> {
+        let url = format!("{}/v1/vms/{}/provision-files/remove", self.base_url, vm_name_or_id);
+        let body = serde_json::json!({ "guest_path": guest_path });
+        let resp = self.http.post(&url).json(&body).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() {
+                ClientError::Connect(e.to_string())
+            } else {
+                ClientError::Api(e.to_string())
+            }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        if !status.is_success() {
+            let body: serde_json::Value = resp.json().await.map_err(|e| ClientError::Api(e.to_string()))?;
+            return Err(ClientError::Api(body["error"].as_str().unwrap_or("unknown error").to_string()));
+        }
+
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
