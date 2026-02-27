@@ -395,6 +395,83 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
                     },
                     "required": ["image"]
                 }
+            },
+            // --- Drive Tools ---
+            {
+                "name": "drive_list",
+                "version": "1.0.0",
+                "description": "List all drives, optionally filtered by base image",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "base": {"type": "string", "description": "Filter by master image name"}
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "drive_create",
+                "version": "1.0.0",
+                "description": "Create a drive by snapshotting a master image",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "base": {"type": "string", "description": "Master image name to snapshot from"},
+                        "name": {"type": "string", "description": "Drive name (optional, auto-generated if omitted)"},
+                        "size": {"type": "integer", "description": "Drive size in bytes (optional, defaults to image size)"}
+                    },
+                    "required": ["base"]
+                }
+            },
+            {
+                "name": "drive_inspect",
+                "version": "1.0.0",
+                "description": "Get detailed information about a drive",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "drive": {"type": "string", "description": "Drive name or ID"}
+                    },
+                    "required": ["drive"]
+                }
+            },
+            {
+                "name": "drive_delete",
+                "version": "1.0.0",
+                "description": "Delete a drive (must not be attached to a VM)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "drive": {"type": "string", "description": "Drive name or ID"}
+                    },
+                    "required": ["drive"]
+                }
+            },
+            {
+                "name": "drive_attach",
+                "version": "1.0.0",
+                "description": "Attach a drive to a VM",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "drive": {"type": "string", "description": "Drive name or ID"},
+                        "vm": {"type": "string", "description": "VM name or ID"},
+                        "is_root_device": {"type": "boolean", "description": "Whether this is the root device (default: false)"}
+                    },
+                    "required": ["drive", "vm"]
+                }
+            },
+            {
+                "name": "drive_detach",
+                "version": "1.0.0",
+                "description": "Detach a drive from its VM",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "drive": {"type": "string", "description": "Drive name or ID"}
+                    },
+                    "required": ["drive"]
+                }
             }
         ]
     }))
@@ -908,7 +985,127 @@ async fn handle_management_tool(
             }
         }
 
-        // Drive tools -- Task 5
+        // --- Drive Tools ---
+        "drive_list" => {
+            let base = optional_str(arguments, "base");
+            let svc = nexus_lib::drive_service::DriveService::new(
+                state.store.as_ref(),
+                state.backend.as_ref(),
+                state.drives_root.clone(),
+            );
+            let drives = svc
+                .list_drives(base)
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            Ok(mcp_text_response(&drives))
+        }
+
+        "drive_create" => {
+            let base = require_str(arguments, "base")?;
+            let name = optional_str(arguments, "name");
+            let size = arguments.get("size").and_then(|v| v.as_u64());
+            let svc = nexus_lib::drive_service::DriveService::new(
+                state.store.as_ref(),
+                state.backend.as_ref(),
+                state.drives_root.clone(),
+            );
+            let drive = svc.create_drive(base, name, size).map_err(|e| match &e {
+                nexus_lib::drive_service::DriveServiceError::NotFound(_) => {
+                    McpError::InvalidParams(e.to_string())
+                }
+                nexus_lib::drive_service::DriveServiceError::Store(
+                    nexus_lib::store::traits::StoreError::InvalidInput(_),
+                ) => McpError::InvalidParams(e.to_string()),
+                _ => McpError::Internal(e.to_string()),
+            })?;
+            Ok(mcp_text_response(&drive))
+        }
+
+        "drive_inspect" => {
+            let name_or_id = require_str(arguments, "drive")?;
+            let svc = nexus_lib::drive_service::DriveService::new(
+                state.store.as_ref(),
+                state.backend.as_ref(),
+                state.drives_root.clone(),
+            );
+            let drive = svc
+                .get_drive(name_or_id)
+                .map_err(|e| McpError::Internal(e.to_string()))?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("drive '{}' not found", name_or_id))
+                })?;
+            Ok(mcp_text_response(&drive))
+        }
+
+        "drive_delete" => {
+            let name_or_id = require_str(arguments, "drive")?;
+            let drive = state
+                .store
+                .get_drive(name_or_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("drive '{}' not found", name_or_id))
+                })?;
+            let path = std::path::PathBuf::from(&drive.subvolume_path);
+            if path.exists() {
+                state.backend.delete_subvolume(&path).map_err(|e| {
+                    McpError::Internal(format!("failed to delete subvolume: {}", e))
+                })?;
+            }
+            let deleted = state.store.delete_drive(drive.id).map_err(store_err)?;
+            if deleted {
+                Ok(mcp_message_response(&format!(
+                    "Drive '{}' deleted",
+                    name_or_id
+                )))
+            } else {
+                Err(McpError::InvalidParams(format!(
+                    "drive '{}' not found",
+                    name_or_id
+                )))
+            }
+        }
+
+        "drive_attach" => {
+            let drive_id = require_str(arguments, "drive")?;
+            let vm_id = require_str(arguments, "vm")?;
+            let is_root = arguments
+                .get("is_root_device")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let drive = state
+                .store
+                .get_drive(drive_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("drive '{}' not found", drive_id))
+                })?;
+            let vm = state
+                .store
+                .get_vm(vm_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("VM '{}' not found", vm_id))
+                })?;
+            let attached = state
+                .store
+                .attach_drive(drive.id, vm.id, is_root)
+                .map_err(store_err)?;
+            Ok(mcp_text_response(&attached))
+        }
+
+        "drive_detach" => {
+            let name_or_id = require_str(arguments, "drive")?;
+            let drive = state
+                .store
+                .get_drive(name_or_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("drive '{}' not found", name_or_id))
+                })?;
+            let detached = state.store.detach_drive(drive.id).map_err(store_err)?;
+            Ok(mcp_text_response(&detached))
+        }
+
         // Kernel tools -- Task 6
         // Rootfs tools -- Task 7
         // Firecracker tools -- Task 8
