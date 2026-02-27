@@ -1719,6 +1719,13 @@ mod tests {
         fn validate_setting(&self, _key: &str, _value: &str) -> Result<(), StoreError> { unimplemented!() }
     }
 
+    impl nexus_lib::store::traits::TagStore for MockStore {
+        fn add_vm_tag(&self, _vm_id: nexus_lib::id::Id, _tag: &str) -> Result<(), StoreError> { unimplemented!() }
+        fn list_vm_tags(&self, _vm_id: nexus_lib::id::Id) -> Result<Vec<String>, StoreError> { unimplemented!() }
+        fn list_vms_by_tag(&self, _tag: &str) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
+        fn remove_vm_tag(&self, _vm_id: nexus_lib::id::Id, _tag: &str) -> Result<bool, StoreError> { unimplemented!() }
+    }
+
     impl StateStore for MockStore {
         fn init(&self) -> Result<(), StoreError> { Ok(()) }
         fn status(&self) -> Result<DbStatus, StoreError> {
@@ -1860,6 +1867,13 @@ mod tests {
         fn rollback_setting(&self, _key: &str, _version: i64) -> Result<(), StoreError> { unimplemented!() }
         fn list_settings(&self) -> Result<Vec<(String, String, String)>, StoreError> { Ok(vec![]) }
         fn validate_setting(&self, _key: &str, _value: &str) -> Result<(), StoreError> { unimplemented!() }
+    }
+
+    impl nexus_lib::store::traits::TagStore for FailingStore {
+        fn add_vm_tag(&self, _vm_id: nexus_lib::id::Id, _tag: &str) -> Result<(), StoreError> { unimplemented!() }
+        fn list_vm_tags(&self, _vm_id: nexus_lib::id::Id) -> Result<Vec<String>, StoreError> { unimplemented!() }
+        fn list_vms_by_tag(&self, _tag: &str) -> Result<Vec<Vm>, StoreError> { unimplemented!() }
+        fn remove_vm_tag(&self, _vm_id: nexus_lib::id::Id, _tag: &str) -> Result<bool, StoreError> { unimplemented!() }
     }
 
     impl StateStore for FailingStore {

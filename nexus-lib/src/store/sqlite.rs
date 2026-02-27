@@ -6,7 +6,7 @@ use crate::asset::{
 use crate::drive::{Drive, ImportImageParams, MasterImage};
 use crate::id::Id;
 use crate::store::schema::{seed_default_providers, seed_default_settings, SCHEMA_SQL, SCHEMA_VERSION};
-use crate::store::traits::{AssetStore, Bridge, BuildStore, DbStatus, DriveStore, ImageStore, NetworkStore, ProvisionStore, SettingsStore, StateStore, StoreError, VmNetwork, VmStore};
+use crate::store::traits::{AssetStore, Bridge, BuildStore, DbStatus, DriveStore, ImageStore, NetworkStore, ProvisionStore, SettingsStore, StateStore, StoreError, TagStore, VmNetwork, VmStore};
 use crate::template::{Build, BuildStatus, CreateTemplateParams, Template};
 use crate::vm::{CreateVmParams, Vm, VmState};
 use rusqlite::Connection;
@@ -1664,6 +1664,63 @@ impl ProvisionStore for SqliteStore {
             rusqlite::params![vm_id.as_i64(), guest_path],
         ).map_err(|e| StoreError::Query(e.to_string()))?;
         Ok(affected > 0)
+    }
+}
+
+impl TagStore for SqliteStore {
+    fn add_vm_tag(&self, vm_id: Id, tag: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        // Ensure tag exists in tags table (upsert)
+        conn.execute(
+            "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
+            rusqlite::params![tag],
+        ).map_err(|e| StoreError::Query(format!("cannot insert tag: {e}")))?;
+        // Add vm_tags entry
+        conn.execute(
+            "INSERT OR IGNORE INTO vm_tags (vm_id, tag_name) VALUES (?1, ?2)",
+            rusqlite::params![vm_id.as_i64(), tag],
+        ).map_err(|e| StoreError::Query(format!("cannot insert vm_tag: {e}")))?;
+        Ok(())
+    }
+
+    fn list_vm_tags(&self, vm_id: Id) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT tag_name FROM vm_tags WHERE vm_id = ?1 ORDER BY tag_name"
+        ).map_err(|e| StoreError::Query(format!("cannot prepare list_vm_tags: {e}")))?;
+        let tags = stmt.query_map(rusqlite::params![vm_id.as_i64()], |row| {
+            row.get::<_, String>(0)
+        }).map_err(|e| StoreError::Query(format!("cannot list vm tags: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Query(format!("cannot read tag row: {e}")))?;
+        Ok(tags)
+    }
+
+    fn list_vms_by_tag(&self, tag: &str) -> Result<Vec<crate::vm::Vm>, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT v.id, v.name, v.role, v.state, v.cid, v.vcpu_count, v.mem_size_mib, \
+             v.created_at, v.updated_at, v.started_at, v.stopped_at, v.pid, \
+             v.socket_path, v.uds_path, v.console_log_path, v.config_json, v.agent_connected_at \
+             FROM vms v \
+             INNER JOIN vm_tags vt ON v.id = vt.vm_id \
+             WHERE vt.tag_name = ?1"
+        ).map_err(|e| StoreError::Query(format!("cannot prepare list_vms_by_tag: {e}")))?;
+        let vms = stmt.query_map(rusqlite::params![tag], |row| {
+            Ok(row_to_vm(row))
+        }).map_err(|e| StoreError::Query(format!("cannot list VMs by tag: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Query(format!("cannot read VM row: {e}")))?;
+        Ok(vms)
+    }
+
+    fn remove_vm_tag(&self, vm_id: Id, tag: &str) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "DELETE FROM vm_tags WHERE vm_id = ?1 AND tag_name = ?2",
+            rusqlite::params![vm_id.as_i64(), tag],
+        ).map_err(|e| StoreError::Query(format!("cannot remove vm_tag: {e}")))?;
+        Ok(rows > 0)
     }
 }
 
@@ -3687,5 +3744,33 @@ mod tests {
         // List after removal
         let files = store.list_provision_files(vm.id).unwrap();
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn vm_tags_crud() {
+        let store = test_store();
+        let vm = store.create_vm(&crate::vm::CreateVmParams {
+            name: "tag-test".to_string(),
+            role: crate::vm::VmRole::Work,
+            vcpu_count: 1,
+            mem_size_mib: 128,
+        }).unwrap();
+
+        // Add tag
+        store.add_vm_tag(vm.id, "sharkfin_user:test-user").unwrap();
+
+        // List tags
+        let tags = store.list_vm_tags(vm.id).unwrap();
+        assert_eq!(tags, vec!["sharkfin_user:test-user"]);
+
+        // Find VM by tag
+        let vms = store.list_vms_by_tag("sharkfin_user:test-user").unwrap();
+        assert_eq!(vms.len(), 1);
+        assert_eq!(vms[0].name, "tag-test");
+
+        // Remove tag
+        store.remove_vm_tag(vm.id, "sharkfin_user:test-user").unwrap();
+        let tags = store.list_vm_tags(vm.id).unwrap();
+        assert!(tags.is_empty());
     }
 }

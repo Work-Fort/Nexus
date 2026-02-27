@@ -352,12 +352,27 @@ pub trait SettingsStore {
     fn validate_setting(&self, key: &str, value: &str) -> Result<(), StoreError>;
 }
 
+/// VM tag management.
+pub trait TagStore {
+    /// Add a tag to a VM. If the tag doesn't exist in the tags table, it is created.
+    fn add_vm_tag(&self, vm_id: Id, tag: &str) -> Result<(), StoreError>;
+
+    /// List all tags for a VM, ordered alphabetically.
+    fn list_vm_tags(&self, vm_id: Id) -> Result<Vec<String>, StoreError>;
+
+    /// List all VMs that have the given tag.
+    fn list_vms_by_tag(&self, tag: &str) -> Result<Vec<crate::vm::Vm>, StoreError>;
+
+    /// Remove a tag from a VM. Returns true if the tag was removed.
+    fn remove_vm_tag(&self, vm_id: Id, tag: &str) -> Result<bool, StoreError>;
+}
+
 /// Convenience super-trait for code that needs the full store.
 ///
 /// All state persistence goes through this trait. The pre-alpha
 /// implementation is SQLite; this trait exists so the backend can
 /// be swapped to Postgres or etcd for clustering later.
-pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStore + NetworkStore + SettingsStore + ProvisionStore {
+pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStore + NetworkStore + SettingsStore + ProvisionStore + TagStore {
     /// Initialize the store (create schema if needed, run migrations).
     fn init(&self) -> Result<(), StoreError>;
 
