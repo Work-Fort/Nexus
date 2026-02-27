@@ -30,8 +30,12 @@ async fn main() -> Result<()> {
     // Start vsock control server (port 100)
     let control_task = tokio::spawn(vsock::run_vsock_server(metadata));
 
+    // Capture shell environment from login profile
+    let env_vars = std::sync::Arc::new(env::capture_login_env());
+    info!("captured environment: PATH={}", env_vars.get("PATH").unwrap_or(&"(not set)".to_string()));
+
     // Start MCP server (port 200)
-    let mcp_task = tokio::spawn(mcp::run_mcp_server());
+    let mcp_task = tokio::spawn(mcp::run_mcp_server(env_vars));
 
     // Wait for shutdown signal
     tokio::select! {

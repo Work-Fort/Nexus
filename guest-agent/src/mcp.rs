@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use nexus_protocol::jsonrpc::{self, Request, Response, Notification, RequestId};
 use serde_json::Value;
@@ -11,7 +14,7 @@ use tracing::{info, warn, error};
 const MCP_PORT: u32 = 200;
 
 /// Start MCP JSON-RPC server on port 200
-pub async fn run_mcp_server() -> Result<()> {
+pub async fn run_mcp_server(env_vars: Arc<HashMap<String, String>>) -> Result<()> {
     let addr = VsockAddr::new(VMADDR_CID_ANY, MCP_PORT);
     let listener = VsockListener::bind(addr)
         .with_context(|| format!("failed to bind MCP listener on port {}", MCP_PORT))?;
@@ -22,7 +25,8 @@ pub async fn run_mcp_server() -> Result<()> {
         match listener.accept().await {
             Ok((stream, peer)) => {
                 info!("MCP connection from {:?}", peer);
-                tokio::spawn(handle_mcp_connection(stream));
+                let env = Arc::clone(&env_vars);
+                tokio::spawn(handle_mcp_connection(stream, env));
             }
             Err(e) => {
                 error!("failed to accept MCP connection: {}", e);
@@ -31,13 +35,13 @@ pub async fn run_mcp_server() -> Result<()> {
     }
 }
 
-async fn handle_mcp_connection(stream: VsockStream) {
-    if let Err(e) = handle_mcp_connection_inner(stream).await {
+async fn handle_mcp_connection(stream: VsockStream, env_vars: Arc<HashMap<String, String>>) {
+    if let Err(e) = handle_mcp_connection_inner(stream, env_vars).await {
         error!("MCP connection error: {}", e);
     }
 }
 
-async fn handle_mcp_connection_inner(stream: VsockStream) -> Result<()> {
+async fn handle_mcp_connection_inner(stream: VsockStream, env_vars: Arc<HashMap<String, String>>) -> Result<()> {
     let (read_half, mut write_half) = tokio::io::split(stream);
     let mut reader = BufReader::new(read_half);
     let mut line = String::new();
@@ -90,7 +94,7 @@ async fn handle_mcp_connection_inner(stream: VsockStream) -> Result<()> {
             }
             "run_command" => {
                 // run_command handles its own response (streaming)
-                handle_run_command(request_id, request.params, &mut write_half).await;
+                handle_run_command(request_id, request.params, &mut write_half, &env_vars).await;
                 continue; // Don't send response here
             }
             _ => {
@@ -264,8 +268,9 @@ async fn handle_run_command<W: AsyncWriteExt + Unpin + Send + 'static>(
     request_id: Option<RequestId>,
     params: Option<Value>,
     writer: &mut W,
+    env_vars: &HashMap<String, String>,
 ) {
-    let result = handle_run_command_inner(request_id.clone(), params, writer).await;
+    let result = handle_run_command_inner(request_id.clone(), params, writer, env_vars).await;
 
     let response = match result {
         Ok(result_value) => {
@@ -288,6 +293,7 @@ async fn handle_run_command_inner<W: AsyncWriteExt + Unpin + Send + 'static>(
     request_id: Option<RequestId>,
     params: Option<Value>,
     writer: &mut W,
+    env_vars: &HashMap<String, String>,
 ) -> Result<Value> {
     let params = params.context("missing params for run_command")?;
 
@@ -307,6 +313,8 @@ async fn handle_run_command_inner<W: AsyncWriteExt + Unpin + Send + 'static>(
 
     let mut child = Command::new(command)
         .args(&args)
+        .env_clear()
+        .envs(env_vars.iter())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
