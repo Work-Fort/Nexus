@@ -345,6 +345,38 @@ enum DriveAction {
         /// Drive name or ID
         name: String,
     },
+
+    /// Create drive from rootfs (downloads, builds, creates drive)
+    FromRootfs {
+        /// Distribution name (e.g., alpine)
+        distro: String,
+        /// Distribution version (e.g., 3.21)
+        version: String,
+        /// Drive name (auto-generated if omitted)
+        #[arg(long)]
+        name: Option<String>,
+        /// File overlay: path=content (can be repeated)
+        #[arg(long = "overlay", value_name = "PATH=CONTENT")]
+        overlays: Vec<String>,
+    },
+
+    /// Create drive from template (builds, creates drive)
+    FromTemplate {
+        /// Template name
+        template: String,
+        /// Drive name (auto-generated if omitted)
+        #[arg(long)]
+        name: Option<String>,
+    },
+
+    /// Create drive from image
+    FromImage {
+        /// Image name or ID
+        image: String,
+        /// Drive name (auto-generated if omitted)
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1540,6 +1572,233 @@ async fn cmd_drive(daemon_addr: &str, action: DriveAction) -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("Error: cannot detach drive \"{name}\"\n  {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+
+        DriveAction::FromRootfs { distro, version, name, overlays } => {
+            eprintln!("Downloading rootfs {} {}...", distro, version);
+
+            // Step 1: Download rootfs
+            let _rootfs = match client.download_rootfs(&distro, &version).await {
+                Ok(r) => {
+                    eprintln!("Downloaded rootfs {}-{}", r.distro, r.version);
+                    r
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot download rootfs {} {}\n  {}", distro, version, e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 2: Create ephemeral template
+            let template_name = format!("_ephemeral_{}_{}_{}",
+                distro, version, chrono::Utc::now().timestamp());
+
+            let overlay_map = if overlays.is_empty() {
+                None
+            } else {
+                let mut map = std::collections::HashMap::new();
+                for entry in &overlays {
+                    if let Some((path, content)) = entry.split_once('=') {
+                        map.insert(path.to_string(), content.to_string());
+                    } else {
+                        eprintln!("Error: invalid overlay format '{}' (expected PATH=CONTENT)", entry);
+                        return ExitCode::from(EXIT_GENERAL_ERROR);
+                    }
+                }
+                Some(map)
+            };
+
+            eprintln!("Creating ephemeral template...");
+            let template_params = CreateTemplateParams {
+                name: template_name.clone(),
+                source_type: "rootfs".to_string(),
+                source_identifier: format!("{}-{}", distro, version),
+                overlays: overlay_map,
+            };
+
+            let template = match client.create_template(&template_params).await {
+                Ok(t) => {
+                    eprintln!("Created template \"{}\"", t.name);
+                    t
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create template\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 3: Trigger build
+            eprintln!("Triggering build...");
+            let build = match client.trigger_build(&template.name).await {
+                Ok(b) => b,
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot trigger build\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 4: Wait for build completion
+            let build_id = build.id.encode();
+            let start_time = std::time::Instant::now();
+            if let Err(code) = poll_build_completion(&client, &build_id, start_time).await {
+                return code;
+            }
+
+            // Step 5: Get completed build to find image ID
+            let completed_build = match client.get_build(&build_id).await {
+                Ok(Some(b)) => b,
+                Ok(None) => {
+                    eprintln!("Error: build {} disappeared after completion", build_id);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot get build: {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            let image_id = match completed_build.master_image_id {
+                Some(id) => id,
+                None => {
+                    eprintln!("Error: build completed but no master image created");
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 6: Create drive
+            eprintln!("Creating drive...");
+            let drive_params = CreateDriveParams {
+                name: name.clone(),
+                base: image_id.encode(),
+                size: None,
+            };
+
+            match client.create_drive(&drive_params).await {
+                Ok(drive) => {
+                    let id_fallback = drive.id.encode();
+                    let drive_name = drive.name.as_deref().unwrap_or(&id_fallback);
+                    println!("Created drive \"{}\"", drive_name);
+                    println!("\n  Inspect it: nexusctl drive inspect {}", drive_name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create drive\n  {}", e);
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+
+        DriveAction::FromTemplate { template, name } => {
+            // Step 1: Trigger build
+            eprintln!("Triggering build from template \"{}\"...", template);
+            let build = match client.trigger_build(&template).await {
+                Ok(b) => b,
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot trigger build\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 2: Wait for build completion
+            let build_id = build.id.encode();
+            let start_time = std::time::Instant::now();
+            if let Err(code) = poll_build_completion(&client, &build_id, start_time).await {
+                return code;
+            }
+
+            // Step 3: Get completed build to find image ID
+            let completed_build = match client.get_build(&build_id).await {
+                Ok(Some(b)) => b,
+                Ok(None) => {
+                    eprintln!("Error: build {} disappeared after completion", build_id);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot get build: {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            let image_id = match completed_build.master_image_id {
+                Some(id) => id,
+                None => {
+                    eprintln!("Error: build completed but no master image created");
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 4: Create drive
+            eprintln!("Creating drive...");
+            let drive_params = CreateDriveParams {
+                name: name.clone(),
+                base: image_id.encode(),
+                size: None,
+            };
+
+            match client.create_drive(&drive_params).await {
+                Ok(drive) => {
+                    let id_fallback = drive.id.encode();
+                    let drive_name = drive.name.as_deref().unwrap_or(&id_fallback);
+                    println!("Created drive \"{}\"", drive_name);
+                    println!("\n  Inspect it: nexusctl drive inspect {}", drive_name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create drive\n  {}", e);
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+
+        DriveAction::FromImage { image, name } => {
+            eprintln!("Creating drive from image \"{}\"...", image);
+            let drive_params = CreateDriveParams {
+                name: name.clone(),
+                base: image.clone(),
+                size: None,
+            };
+
+            match client.create_drive(&drive_params).await {
+                Ok(drive) => {
+                    let id_fallback = drive.id.encode();
+                    let drive_name = drive.name.as_deref().unwrap_or(&id_fallback);
+                    println!("Created drive \"{}\"", drive_name);
+                    println!("\n  Inspect it: nexusctl drive inspect {}", drive_name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create drive\n  {}", e);
                     ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }
