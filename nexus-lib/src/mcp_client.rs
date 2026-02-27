@@ -32,12 +32,42 @@ impl McpClient {
             .context("missing 'content' in file_read response")
     }
 
+    /// Invoke file_read with explicit encoding (e.g., "base64" for binary files)
+    pub async fn file_read_encoded(&self, path: &str, encoding: &str) -> Result<Value> {
+        let params = serde_json::json!({ "path": path, "encoding": encoding });
+        self.call_method("file_read", params).await
+    }
+
     /// Invoke file_write tool
     pub async fn file_write(&self, path: &str, content: &str) -> Result<usize> {
         let params = serde_json::json!({
             "path": path,
             "content": content
         });
+        let result = self.call_method("file_write", params).await?;
+
+        result["written"]
+            .as_u64()
+            .map(|n| n as usize)
+            .context("missing 'written' in file_write response")
+    }
+
+    /// Invoke file_write with encoding and optional mode (e.g., "base64", "0755")
+    pub async fn file_write_encoded(
+        &self,
+        path: &str,
+        content: &str,
+        encoding: &str,
+        mode: Option<&str>,
+    ) -> Result<usize> {
+        let mut params = serde_json::json!({
+            "path": path,
+            "content": content,
+            "encoding": encoding
+        });
+        if let Some(m) = mode {
+            params["mode"] = serde_json::json!(m);
+        }
         let result = self.call_method("file_write", params).await?;
 
         result["written"]

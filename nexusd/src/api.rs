@@ -1416,7 +1416,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/builds/{id}", get(get_build_handler))
         .route("/v1/settings", get(list_settings_handler))
         .route("/v1/settings/{key}", get(get_setting_handler).put(update_setting_handler))
-        .route("/mcp", post(crate::mcp_handler::handle_mcp_request))
+        .route("/mcp", post(crate::mcp_handler::handle_mcp_request)
+            .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)))
         .with_state(state)
 }
 

@@ -162,28 +162,46 @@ async fn send_notification<W: AsyncWriteExt + Unpin>(writer: &mut W, notificatio
 /// Security model: Unrestricted filesystem access within the VM.
 /// The VM itself is the security boundary. This tool is for AI agent control,
 /// which requires full filesystem access to perform tasks.
+///
+/// Pass `"encoding": "base64"` to read binary files as base64.
 async fn handle_file_read(params: Value) -> Result<Value> {
+    use base64::Engine;
+
     let path = params["path"]
         .as_str()
         .context("missing or invalid 'path' param")?;
+    let encoding = params["encoding"].as_str().unwrap_or("text");
 
-    let content = fs::read_to_string(path)
-        .await
-        .with_context(|| format!("failed to read file: {}", path))?;
-
-    Ok(serde_json::json!({ "content": content }))
+    if encoding == "base64" {
+        let bytes = fs::read(path)
+            .await
+            .with_context(|| format!("failed to read file: {}", path))?;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        Ok(serde_json::json!({ "content": encoded, "encoding": "base64", "size": bytes.len() }))
+    } else {
+        let content = fs::read_to_string(path)
+            .await
+            .with_context(|| format!("failed to read file: {}", path))?;
+        Ok(serde_json::json!({ "content": content }))
+    }
 }
 
 /// file_write: write content to file
 ///
 /// Security model: Unrestricted filesystem access within the VM.
+///
+/// Pass `"encoding": "base64"` to write binary files from base64 content.
+/// Optionally pass `"mode": "0755"` to set file permissions (octal string).
 async fn handle_file_write(params: Value) -> Result<Value> {
+    use base64::Engine;
+
     let path = params["path"]
         .as_str()
         .context("missing or invalid 'path' param")?;
     let content = params["content"]
         .as_str()
         .context("missing or invalid 'content' param")?;
+    let encoding = params["encoding"].as_str().unwrap_or("text");
 
     // Create parent directories if needed
     if let Some(parent) = std::path::Path::new(path).parent() {
@@ -191,11 +209,33 @@ async fn handle_file_write(params: Value) -> Result<Value> {
             .with_context(|| format!("failed to create parent dirs for {}", path))?;
     }
 
-    fs::write(path, content)
-        .await
-        .with_context(|| format!("failed to write file: {}", path))?;
+    let bytes_written = if encoding == "base64" {
+        let decoded = base64::engine::general_purpose::STANDARD.decode(content)
+            .context("invalid base64 content")?;
+        let len = decoded.len();
+        fs::write(path, &decoded)
+            .await
+            .with_context(|| format!("failed to write file: {}", path))?;
+        len
+    } else {
+        let len = content.len();
+        fs::write(path, content)
+            .await
+            .with_context(|| format!("failed to write file: {}", path))?;
+        len
+    };
 
-    Ok(serde_json::json!({ "written": content.len() }))
+    // Set file permissions if specified (e.g., "0755")
+    #[cfg(unix)]
+    if let Some(mode_str) = params["mode"].as_str() {
+        let mode = u32::from_str_radix(mode_str.trim_start_matches('0'), 8)
+            .with_context(|| format!("invalid mode: {}", mode_str))?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .with_context(|| format!("failed to set permissions on {}", path))?;
+    }
+
+    Ok(serde_json::json!({ "written": bytes_written }))
 }
 
 /// file_delete: delete a file
@@ -389,6 +429,68 @@ mod tests {
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, "hello world");
+    }
+
+    #[tokio::test]
+    async fn file_read_base64_returns_encoded() {
+        let file = NamedTempFile::new().unwrap();
+        let binary_data: Vec<u8> = vec![0x00, 0x01, 0xFF, 0xFE, 0x80];
+        std::fs::write(file.path(), &binary_data).unwrap();
+        let path = file.path().to_string_lossy().to_string();
+
+        let params = serde_json::json!({ "path": path, "encoding": "base64" });
+        let result = handle_file_read(params).await.unwrap();
+
+        assert_eq!(result["encoding"], "base64");
+        assert_eq!(result["size"], 5);
+
+        use base64::Engine;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(result["content"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(decoded, binary_data);
+    }
+
+    #[tokio::test]
+    async fn file_write_base64_decodes_content() {
+        use base64::Engine;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("binary.bin");
+        let path_str = path.to_string_lossy().to_string();
+
+        let binary_data: Vec<u8> = vec![0x00, 0x01, 0xFF, 0xFE, 0x80];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&binary_data);
+
+        let params = serde_json::json!({
+            "path": path_str,
+            "content": encoded,
+            "encoding": "base64"
+        });
+
+        let result = handle_file_write(params).await.unwrap();
+        assert_eq!(result["written"], 5);
+
+        let written = std::fs::read(&path).unwrap();
+        assert_eq!(written, binary_data);
+    }
+
+    #[tokio::test]
+    async fn file_write_with_mode_sets_permissions() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("exec.sh");
+        let path_str = path.to_string_lossy().to_string();
+
+        let params = serde_json::json!({
+            "path": path_str,
+            "content": "#!/bin/sh\necho hi",
+            "mode": "0755"
+        });
+
+        handle_file_write(params).await.unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::metadata(&path).unwrap().permissions();
+        assert_eq!(perms.mode() & 0o777, 0o755);
     }
 
     #[tokio::test]

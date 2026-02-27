@@ -125,6 +125,10 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
                         "path": {
                             "type": "string",
                             "description": "Absolute path to file in VM"
+                        },
+                        "encoding": {
+                            "type": "string",
+                            "description": "Encoding for response: 'text' (default) or 'base64' for binary files"
                         }
                     },
                     "required": ["vm", "path"]
@@ -148,6 +152,14 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
                         "content": {
                             "type": "string",
                             "description": "Content to write"
+                        },
+                        "encoding": {
+                            "type": "string",
+                            "description": "Content encoding: 'text' (default) or 'base64' for binary data"
+                        },
+                        "mode": {
+                            "type": "string",
+                            "description": "File permissions in octal (e.g., '0755')"
                         }
                     },
                     "required": ["vm", "path", "content"]
@@ -252,20 +264,37 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
                 .get("path")
                 .and_then(|p| p.as_str())
                 .ok_or_else(|| anyhow!("missing path parameter"))?;
+            let encoding = arguments.get("encoding").and_then(|e| e.as_str());
 
-            let content = mcp_client
-                .file_read(path)
-                .await
-                .map_err(|e| anyhow!("file_read error: {}", e))?;
+            if let Some(enc) = encoding {
+                let result = mcp_client
+                    .file_read_encoded(path, enc)
+                    .await
+                    .map_err(|e| anyhow!("file_read error: {}", e))?;
 
-            Ok(json!({
-                "content": [
-                    {
-                        "type": "text",
-                        "text": content
-                    }
-                ]
-            }))
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": result.to_string()
+                        }
+                    ]
+                }))
+            } else {
+                let content = mcp_client
+                    .file_read(path)
+                    .await
+                    .map_err(|e| anyhow!("file_read error: {}", e))?;
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": content
+                        }
+                    ]
+                }))
+            }
         }
         "file_write" => {
             let path = arguments
@@ -276,11 +305,20 @@ async fn handle_tools_call(params: Value, state: Arc<crate::api::AppState>) -> R
                 .get("content")
                 .and_then(|c| c.as_str())
                 .ok_or_else(|| anyhow!("missing content parameter"))?;
+            let encoding = arguments.get("encoding").and_then(|e| e.as_str());
+            let mode = arguments.get("mode").and_then(|m| m.as_str());
 
-            let written = mcp_client
-                .file_write(path, content)
-                .await
-                .map_err(|e| anyhow!("file_write error: {}", e))?;
+            let written = if encoding.is_some() || mode.is_some() {
+                mcp_client
+                    .file_write_encoded(path, content, encoding.unwrap_or("text"), mode)
+                    .await
+                    .map_err(|e| anyhow!("file_write error: {}", e))?
+            } else {
+                mcp_client
+                    .file_write(path, content)
+                    .await
+                    .map_err(|e| anyhow!("file_write error: {}", e))?
+            };
 
             Ok(json!({
                 "content": [
