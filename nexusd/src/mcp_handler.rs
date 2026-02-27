@@ -287,6 +287,44 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
             }
         },
         {
+            "name": "vm_add_tag",
+            "version": "1.0.0",
+            "description": "Add a tag to a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "tag": {"type": "string", "description": "Tag string (e.g., 'sharkfin_user:username')"}
+                },
+                "required": ["vm", "tag"]
+            }
+        },
+        {
+            "name": "vm_list_tags",
+            "version": "1.0.0",
+            "description": "List all tags on a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"}
+                },
+                "required": ["vm"]
+            }
+        },
+        {
+            "name": "vm_remove_tag",
+            "version": "1.0.0",
+            "description": "Remove a tag from a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "tag": {"type": "string", "description": "Tag to remove"}
+                },
+                "required": ["vm", "tag"]
+            }
+        },
+        {
             "name": "vm_add_provision_file",
             "version": "1.0.0",
             "description": "Add a provision file configuration for a VM (injected on next start)",
@@ -1145,6 +1183,33 @@ async fn handle_management_tool(
                     guest_path
                 )))
             }
+        }
+
+        // --- VM Tag Tools ---
+        "vm_add_tag" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state.store.get_vm(vm_id).map_err(store_err)?
+                .ok_or_else(|| McpError::InvalidParams(format!("VM '{}' not found", vm_id)))?;
+            let tag = require_str(arguments, "tag")?;
+            state.store.add_vm_tag(vm.id, tag).map_err(store_err)?;
+            Ok(mcp_text_response(&json!({"ok": true})))
+        }
+
+        "vm_list_tags" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state.store.get_vm(vm_id).map_err(store_err)?
+                .ok_or_else(|| McpError::InvalidParams(format!("VM '{}' not found", vm_id)))?;
+            let tags = state.store.list_vm_tags(vm.id).map_err(store_err)?;
+            Ok(mcp_text_response(&json!(tags)))
+        }
+
+        "vm_remove_tag" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state.store.get_vm(vm_id).map_err(store_err)?
+                .ok_or_else(|| McpError::InvalidParams(format!("VM '{}' not found", vm_id)))?;
+            let tag = require_str(arguments, "tag")?;
+            let removed = state.store.remove_vm_tag(vm.id, tag).map_err(store_err)?;
+            Ok(mcp_text_response(&json!({"removed": removed})))
         }
 
         // --- Image Tools ---
