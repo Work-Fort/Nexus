@@ -1526,6 +1526,76 @@ async fn exec_async_handler(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct SharkfinWebhook {
+    event: String,
+    recipient: String,
+    channel: String,
+    from: String,
+    #[allow(dead_code)]
+    message_id: u64,
+    #[allow(dead_code)]
+    sent_at: String,
+}
+
+async fn sharkfin_webhook_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<SharkfinWebhook>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Only handle message.new events
+    if payload.event != "message.new" {
+        return (StatusCode::OK, Json(serde_json::json!({"skipped": true, "reason": "unsupported event"})));
+    }
+
+    // Look up VM by sharkfin_user tag
+    let tag = format!("sharkfin_user:{}", payload.recipient);
+    let vms = match state.store.list_vms_by_tag(&tag) {
+        Ok(vms) => vms,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+    };
+
+    let vm = match vms.into_iter().find(|v| v.state == VmState::Ready) {
+        Some(vm) => vm,
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("no ready VM for user '{}'", payload.recipient)}))),
+    };
+
+    // Build the claude command
+    let prompt = format!(
+        "You are {}. You have a new message from {} in the '{}' channel. \
+         Check your unread messages using the sharkfin MCP tools and respond appropriately.",
+        payload.recipient, payload.from, payload.channel
+    );
+
+    let command = "claude".to_string();
+    let args = vec![
+        "-p".to_string(),
+        prompt,
+        "--allowedTools".to_string(),
+        "mcp__sharkfin__*".to_string(),
+    ];
+
+    // Fire and forget — spawn in background
+    let vsock_manager = state.vsock_manager.clone();
+    let vm_id = vm.id;
+    let vm_name = vm.name.clone();
+    let runtime_dir = nexus_lib::vm_service::vm_runtime_dir(&vm.id);
+
+    tokio::spawn(async move {
+        match vsock_manager.get_mcp_connection(vm_id, runtime_dir).await {
+            Ok(stream) => {
+                let mcp_client = nexus_lib::mcp_client::McpClient::new(stream);
+                match mcp_client.run_command_async(&command, &args).await {
+                    Ok(pid) => tracing::info!("Webhook launched claude for {} (PID {})", tag, pid),
+                    Err(e) => tracing::warn!("Webhook exec failed for {}: {}", tag, e),
+                }
+            }
+            Err(e) => tracing::warn!("Webhook vsock connection failed for {}: {}", tag, e),
+        }
+    });
+
+    (StatusCode::OK, Json(serde_json::json!({"ok": true, "vm": vm_name})))
+}
+
 async fn add_provision_file_handler(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
@@ -1631,6 +1701,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/vms/{name_or_id}/tags", post(add_vm_tag_handler).get(list_vm_tags_handler))
         .route("/v1/vms/{name_or_id}/tags/{tag}", delete(remove_vm_tag_handler))
         .route("/v1/vms/{name_or_id}/exec-async", post(exec_async_handler))
+        .route("/v1/webhooks/sharkfin", post(sharkfin_webhook_handler))
         .route("/v1/vms/{name_or_id}/provision-files", post(add_provision_file_handler).get(list_provision_files_handler))
         .route("/v1/vms/{name_or_id}/provision-files/remove", post(remove_provision_file_handler))
         .route("/v1/images", post(import_image).get(list_images))

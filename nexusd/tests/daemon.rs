@@ -290,3 +290,24 @@ async fn exec_async_returns_404_for_missing_vm() {
         .send().await.unwrap();
     assert_eq!(resp.status(), 404);
 }
+
+#[tokio::test]
+async fn sharkfin_webhook_returns_404_for_unknown_user() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    let resp = client.post(format!("http://{}/v1/webhooks/sharkfin", daemon.addr))
+        .json(&serde_json::json!({
+            "event": "message.new",
+            "recipient": "unknown-user",
+            "channel": "nexus",
+            "from": "tpm",
+            "message_id": 123,
+            "sent_at": "2026-02-27T21:15:16Z"
+        }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 404);
+}
