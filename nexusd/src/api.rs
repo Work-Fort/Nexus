@@ -916,32 +916,37 @@ fn resolve_kernel_path(state: &AppState) -> Result<String, String> {
     Ok(kernel.path_on_host)
 }
 
-async fn start_vm_handler(
-    State(state): State<Arc<AppState>>,
-    Path(name_or_id): Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    // Look up the VM
-    let vm = match state.store.get_vm(&name_or_id) {
-        Ok(Some(vm)) => vm,
-        Ok(None) => return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
-        ),
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ),
-    };
+/// Error type for start_vm operations.
+#[derive(Debug)]
+pub enum StartVmError {
+    NotFound(String),
+    BadRequest(String),
+    Conflict(String),
+    Internal(String),
+}
 
-    // Resolve rootfs path: look for an attached drive or use a default
-    // For now, require a drive attached as root device
-    let rootfs_path = match find_rootfs_for_vm(&state, &vm.id) {
-        Ok(path) => path,
-        Err(msg) => return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": msg})),
-        ),
-    };
+impl std::fmt::Display for StartVmError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartVmError::NotFound(msg) => write!(f, "{}", msg),
+            StartVmError::BadRequest(msg) => write!(f, "{}", msg),
+            StartVmError::Conflict(msg) => write!(f, "{}", msg),
+            StartVmError::Internal(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+/// Core VM start logic: resolve rootfs, allocate network, spawn Firecracker,
+/// handshake guest-agent, and run provisioning. Used by both REST and MCP handlers.
+pub async fn start_vm(state: &AppState, name_or_id: &str) -> Result<nexus_lib::vm::Vm, StartVmError> {
+    // Look up the VM
+    let vm = state.store.get_vm(name_or_id)
+        .map_err(|e| StartVmError::Internal(e.to_string()))?
+        .ok_or_else(|| StartVmError::NotFound(format!("VM '{}' not found", name_or_id)))?;
+
+    // Resolve rootfs path
+    let rootfs_path = find_rootfs_for_vm(state, &vm.id)
+        .map_err(StartVmError::BadRequest)?;
 
     // Allocate IP and create tap device
     let (tap_device, guest_ip, gateway_ip) = match state.network_service.allocate_ip(vm.id.as_i64()) {
@@ -962,30 +967,20 @@ async fn start_vm_handler(
     };
 
     // Resolve Firecracker binary and kernel from asset store
-    let firecracker_binary = match resolve_firecracker_binary(&state) {
-        Ok(path) => path,
-        Err(e) => {
+    let firecracker_binary = resolve_firecracker_binary(state)
+        .map_err(|e| {
             let _ = state.store.fail_vm(vm.id);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to resolve firecracker binary: {}", e)})),
-            );
-        }
-    };
+            StartVmError::Internal(format!("Failed to resolve firecracker binary: {}", e))
+        })?;
 
-    let kernel_path = match resolve_kernel_path(&state) {
-        Ok(path) => path,
-        Err(e) => {
+    let kernel_path = resolve_kernel_path(state)
+        .map_err(|e| {
             let _ = state.store.fail_vm(vm.id);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to resolve kernel: {}", e)})),
-            );
-        }
-    };
+            StartVmError::Internal(format!("Failed to resolve kernel: {}", e))
+        })?;
 
     // Spawn Firecracker
-    let (child, runtime_dir) = match vm_service::spawn_firecracker(
+    let (child, runtime_dir) = vm_service::spawn_firecracker(
         &firecracker_binary,
         &vm,
         &kernel_path,
@@ -993,17 +988,10 @@ async fn start_vm_handler(
         tap_device.as_deref(),
         guest_ip.as_deref(),
         gateway_ip.as_deref(),
-    ) {
-        Ok(result) => result,
-        Err(e) => {
-            // Mark VM as failed
-            let _ = state.store.fail_vm(vm.id);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            );
-        }
-    };
+    ).map_err(|e| {
+        let _ = state.store.fail_vm(vm.id);
+        StartVmError::Internal(e.to_string())
+    })?;
 
     let pid = child.id();
     let api_sock = runtime_dir.join("firecracker.sock").to_string_lossy().to_string();
@@ -1023,87 +1011,107 @@ async fn start_vm_handler(
     let config_str = serde_json::to_string(&config).unwrap_or_default();
 
     // Update store
-    match state.store.start_vm(vm.id, pid, &api_sock, &vsock_uds, &console_log, &config_str) {
-        Ok(updated_vm) => {
-            // Record boot history and capture boot_id for the monitor
-            let boot_id = state.store.record_boot_start(vm.id, &console_log)
-                .unwrap_or_else(|_| nexus_lib::id::Id::from_i64(0));
-
-            // Store the child process + boot_id for monitoring
-            state.processes.lock().await.insert(vm.id, TrackedProcess {
-                child,
-                boot_id,
-            });
-
-            // Connect to guest-agent and wait for handshake
-            match state.vsock_manager.connect_and_handshake(vm.id, runtime_dir.clone()).await {
-                Ok(metadata) => {
-                    tracing::info!("guest-agent connected for VM {}: {:?}", vm.id, metadata);
-
-                    // Connect to MCP server (port 200) - non-fatal if it fails
-                    if let Err(e) = state.vsock_manager.connect_mcp(vm.id, runtime_dir.clone()).await {
-                        tracing::warn!("failed to establish MCP connection for VM {}: {}", vm.id, e);
-                    }
-
-                    // Build DNS resolv.conf content
-                    let resolv_conf = if let Ok(Some(_network_cfg)) = state.store.get_vm_network(vm.id.as_i64()) {
-                        let dns_servers = match state.network_service.dns_servers() {
-                            Ok(servers) => servers,
-                            Err(e) => {
-                                tracing::error!("Failed to get DNS servers: {}", e);
-                                "8.8.8.8,1.1.1.1".to_string()
-                            }
-                        };
-                        Some(format!(
-                            "# Generated by nexusd\n{}\n",
-                            dns_servers
-                                .split(',')
-                                .map(|s: &str| format!("nameserver {}", s.trim()))
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        ))
-                    } else {
-                        None
-                    };
-
-                    // Load provision files for this VM
-                    let provision_files = match state.store.list_provision_files(vm.id) {
-                        Ok(files) => files,
-                        Err(e) => {
-                            tracing::warn!("Failed to load provision files for VM {}: {}", vm.id, e);
-                            vec![]
-                        }
-                    };
-
-                    // Run provisioning sequence (online → provisioning → ready)
-                    if let Err(e) = state.vsock_manager.provision_vm(
-                        vm.id,
-                        runtime_dir.clone(),
-                        resolv_conf,
-                        provision_files,
-                    ).await {
-                        tracing::error!("Provisioning failed for VM {}: {}", vm.id, e);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("failed to connect to guest-agent for VM {}: {}", vm.id, e);
-                    // State will transition to unreachable via monitor task
-                }
-            }
-
-            (StatusCode::OK, Json(serde_json::to_value(updated_vm).unwrap()))
-        }
-        Err(e) => {
+    let updated_vm = state.store.start_vm(vm.id, pid, &api_sock, &vsock_uds, &console_log, &config_str)
+        .map_err(|e| {
             // Kill the just-spawned process
             let _ = nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid as i32),
                 nix::sys::signal::Signal::SIGKILL,
             );
-            (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
+            StartVmError::Conflict(e.to_string())
+        })?;
+
+    // Record boot history and capture boot_id for the monitor
+    let boot_id = state.store.record_boot_start(vm.id, &console_log)
+        .unwrap_or_else(|_| nexus_lib::id::Id::from_i64(0));
+
+    // Store the child process + boot_id for monitoring
+    state.processes.lock().await.insert(vm.id, TrackedProcess {
+        child,
+        boot_id,
+    });
+
+    // Connect to guest-agent and wait for handshake
+    match state.vsock_manager.connect_and_handshake(vm.id, runtime_dir.clone()).await {
+        Ok(metadata) => {
+            tracing::info!("guest-agent connected for VM {}: {:?}", vm.id, metadata);
+
+            // Connect to MCP server (port 200) - non-fatal if it fails
+            if let Err(e) = state.vsock_manager.connect_mcp(vm.id, runtime_dir.clone()).await {
+                tracing::warn!("failed to establish MCP connection for VM {}: {}", vm.id, e);
+            }
+
+            // Build DNS resolv.conf content
+            let resolv_conf = if let Ok(Some(_network_cfg)) = state.store.get_vm_network(vm.id.as_i64()) {
+                let dns_servers = match state.network_service.dns_servers() {
+                    Ok(servers) => servers,
+                    Err(e) => {
+                        tracing::error!("Failed to get DNS servers: {}", e);
+                        "8.8.8.8,1.1.1.1".to_string()
+                    }
+                };
+                Some(format!(
+                    "# Generated by nexusd\n{}\n",
+                    dns_servers
+                        .split(',')
+                        .map(|s: &str| format!("nameserver {}", s.trim()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ))
+            } else {
+                None
+            };
+
+            // Load provision files for this VM
+            let provision_files = match state.store.list_provision_files(vm.id) {
+                Ok(files) => files,
+                Err(e) => {
+                    tracing::warn!("Failed to load provision files for VM {}: {}", vm.id, e);
+                    vec![]
+                }
+            };
+
+            // Run provisioning sequence (online -> provisioning -> ready)
+            if let Err(e) = state.vsock_manager.provision_vm(
+                vm.id,
+                runtime_dir.clone(),
+                resolv_conf,
+                provision_files,
+            ).await {
+                tracing::error!("Provisioning failed for VM {}: {}", vm.id, e);
+            }
         }
+        Err(e) => {
+            tracing::warn!("failed to connect to guest-agent for VM {}: {}", vm.id, e);
+            // State will transition to unreachable via monitor task
+        }
+    }
+
+    Ok(updated_vm)
+}
+
+async fn start_vm_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match start_vm(&state, &name_or_id).await {
+        Ok(vm) => (StatusCode::OK, Json(serde_json::to_value(vm).unwrap())),
+        Err(StartVmError::NotFound(msg)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(StartVmError::BadRequest(msg)) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(StartVmError::Conflict(msg)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(StartVmError::Internal(msg)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": msg})),
+        ),
     }
 }
 
