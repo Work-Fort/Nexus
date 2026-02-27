@@ -167,6 +167,20 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
                 },
                 "required": ["vm", "command"]
             }
+        },
+        {
+            "name": "run_command_async",
+            "version": "1.0.0",
+            "description": "Execute a command in a VM asynchronously (detached) and return PID immediately",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "command": {"type": "string", "description": "Command to execute"},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "Command arguments"}
+                },
+                "required": ["vm", "command"]
+            }
         }
     ]);
 
@@ -699,7 +713,7 @@ async fn handle_tools_call(
     // Two-tier dispatch: guest tools require VM + vsock, management tools operate on AppState
     match tool_name {
         // Guest tools (require vm parameter + vsock connection)
-        "file_read" | "file_write" | "file_delete" | "run_command" => {
+        "file_read" | "file_write" | "file_delete" | "run_command" | "run_command_async" => {
             handle_guest_tool(tool_name, arguments, &state).await
         }
         // Management tools (host-side operations)
@@ -879,6 +893,30 @@ async fn handle_guest_tool(
                 "meta": {
                     "exitCode": exit_code
                 }
+            }))
+        }
+        "run_command_async" => {
+            let command = arguments
+                .get("command")
+                .and_then(|c| c.as_str())
+                .ok_or_else(|| McpError::InvalidParams("missing command parameter".to_string()))?;
+            let args: Vec<String> = arguments
+                .get("args")
+                .and_then(|a| a.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<String>>())
+                .unwrap_or_default();
+
+            let pid = mcp_client
+                .run_command_async(command, &args)
+                .await
+                .map_err(|e| McpError::Internal(format!("run_command_async error: {}", e)))?;
+
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Spawned PID {pid}")
+                }],
+                "meta": { "pid": pid }
             }))
         }
         _ => Err(McpError::Internal(format!(
