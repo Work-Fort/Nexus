@@ -86,6 +86,23 @@ impl McpClient {
             .context("missing 'deleted' in file_delete response")
     }
 
+    /// Invoke run_command_async tool — spawns detached, returns PID immediately
+    pub async fn run_command_async(
+        &self,
+        command: &str,
+        args: &[String],
+    ) -> Result<u32> {
+        let params = serde_json::json!({
+            "command": command,
+            "args": args
+        });
+        let result = self.call_method("run_command_async", params).await?;
+        result["meta"]["pid"]
+            .as_u64()
+            .map(|p| p as u32)
+            .context("missing pid in run_command_async response")
+    }
+
     /// Invoke run_command tool with streaming output
     pub async fn run_command<F>(
         &self,
