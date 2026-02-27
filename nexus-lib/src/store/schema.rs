@@ -2,14 +2,17 @@
 /// Schema version — increment when the schema changes.
 /// Pre-alpha migration strategy: if the stored version doesn't match,
 /// delete the DB and recreate.
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// Database schema. Executed as a single batch on first start.
 /// Domain tables are added by later steps — each step bumps SCHEMA_VERSION
 /// and appends its tables here. Pre-alpha migration (delete + recreate)
 /// means all tables are always created from this single constant.
 pub const SCHEMA_SQL: &str = r#"
--- Nexus Database Schema v12 (Pre-Alpha)
+-- Nexus Database Schema v13 (Pre-Alpha)
+--
+-- Schema v13 changes:
+-- - Added vm_provision_files table for automated file injection during provisioning
 --
 -- Schema v12 changes:
 -- - Added 'online' and 'provisioning' to VmState CHECK constraint
@@ -128,6 +131,20 @@ CREATE TABLE vm_state_history (
     reason TEXT,
     transitioned_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     FOREIGN KEY (vm_id) REFERENCES vms(id) ON DELETE CASCADE
+);
+
+-- VM provision files: files injected into guest during provisioning phase
+CREATE TABLE vm_provision_files (
+    id INTEGER PRIMARY KEY,
+    vm_id INTEGER NOT NULL,
+    guest_path TEXT NOT NULL,
+    source_type TEXT NOT NULL CHECK(source_type IN ('host_path', 'inline')),
+    source TEXT NOT NULL,
+    encoding TEXT NOT NULL DEFAULT 'text' CHECK(encoding IN ('text', 'base64')),
+    mode TEXT,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    FOREIGN KEY (vm_id) REFERENCES vms(id) ON DELETE CASCADE,
+    UNIQUE (vm_id, guest_path)
 );
 
 -- vsock routes
@@ -295,6 +312,7 @@ CREATE INDEX idx_drives_vm_id ON drives(vm_id);
 CREATE INDEX idx_drives_base ON drives(master_image_id);
 CREATE INDEX idx_vm_boot_history_vm_id ON vm_boot_history(vm_id);
 CREATE INDEX idx_vm_state_history_vm_id ON vm_state_history(vm_id);
+CREATE INDEX idx_vm_provision_files_vm_id ON vm_provision_files(vm_id);
 CREATE INDEX idx_vsock_services_vm_id ON vsock_services(vm_id);
 CREATE INDEX idx_routes_source ON routes(source_vm_id);
 CREATE INDEX idx_routes_target ON routes(target_vm_id);
