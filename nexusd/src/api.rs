@@ -1066,8 +1066,22 @@ async fn start_vm_handler(
                         None
                     };
 
+                    // Load provision files for this VM
+                    let provision_files = match state.store.list_provision_files(vm.id) {
+                        Ok(files) => files,
+                        Err(e) => {
+                            tracing::warn!("Failed to load provision files for VM {}: {}", vm.id, e);
+                            vec![]
+                        }
+                    };
+
                     // Run provisioning sequence (online → provisioning → ready)
-                    if let Err(e) = state.vsock_manager.provision_vm(vm.id, runtime_dir.clone(), resolv_conf).await {
+                    if let Err(e) = state.vsock_manager.provision_vm(
+                        vm.id,
+                        runtime_dir.clone(),
+                        resolv_conf,
+                        provision_files,
+                    ).await {
                         tracing::error!("Provisioning failed for VM {}: {}", vm.id, e);
                     }
                 }
@@ -1540,6 +1554,18 @@ mod tests {
         fn list_allocated_ips(&self, _bridge_name: &str) -> Result<Vec<String>, StoreError> { unimplemented!() }
     }
 
+    impl nexus_lib::store::traits::ProvisionStore for MockStore {
+        fn add_provision_file(&self, _vm_id: nexus_lib::id::Id, _params: &nexus_lib::vm::AddProvisionFileParams) -> Result<nexus_lib::vm::ProvisionFile, StoreError> {
+            unimplemented!()
+        }
+        fn list_provision_files(&self, _vm_id: nexus_lib::id::Id) -> Result<Vec<nexus_lib::vm::ProvisionFile>, StoreError> {
+            Ok(vec![])
+        }
+        fn remove_provision_file(&self, _vm_id: nexus_lib::id::Id, _guest_path: &str) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
+    }
+
     impl nexus_lib::store::traits::SettingsStore for MockStore {
         fn get_setting(&self, _key: &str) -> Result<Option<String>, StoreError> { Ok(None) }
         fn set_setting(&self, _key: &str, _value: &str, _value_type: &str) -> Result<(), StoreError> { unimplemented!() }
@@ -1669,6 +1695,18 @@ mod tests {
         fn get_vm_network(&self, _vm_id: i64) -> Result<Option<nexus_lib::store::traits::VmNetwork>, StoreError> { unimplemented!() }
         fn release_vm_ip(&self, _vm_id: i64) -> Result<(), StoreError> { unimplemented!() }
         fn list_allocated_ips(&self, _bridge_name: &str) -> Result<Vec<String>, StoreError> { unimplemented!() }
+    }
+
+    impl nexus_lib::store::traits::ProvisionStore for FailingStore {
+        fn add_provision_file(&self, _vm_id: nexus_lib::id::Id, _params: &nexus_lib::vm::AddProvisionFileParams) -> Result<nexus_lib::vm::ProvisionFile, StoreError> {
+            unimplemented!()
+        }
+        fn list_provision_files(&self, _vm_id: nexus_lib::id::Id) -> Result<Vec<nexus_lib::vm::ProvisionFile>, StoreError> {
+            Ok(vec![])
+        }
+        fn remove_provision_file(&self, _vm_id: nexus_lib::id::Id, _guest_path: &str) -> Result<bool, StoreError> {
+            unimplemented!()
+        }
     }
 
     impl nexus_lib::store::traits::SettingsStore for FailingStore {
