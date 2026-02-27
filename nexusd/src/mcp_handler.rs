@@ -309,6 +309,48 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
                     },
                     "required": ["vm"]
                 }
+            },
+            // --- VM Provisioning Tools ---
+            {
+                "name": "vm_add_provision_file",
+                "version": "1.0.0",
+                "description": "Add a provision file configuration for a VM (injected on next start)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vm": {"type": "string", "description": "VM name or ID"},
+                        "guest_path": {"type": "string", "description": "Absolute path inside the guest VM"},
+                        "source_type": {"type": "string", "description": "Source type: 'inline' or 'file'"},
+                        "source": {"type": "string", "description": "File content (inline) or host file path (file)"},
+                        "encoding": {"type": "string", "description": "Encoding: 'text' (default) or 'base64'"}
+                    },
+                    "required": ["vm", "guest_path", "source_type", "source"]
+                }
+            },
+            {
+                "name": "vm_provision_files",
+                "version": "1.0.0",
+                "description": "List all provision files configured for a VM",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vm": {"type": "string", "description": "VM name or ID"}
+                    },
+                    "required": ["vm"]
+                }
+            },
+            {
+                "name": "vm_remove_provision_file",
+                "version": "1.0.0",
+                "description": "Remove a provision file configuration from a VM",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vm": {"type": "string", "description": "VM name or ID"},
+                        "guest_path": {"type": "string", "description": "Guest path of the provision file to remove"}
+                    },
+                    "required": ["vm", "guest_path"]
+                }
             }
         ]
     }))
@@ -672,7 +714,75 @@ async fn handle_management_tool(
             Ok(mcp_text_response(&history))
         }
 
-        // VM provisioning tools -- Task 3
+        // --- VM Provisioning Tools ---
+        "vm_add_provision_file" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state
+                .store
+                .get_vm(vm_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("VM '{}' not found", vm_id))
+                })?;
+            let params = nexus_lib::vm::AddProvisionFileParams {
+                guest_path: require_str(arguments, "guest_path")?.to_string(),
+                source_type: require_str(arguments, "source_type")?.to_string(),
+                source: require_str(arguments, "source")?.to_string(),
+                encoding: optional_str(arguments, "encoding")
+                    .unwrap_or("text")
+                    .to_string(),
+                mode: None,
+            };
+            let pf = state
+                .store
+                .add_provision_file(vm.id, &params)
+                .map_err(store_err)?;
+            Ok(mcp_text_response(&pf))
+        }
+
+        "vm_provision_files" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state
+                .store
+                .get_vm(vm_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("VM '{}' not found", vm_id))
+                })?;
+            let files = state
+                .store
+                .list_provision_files(vm.id)
+                .map_err(store_err)?;
+            Ok(mcp_text_response(&files))
+        }
+
+        "vm_remove_provision_file" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state
+                .store
+                .get_vm(vm_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("VM '{}' not found", vm_id))
+                })?;
+            let guest_path = require_str(arguments, "guest_path")?;
+            let deleted = state
+                .store
+                .remove_provision_file(vm.id, guest_path)
+                .map_err(store_err)?;
+            if deleted {
+                Ok(mcp_message_response(&format!(
+                    "Removed provision file for '{}'",
+                    guest_path
+                )))
+            } else {
+                Err(McpError::InvalidParams(format!(
+                    "no provision file for guest path '{}'",
+                    guest_path
+                )))
+            }
+        }
+
         // Image tools -- Task 4
         // Drive tools -- Task 5
         // Kernel tools -- Task 6
