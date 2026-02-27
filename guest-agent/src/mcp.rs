@@ -97,6 +97,12 @@ async fn handle_mcp_connection_inner(stream: VsockStream, env_vars: Arc<HashMap<
                 handle_run_command(request_id, request.params, &mut write_half, &env_vars).await;
                 continue; // Don't send response here
             }
+            "run_command_async" => {
+                let env = Arc::clone(&env_vars);
+                handle_tool_request(request_id, request.params, |params| {
+                    handle_run_command_async(params, env)
+                }).await
+            }
             _ => {
                 Response::error(
                     request_id,
@@ -255,6 +261,44 @@ async fn handle_file_delete(params: Value) -> Result<Value> {
         .with_context(|| format!("failed to delete file: {}", path))?;
 
     Ok(serde_json::json!({ "deleted": true }))
+}
+
+/// run_command_async: spawn a detached process and return PID immediately
+///
+/// Uses std::process::Command (not tokio) for a fully detached process.
+/// The spawn() syscall is non-blocking (<1ms), so this is safe in async context.
+async fn handle_run_command_async(params: Value, env_vars: Arc<HashMap<String, String>>) -> Result<Value> {
+    use std::os::unix::process::CommandExt;
+
+    let command = params["command"].as_str()
+        .context("missing or invalid 'command' param")?;
+    let args = params["args"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<String>>())
+        .unwrap_or_default();
+
+    info!("running command async: {} {:?}", command, args);
+
+    let child = std::process::Command::new(command)
+        .args(&args)
+        .env_clear()
+        .envs(env_vars.iter())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0) // setsid — detach from parent
+        .spawn()
+        .context("failed to spawn command")?;
+
+    let pid = child.id();
+
+    Ok(serde_json::json!({
+        "content": [{
+            "type": "text",
+            "text": format!("Spawned PID {pid}")
+        }],
+        "meta": { "pid": pid }
+    }))
 }
 
 /// run_command: execute a command and stream stdout/stderr
