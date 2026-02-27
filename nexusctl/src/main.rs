@@ -197,6 +197,9 @@ enum VmAction {
         /// File overlay: path=content (can be repeated)
         #[arg(long = "overlay", value_name = "PATH=CONTENT")]
         overlays: Vec<String>,
+        /// Show what would be done without executing
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Create VM from template (builds, creates drive, attaches)
@@ -215,6 +218,9 @@ enum VmAction {
         /// Memory in MiB
         #[arg(long, default_value = "128")]
         mem: u32,
+        /// Show what would be done without executing
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Create VM from image (creates drive, attaches)
@@ -233,6 +239,9 @@ enum VmAction {
         /// Memory in MiB
         #[arg(long, default_value = "128")]
         mem: u32,
+        /// Show what would be done without executing
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Add a provision file to inject into VM on start
     AddProvisionFile {
@@ -307,6 +316,9 @@ enum ImageAction {
         /// File overlay: path=content (can be repeated)
         #[arg(long = "overlay", value_name = "PATH=CONTENT")]
         overlays: Vec<String>,
+        /// Show what would be done without executing
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Create image from template (builds)
@@ -316,6 +328,9 @@ enum ImageAction {
         /// Image name (derived from template if omitted)
         #[arg(long)]
         name: Option<String>,
+        /// Show what would be done without executing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -381,6 +396,9 @@ enum DriveAction {
         /// File overlay: path=content (can be repeated)
         #[arg(long = "overlay", value_name = "PATH=CONTENT")]
         overlays: Vec<String>,
+        /// Show what would be done without executing
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Create drive from template (builds, creates drive)
@@ -390,6 +408,9 @@ enum DriveAction {
         /// Drive name (auto-generated if omitted)
         #[arg(long)]
         name: Option<String>,
+        /// Show what would be done without executing
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Create drive from image
@@ -399,6 +420,9 @@ enum DriveAction {
         /// Drive name (auto-generated if omitted)
         #[arg(long)]
         name: Option<String>,
+        /// Show what would be done without executing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -910,7 +934,24 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                 }
             }
         }
-        VmAction::FromRootfs { distro, version, name, role, vcpu, mem, overlays } => {
+        VmAction::FromRootfs { distro, version, name, role, vcpu, mem, overlays, dry_run } => {
+            if dry_run {
+                println!("Dry run - would execute:");
+                println!("  1. Download rootfs {} {}", distro, version);
+                println!("  2. Create ephemeral template");
+                if !overlays.is_empty() {
+                    println!("     Overlays: {} files", overlays.len());
+                }
+                println!("  3. Trigger build");
+                println!("  4. Wait for build completion");
+                println!("  5. Create drive from image");
+                println!("  6. Create VM \"{}\" (role: {}, vcpu: {}, mem: {}M)",
+                    name.as_ref().unwrap_or(&format!("vm-<timestamp>")), role, vcpu, mem);
+                println!("  7. Attach drive to VM as root device");
+                println!("\nNo changes applied (dry run)");
+                return ExitCode::SUCCESS;
+            }
+
             eprintln!("Downloading rootfs {} {}...", distro, version);
 
             // Step 1: Download rootfs
@@ -1094,7 +1135,19 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
             }
         }
 
-        VmAction::FromTemplate { template, name, role, vcpu, mem } => {
+        VmAction::FromTemplate { template, name, role, vcpu, mem, dry_run } => {
+            if dry_run {
+                println!("Dry run - would execute:");
+                println!("  1. Trigger build from template \"{}\"", template);
+                println!("  2. Wait for build completion");
+                println!("  3. Create drive from image");
+                println!("  4. Create VM \"{}\" (role: {}, vcpu: {}, mem: {}M)",
+                    name.as_ref().unwrap_or(&format!("vm-<timestamp>")), role, vcpu, mem);
+                println!("  5. Attach drive to VM as root device");
+                println!("\nNo changes applied (dry run)");
+                return ExitCode::SUCCESS;
+            }
+
             // Step 1: Trigger build
             eprintln!("Triggering build from template \"{}\"...", template);
             let build = match client.trigger_build(&template).await {
@@ -1218,7 +1271,17 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
             }
         }
 
-        VmAction::FromImage { image, name, role, vcpu, mem } => {
+        VmAction::FromImage { image, name, role, vcpu, mem, dry_run } => {
+            if dry_run {
+                println!("Dry run - would execute:");
+                println!("  1. Create drive from image \"{}\"", image);
+                println!("  2. Create VM \"{}\" (role: {}, vcpu: {}, mem: {}M)",
+                    name.as_ref().unwrap_or(&format!("vm-<timestamp>")), role, vcpu, mem);
+                println!("  3. Attach drive to VM as root device");
+                println!("\nNo changes applied (dry run)");
+                return ExitCode::SUCCESS;
+            }
+
             // Step 1: Create drive from image
             eprintln!("Creating drive from image \"{}\"...", image);
             let drive_name = name.as_ref().map(|n| format!("{}-drive", n));
@@ -1406,7 +1469,21 @@ async fn cmd_image(daemon_addr: &str, action: ImageAction) -> ExitCode {
             }
         }
 
-        ImageAction::FromRootfs { distro, version, name: _, overlays } => {
+        ImageAction::FromRootfs { distro, version, name: _, overlays, dry_run } => {
+            if dry_run {
+                println!("Dry run - would execute:");
+                println!("  1. Download rootfs {} {}", distro, version);
+                println!("  2. Create ephemeral template");
+                if !overlays.is_empty() {
+                    println!("     Overlays: {} files", overlays.len());
+                }
+                println!("  3. Trigger build");
+                println!("  4. Wait for build completion");
+                println!("  5. Image registered");
+                println!("\nNo changes applied (dry run)");
+                return ExitCode::SUCCESS;
+            }
+
             eprintln!("Downloading rootfs {} {}...", distro, version);
 
             // Step 1: Download rootfs
@@ -1533,7 +1610,16 @@ async fn cmd_image(daemon_addr: &str, action: ImageAction) -> ExitCode {
             }
         }
 
-        ImageAction::FromTemplate { template, name: _ } => {
+        ImageAction::FromTemplate { template, name: _, dry_run } => {
+            if dry_run {
+                println!("Dry run - would execute:");
+                println!("  1. Trigger build from template \"{}\"", template);
+                println!("  2. Wait for build completion");
+                println!("  3. Image registered");
+                println!("\nNo changes applied (dry run)");
+                return ExitCode::SUCCESS;
+            }
+
             // Step 1: Trigger build
             eprintln!("Triggering build from template \"{}\"...", template);
             let build = match client.trigger_build(&template).await {
@@ -1794,7 +1880,21 @@ async fn cmd_drive(daemon_addr: &str, action: DriveAction) -> ExitCode {
             }
         }
 
-        DriveAction::FromRootfs { distro, version, name, overlays } => {
+        DriveAction::FromRootfs { distro, version, name, overlays, dry_run } => {
+            if dry_run {
+                println!("Dry run - would execute:");
+                println!("  1. Download rootfs {} {}", distro, version);
+                println!("  2. Create ephemeral template");
+                if !overlays.is_empty() {
+                    println!("     Overlays: {} files", overlays.len());
+                }
+                println!("  3. Trigger build");
+                println!("  4. Wait for build completion");
+                println!("  5. Create drive \"{}\" from image", name.as_ref().unwrap_or(&"<auto-generated>".to_string()));
+                println!("\nNo changes applied (dry run)");
+                return ExitCode::SUCCESS;
+            }
+
             eprintln!("Downloading rootfs {} {}...", distro, version);
 
             // Step 1: Download rootfs
@@ -1924,7 +2024,16 @@ async fn cmd_drive(daemon_addr: &str, action: DriveAction) -> ExitCode {
             }
         }
 
-        DriveAction::FromTemplate { template, name } => {
+        DriveAction::FromTemplate { template, name, dry_run } => {
+            if dry_run {
+                println!("Dry run - would execute:");
+                println!("  1. Trigger build from template \"{}\"", template);
+                println!("  2. Wait for build completion");
+                println!("  3. Create drive \"{}\" from image", name.as_ref().unwrap_or(&"<auto-generated>".to_string()));
+                println!("\nNo changes applied (dry run)");
+                return ExitCode::SUCCESS;
+            }
+
             // Step 1: Trigger build
             eprintln!("Triggering build from template \"{}\"...", template);
             let build = match client.trigger_build(&template).await {
@@ -1994,7 +2103,15 @@ async fn cmd_drive(daemon_addr: &str, action: DriveAction) -> ExitCode {
             }
         }
 
-        DriveAction::FromImage { image, name } => {
+        DriveAction::FromImage { image, name, dry_run } => {
+            if dry_run {
+                println!("Dry run - would execute:");
+                println!("  1. Create drive \"{}\" from image \"{}\"",
+                    name.as_ref().unwrap_or(&"<auto-generated>".to_string()), image);
+                println!("\nNo changes applied (dry run)");
+                return ExitCode::SUCCESS;
+            }
+
             eprintln!("Creating drive from image \"{}\"...", image);
             let drive_params = CreateDriveParams {
                 name: name.clone(),
