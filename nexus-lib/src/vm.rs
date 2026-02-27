@@ -155,6 +155,67 @@ pub struct StateHistory {
     pub transitioned_at: i64,
 }
 
+/// Source type for VM provision files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProvisionSourceType {
+    HostPath,
+    Inline,
+}
+
+impl ProvisionSourceType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ProvisionSourceType::HostPath => "host_path",
+            ProvisionSourceType::Inline => "inline",
+        }
+    }
+}
+
+impl std::str::FromStr for ProvisionSourceType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "host_path" => Ok(ProvisionSourceType::HostPath),
+            "inline" => Ok(ProvisionSourceType::Inline),
+            _ => Err(format!("unknown provision source type: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for ProvisionSourceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A file to inject into a VM during provisioning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvisionFile {
+    pub id: crate::id::Id,
+    pub vm_id: crate::id::Id,
+    pub guest_path: String,
+    pub source_type: ProvisionSourceType,
+    pub source: String,
+    pub encoding: String,
+    pub mode: Option<String>,
+    pub created_at: i64,
+}
+
+/// Parameters for adding a provision file to a VM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddProvisionFileParams {
+    pub guest_path: String,
+    pub source_type: String,
+    pub source: String,
+    #[serde(default = "default_encoding")]
+    pub encoding: String,
+    pub mode: Option<String>,
+}
+
+fn default_encoding() -> String {
+    "text".to_string()
+}
+
 impl CreateVmParams {
     pub fn validate(&self) -> Result<(), String> {
         if Id::is_valid_base32(&self.name) {
@@ -267,5 +328,13 @@ mod tests {
             mem_size_mib: 128,
         };
         assert!(params.validate().is_ok());
+    }
+
+    #[test]
+    fn provision_source_type_roundtrip() {
+        assert_eq!("host_path".parse::<ProvisionSourceType>().unwrap(), ProvisionSourceType::HostPath);
+        assert_eq!("inline".parse::<ProvisionSourceType>().unwrap(), ProvisionSourceType::Inline);
+        assert_eq!(ProvisionSourceType::HostPath.as_str(), "host_path");
+        assert_eq!(ProvisionSourceType::Inline.as_str(), "inline");
     }
 }
