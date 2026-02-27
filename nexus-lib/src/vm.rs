@@ -48,6 +48,8 @@ impl std::str::FromStr for VmRole {
 pub enum VmState {
     Created,
     Running,
+    Online,
+    Provisioning,
     Ready,
     Stopped,
     Crashed,
@@ -60,6 +62,8 @@ impl VmState {
         match self {
             VmState::Created => "created",
             VmState::Running => "running",
+            VmState::Online => "online",
+            VmState::Provisioning => "provisioning",
             VmState::Ready => "ready",
             VmState::Stopped => "stopped",
             VmState::Crashed => "crashed",
@@ -82,6 +86,8 @@ impl std::str::FromStr for VmState {
         match s {
             "created" => Ok(VmState::Created),
             "running" => Ok(VmState::Running),
+            "online" => Ok(VmState::Online),
+            "provisioning" => Ok(VmState::Provisioning),
             "ready" => Ok(VmState::Ready),
             "stopped" => Ok(VmState::Stopped),
             "crashed" => Ok(VmState::Crashed),
@@ -182,6 +188,8 @@ mod tests {
         assert_eq!("crashed".parse::<VmState>().unwrap(), VmState::Crashed);
         assert_eq!("failed".parse::<VmState>().unwrap(), VmState::Failed);
         assert_eq!("unreachable".parse::<VmState>().unwrap(), VmState::Unreachable);
+        assert_eq!("online".parse::<VmState>().unwrap(), VmState::Online);
+        assert_eq!("provisioning".parse::<VmState>().unwrap(), VmState::Provisioning);
         assert!("bogus".parse::<VmState>().is_err());
     }
 

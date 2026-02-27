@@ -318,7 +318,7 @@ impl VmStore for SqliteStore {
                     vm.name
                 )));
             }
-            VmState::Running | VmState::Ready => unreachable!(),
+            VmState::Running | VmState::Online | VmState::Provisioning | VmState::Ready => unreachable!(),
             VmState::Unreachable => {
                 // Allow restart from unreachable state
             }
