@@ -109,479 +109,577 @@ async fn handle_initialize(params: Value) -> Result<Value> {
 }
 
 async fn handle_tools_list(_params: Value) -> Result<Value> {
-    Ok(json!({
-        "tools": [
-            {
-                "name": "file_read",
-                "version": "1.0.0",
-                "description": "Read a file from a VM",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {
-                            "type": "string",
-                            "description": "VM name or ID"
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute path to file in VM"
-                        },
-                        "encoding": {
-                            "type": "string",
-                            "description": "Encoding for response: 'text' (default) or 'base64' for binary files"
-                        }
-                    },
-                    "required": ["vm", "path"]
-                }
-            },
-            {
-                "name": "file_write",
-                "version": "1.0.0",
-                "description": "Write content to a file in a VM",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {
-                            "type": "string",
-                            "description": "VM name or ID"
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute path to file in VM"
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Content to write"
-                        },
-                        "encoding": {
-                            "type": "string",
-                            "description": "Content encoding: 'text' (default) or 'base64' for binary data"
-                        },
-                        "mode": {
-                            "type": "string",
-                            "description": "File permissions in octal (e.g., '0755')"
-                        }
-                    },
-                    "required": ["vm", "path", "content"]
-                }
-            },
-            {
-                "name": "file_delete",
-                "version": "1.0.0",
-                "description": "Delete a file from a VM",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {
-                            "type": "string",
-                            "description": "VM name or ID"
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute path to file in VM"
-                        }
-                    },
-                    "required": ["vm", "path"]
-                }
-            },
-            {
-                "name": "run_command",
-                "version": "1.0.0",
-                "description": "Execute a command in a VM and return output",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {
-                            "type": "string",
-                            "description": "VM name or ID"
-                        },
-                        "command": {
-                            "type": "string",
-                            "description": "Command to execute"
-                        },
-                        "args": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Command arguments"
-                        }
-                    },
-                    "required": ["vm", "command"]
-                }
-            },
-            // --- VM Lifecycle Tools ---
-            {
-                "name": "vm_list",
-                "version": "1.0.0",
-                "description": "List all VMs with optional filtering by role or state",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "role": {"type": "string", "description": "Filter by VM role: 'work', 'portal', or 'service'"},
-                        "state": {"type": "string", "description": "Filter by VM state (e.g., 'created', 'running', 'ready')"}
-                    },
-                    "required": []
-                }
-            },
-            {
-                "name": "vm_create",
-                "version": "1.0.0",
-                "description": "Create a new VM record",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "VM name (must be unique)"},
-                        "role": {"type": "string", "description": "VM role: 'work' (default), 'portal', or 'service'"},
-                        "vcpu_count": {"type": "integer", "description": "Number of vCPUs (default: 1)"},
-                        "mem_size_mib": {"type": "integer", "description": "Memory in MiB (default: 128)"}
-                    },
-                    "required": ["name"]
-                }
-            },
-            {
-                "name": "vm_inspect",
-                "version": "1.0.0",
-                "description": "Get detailed information about a VM including network config",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {"type": "string", "description": "VM name or ID"}
-                    },
-                    "required": ["vm"]
-                }
-            },
-            {
-                "name": "vm_delete",
-                "version": "1.0.0",
-                "description": "Delete a VM record (must not be running)",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {"type": "string", "description": "VM name or ID"}
-                    },
-                    "required": ["vm"]
-                }
-            },
-            {
-                "name": "vm_start",
-                "version": "1.0.0",
-                "description": "Start a VM (resolves rootfs, allocates network, spawns Firecracker, provisions guest)",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {"type": "string", "description": "VM name or ID"}
-                    },
-                    "required": ["vm"]
-                }
-            },
-            {
-                "name": "vm_stop",
-                "version": "1.0.0",
-                "description": "Stop a running VM (sends SIGTERM to Firecracker, cleans up network)",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {"type": "string", "description": "VM name or ID"}
-                    },
-                    "required": ["vm"]
-                }
-            },
-            {
-                "name": "vm_logs",
-                "version": "1.0.0",
-                "description": "Get console log output from a VM",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {"type": "string", "description": "VM name or ID"},
-                        "tail": {"type": "integer", "description": "Number of lines from end (default: 100)"}
-                    },
-                    "required": ["vm"]
-                }
-            },
-            {
-                "name": "vm_history",
-                "version": "1.0.0",
-                "description": "Get state transition history for a VM",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {"type": "string", "description": "VM name or ID"}
-                    },
-                    "required": ["vm"]
-                }
-            },
-            // --- VM Provisioning Tools ---
-            {
-                "name": "vm_add_provision_file",
-                "version": "1.0.0",
-                "description": "Add a provision file configuration for a VM (injected on next start)",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {"type": "string", "description": "VM name or ID"},
-                        "guest_path": {"type": "string", "description": "Absolute path inside the guest VM"},
-                        "source_type": {"type": "string", "description": "Source type: 'inline' or 'file'"},
-                        "source": {"type": "string", "description": "File content (inline) or host file path (file)"},
-                        "encoding": {"type": "string", "description": "Encoding: 'text' (default) or 'base64'"}
-                    },
-                    "required": ["vm", "guest_path", "source_type", "source"]
-                }
-            },
-            {
-                "name": "vm_provision_files",
-                "version": "1.0.0",
-                "description": "List all provision files configured for a VM",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {"type": "string", "description": "VM name or ID"}
-                    },
-                    "required": ["vm"]
-                }
-            },
-            {
-                "name": "vm_remove_provision_file",
-                "version": "1.0.0",
-                "description": "Remove a provision file configuration from a VM",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vm": {"type": "string", "description": "VM name or ID"},
-                        "guest_path": {"type": "string", "description": "Guest path of the provision file to remove"}
-                    },
-                    "required": ["vm", "guest_path"]
-                }
-            },
-            // --- Image Tools ---
-            {
-                "name": "image_list",
-                "version": "1.0.0",
-                "description": "List all master images",
-                "inputSchema": {"type": "object", "properties": {}, "required": []}
-            },
-            {
-                "name": "image_import",
-                "version": "1.0.0",
-                "description": "Import a directory as a master image (btrfs subvolume)",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Image name"},
-                        "source_path": {"type": "string", "description": "Path to directory to import"}
-                    },
-                    "required": ["name", "source_path"]
-                }
-            },
-            {
-                "name": "image_inspect",
-                "version": "1.0.0",
-                "description": "Get detailed information about a master image",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "image": {"type": "string", "description": "Image name or ID"}
-                    },
-                    "required": ["image"]
-                }
-            },
-            {
-                "name": "image_delete",
-                "version": "1.0.0",
-                "description": "Delete a master image (fails if drives reference it)",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "image": {"type": "string", "description": "Image name or ID"}
-                    },
-                    "required": ["image"]
-                }
-            },
-            // --- Drive Tools ---
-            {
-                "name": "drive_list",
-                "version": "1.0.0",
-                "description": "List all drives, optionally filtered by base image",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "base": {"type": "string", "description": "Filter by master image name"}
-                    },
-                    "required": []
-                }
-            },
-            {
-                "name": "drive_create",
-                "version": "1.0.0",
-                "description": "Create a drive by snapshotting a master image",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "base": {"type": "string", "description": "Master image name to snapshot from"},
-                        "name": {"type": "string", "description": "Drive name (optional, auto-generated if omitted)"},
-                        "size": {"type": "integer", "description": "Drive size in bytes (optional, defaults to image size)"}
-                    },
-                    "required": ["base"]
-                }
-            },
-            {
-                "name": "drive_inspect",
-                "version": "1.0.0",
-                "description": "Get detailed information about a drive",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "drive": {"type": "string", "description": "Drive name or ID"}
-                    },
-                    "required": ["drive"]
-                }
-            },
-            {
-                "name": "drive_delete",
-                "version": "1.0.0",
-                "description": "Delete a drive (must not be attached to a VM)",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "drive": {"type": "string", "description": "Drive name or ID"}
-                    },
-                    "required": ["drive"]
-                }
-            },
-            {
-                "name": "drive_attach",
-                "version": "1.0.0",
-                "description": "Attach a drive to a VM",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "drive": {"type": "string", "description": "Drive name or ID"},
-                        "vm": {"type": "string", "description": "VM name or ID"},
-                        "is_root_device": {"type": "boolean", "description": "Whether this is the root device (default: false)"}
-                    },
-                    "required": ["drive", "vm"]
-                }
-            },
-            {
-                "name": "drive_detach",
-                "version": "1.0.0",
-                "description": "Detach a drive from its VM",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "drive": {"type": "string", "description": "Drive name or ID"}
-                    },
-                    "required": ["drive"]
-                }
-            },
-            // --- Kernel Tools ---
-            {
-                "name": "kernel_list",
-                "version": "1.0.0",
-                "description": "List all downloaded kernels",
-                "inputSchema": {"type": "object", "properties": {}, "required": []}
-            },
-            {
-                "name": "kernel_download",
-                "version": "1.0.0",
-                "description": "Download a Linux kernel version from the configured provider",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "version": {"type": "string", "description": "Kernel version to download (e.g., '6.1.102')"}
-                    },
-                    "required": ["version"]
-                }
-            },
-            {
-                "name": "kernel_remove",
-                "version": "1.0.0",
-                "description": "Remove a downloaded kernel",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "version": {"type": "string", "description": "Kernel version or ID to remove"}
-                    },
-                    "required": ["version"]
-                }
-            },
-            {
-                "name": "kernel_verify",
-                "version": "1.0.0",
-                "description": "Verify a downloaded kernel's integrity",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "version": {"type": "string", "description": "Kernel version or ID to verify"}
-                    },
-                    "required": ["version"]
-                }
-            },
-            // --- Rootfs Tools ---
-            {
-                "name": "rootfs_list",
-                "version": "1.0.0",
-                "description": "List all downloaded rootfs images",
-                "inputSchema": {"type": "object", "properties": {}, "required": []}
-            },
-            {
-                "name": "rootfs_download",
-                "version": "1.0.0",
-                "description": "Download a rootfs image from the configured provider",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "distro": {"type": "string", "description": "Distribution name (e.g., 'alpine')"},
-                        "version": {"type": "string", "description": "Distribution version (e.g., '3.20')"}
-                    },
-                    "required": ["distro", "version"]
-                }
-            },
-            {
-                "name": "rootfs_remove",
-                "version": "1.0.0",
-                "description": "Remove a downloaded rootfs image",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "distro": {"type": "string", "description": "Distribution name"},
-                        "version": {"type": "string", "description": "Distribution version"}
-                    },
-                    "required": ["distro", "version"]
-                }
-            },
-            // --- Firecracker Tools ---
-            {
-                "name": "firecracker_list",
-                "version": "1.0.0",
-                "description": "List all downloaded Firecracker versions",
-                "inputSchema": {"type": "object", "properties": {}, "required": []}
-            },
-            {
-                "name": "firecracker_download",
-                "version": "1.0.0",
-                "description": "Download a Firecracker binary from the configured provider",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "version": {"type": "string", "description": "Firecracker version to download (e.g., '1.10.1')"}
-                    },
-                    "required": ["version"]
-                }
-            },
-            {
-                "name": "firecracker_remove",
-                "version": "1.0.0",
-                "description": "Remove a downloaded Firecracker version",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "version": {"type": "string", "description": "Firecracker version or ID to remove"}
-                    },
-                    "required": ["version"]
-                }
+    // Tool definitions split into groups to avoid json! macro recursion limit.
+    let guest_tools = json!([
+        {
+            "name": "file_read",
+            "version": "1.0.0",
+            "description": "Read a file from a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "path": {"type": "string", "description": "Absolute path to file in VM"},
+                    "encoding": {"type": "string", "description": "Encoding for response: 'text' (default) or 'base64' for binary files"}
+                },
+                "required": ["vm", "path"]
             }
-        ]
-    }))
+        },
+        {
+            "name": "file_write",
+            "version": "1.0.0",
+            "description": "Write content to a file in a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "path": {"type": "string", "description": "Absolute path to file in VM"},
+                    "content": {"type": "string", "description": "Content to write"},
+                    "encoding": {"type": "string", "description": "Content encoding: 'text' (default) or 'base64' for binary data"},
+                    "mode": {"type": "string", "description": "File permissions in octal (e.g., '0755')"}
+                },
+                "required": ["vm", "path", "content"]
+            }
+        },
+        {
+            "name": "file_delete",
+            "version": "1.0.0",
+            "description": "Delete a file from a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "path": {"type": "string", "description": "Absolute path to file in VM"}
+                },
+                "required": ["vm", "path"]
+            }
+        },
+        {
+            "name": "run_command",
+            "version": "1.0.0",
+            "description": "Execute a command in a VM and return output",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "command": {"type": "string", "description": "Command to execute"},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "Command arguments"}
+                },
+                "required": ["vm", "command"]
+            }
+        }
+    ]);
+
+    let vm_tools = json!([
+        {
+            "name": "vm_list",
+            "version": "1.0.0",
+            "description": "List all VMs with optional filtering by role or state",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string", "description": "Filter by VM role: 'work', 'portal', or 'service'"},
+                    "state": {"type": "string", "description": "Filter by VM state (e.g., 'created', 'running', 'ready')"}
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "vm_create",
+            "version": "1.0.0",
+            "description": "Create a new VM record",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "VM name (must be unique)"},
+                    "role": {"type": "string", "description": "VM role: 'work' (default), 'portal', or 'service'"},
+                    "vcpu_count": {"type": "integer", "description": "Number of vCPUs (default: 1)"},
+                    "mem_size_mib": {"type": "integer", "description": "Memory in MiB (default: 128)"}
+                },
+                "required": ["name"]
+            }
+        },
+        {
+            "name": "vm_inspect",
+            "version": "1.0.0",
+            "description": "Get detailed information about a VM including network config",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"}
+                },
+                "required": ["vm"]
+            }
+        },
+        {
+            "name": "vm_delete",
+            "version": "1.0.0",
+            "description": "Delete a VM record (must not be running)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"}
+                },
+                "required": ["vm"]
+            }
+        },
+        {
+            "name": "vm_start",
+            "version": "1.0.0",
+            "description": "Start a VM (resolves rootfs, allocates network, spawns Firecracker, provisions guest)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"}
+                },
+                "required": ["vm"]
+            }
+        },
+        {
+            "name": "vm_stop",
+            "version": "1.0.0",
+            "description": "Stop a running VM (sends SIGTERM to Firecracker, cleans up network)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"}
+                },
+                "required": ["vm"]
+            }
+        },
+        {
+            "name": "vm_logs",
+            "version": "1.0.0",
+            "description": "Get console log output from a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "tail": {"type": "integer", "description": "Number of lines from end (default: 100)"}
+                },
+                "required": ["vm"]
+            }
+        },
+        {
+            "name": "vm_history",
+            "version": "1.0.0",
+            "description": "Get state transition history for a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"}
+                },
+                "required": ["vm"]
+            }
+        },
+        {
+            "name": "vm_add_provision_file",
+            "version": "1.0.0",
+            "description": "Add a provision file configuration for a VM (injected on next start)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "guest_path": {"type": "string", "description": "Absolute path inside the guest VM"},
+                    "source_type": {"type": "string", "description": "Source type: 'inline' or 'file'"},
+                    "source": {"type": "string", "description": "File content (inline) or host file path (file)"},
+                    "encoding": {"type": "string", "description": "Encoding: 'text' (default) or 'base64'"}
+                },
+                "required": ["vm", "guest_path", "source_type", "source"]
+            }
+        },
+        {
+            "name": "vm_provision_files",
+            "version": "1.0.0",
+            "description": "List all provision files configured for a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"}
+                },
+                "required": ["vm"]
+            }
+        },
+        {
+            "name": "vm_remove_provision_file",
+            "version": "1.0.0",
+            "description": "Remove a provision file configuration from a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "guest_path": {"type": "string", "description": "Guest path of the provision file to remove"}
+                },
+                "required": ["vm", "guest_path"]
+            }
+        }
+    ]);
+
+    let storage_tools = json!([
+        {
+            "name": "image_list",
+            "version": "1.0.0",
+            "description": "List all master images",
+            "inputSchema": {"type": "object", "properties": {}, "required": []}
+        },
+        {
+            "name": "image_import",
+            "version": "1.0.0",
+            "description": "Import a directory as a master image (btrfs subvolume)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Image name"},
+                    "source_path": {"type": "string", "description": "Path to directory to import"}
+                },
+                "required": ["name", "source_path"]
+            }
+        },
+        {
+            "name": "image_inspect",
+            "version": "1.0.0",
+            "description": "Get detailed information about a master image",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "image": {"type": "string", "description": "Image name or ID"}
+                },
+                "required": ["image"]
+            }
+        },
+        {
+            "name": "image_delete",
+            "version": "1.0.0",
+            "description": "Delete a master image (fails if drives reference it)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "image": {"type": "string", "description": "Image name or ID"}
+                },
+                "required": ["image"]
+            }
+        },
+        {
+            "name": "drive_list",
+            "version": "1.0.0",
+            "description": "List all drives, optionally filtered by base image",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "base": {"type": "string", "description": "Filter by master image name"}
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "drive_create",
+            "version": "1.0.0",
+            "description": "Create a drive by snapshotting a master image",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "base": {"type": "string", "description": "Master image name to snapshot from"},
+                    "name": {"type": "string", "description": "Drive name (optional, auto-generated if omitted)"},
+                    "size": {"type": "integer", "description": "Drive size in bytes (optional, defaults to image size)"}
+                },
+                "required": ["base"]
+            }
+        },
+        {
+            "name": "drive_inspect",
+            "version": "1.0.0",
+            "description": "Get detailed information about a drive",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "drive": {"type": "string", "description": "Drive name or ID"}
+                },
+                "required": ["drive"]
+            }
+        },
+        {
+            "name": "drive_delete",
+            "version": "1.0.0",
+            "description": "Delete a drive (must not be attached to a VM)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "drive": {"type": "string", "description": "Drive name or ID"}
+                },
+                "required": ["drive"]
+            }
+        },
+        {
+            "name": "drive_attach",
+            "version": "1.0.0",
+            "description": "Attach a drive to a VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "drive": {"type": "string", "description": "Drive name or ID"},
+                    "vm": {"type": "string", "description": "VM name or ID"},
+                    "is_root_device": {"type": "boolean", "description": "Whether this is the root device (default: false)"}
+                },
+                "required": ["drive", "vm"]
+            }
+        },
+        {
+            "name": "drive_detach",
+            "version": "1.0.0",
+            "description": "Detach a drive from its VM",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "drive": {"type": "string", "description": "Drive name or ID"}
+                },
+                "required": ["drive"]
+            }
+        }
+    ]);
+
+    let asset_tools = json!([
+        {
+            "name": "kernel_list",
+            "version": "1.0.0",
+            "description": "List all downloaded kernels",
+            "inputSchema": {"type": "object", "properties": {}, "required": []}
+        },
+        {
+            "name": "kernel_download",
+            "version": "1.0.0",
+            "description": "Download a Linux kernel version from the configured provider",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "Kernel version to download (e.g., '6.1.102')"}
+                },
+                "required": ["version"]
+            }
+        },
+        {
+            "name": "kernel_remove",
+            "version": "1.0.0",
+            "description": "Remove a downloaded kernel",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "Kernel version or ID to remove"}
+                },
+                "required": ["version"]
+            }
+        },
+        {
+            "name": "kernel_verify",
+            "version": "1.0.0",
+            "description": "Verify a downloaded kernel's integrity",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "Kernel version or ID to verify"}
+                },
+                "required": ["version"]
+            }
+        },
+        {
+            "name": "rootfs_list",
+            "version": "1.0.0",
+            "description": "List all downloaded rootfs images",
+            "inputSchema": {"type": "object", "properties": {}, "required": []}
+        },
+        {
+            "name": "rootfs_download",
+            "version": "1.0.0",
+            "description": "Download a rootfs image from the configured provider",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "distro": {"type": "string", "description": "Distribution name (e.g., 'alpine')"},
+                    "version": {"type": "string", "description": "Distribution version (e.g., '3.20')"}
+                },
+                "required": ["distro", "version"]
+            }
+        },
+        {
+            "name": "rootfs_remove",
+            "version": "1.0.0",
+            "description": "Remove a downloaded rootfs image",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "distro": {"type": "string", "description": "Distribution name"},
+                    "version": {"type": "string", "description": "Distribution version"}
+                },
+                "required": ["distro", "version"]
+            }
+        },
+        {
+            "name": "firecracker_list",
+            "version": "1.0.0",
+            "description": "List all downloaded Firecracker versions",
+            "inputSchema": {"type": "object", "properties": {}, "required": []}
+        },
+        {
+            "name": "firecracker_download",
+            "version": "1.0.0",
+            "description": "Download a Firecracker binary from the configured provider",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "Firecracker version to download (e.g., '1.10.1')"}
+                },
+                "required": ["version"]
+            }
+        },
+        {
+            "name": "firecracker_remove",
+            "version": "1.0.0",
+            "description": "Remove a downloaded Firecracker version",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "string", "description": "Firecracker version or ID to remove"}
+                },
+                "required": ["version"]
+            }
+        }
+    ]);
+
+    let config_tools = json!([
+        {
+            "name": "template_list",
+            "version": "1.0.0",
+            "description": "List all build templates",
+            "inputSchema": {"type": "object", "properties": {}, "required": []}
+        },
+        {
+            "name": "template_create",
+            "version": "1.0.0",
+            "description": "Create a new build template",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Template name (must be unique)"},
+                    "source_type": {"type": "string", "description": "Source type (e.g., 'dockerfile', 'script')"},
+                    "source_identifier": {"type": "string", "description": "Source path or identifier"},
+                    "overlays": {"type": "object", "description": "Optional key-value overlay map"}
+                },
+                "required": ["name", "source_type", "source_identifier"]
+            }
+        },
+        {
+            "name": "template_inspect",
+            "version": "1.0.0",
+            "description": "Get detailed information about a template",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string", "description": "Template name or ID"}
+                },
+                "required": ["template"]
+            }
+        },
+        {
+            "name": "template_delete",
+            "version": "1.0.0",
+            "description": "Delete a template and its associated builds",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string", "description": "Template name or ID"}
+                },
+                "required": ["template"]
+            }
+        },
+        {
+            "name": "template_build",
+            "version": "1.0.0",
+            "description": "Trigger a build from a template (runs in background, returns build record immediately)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string", "description": "Template name or ID"}
+                },
+                "required": ["template"]
+            }
+        },
+        {
+            "name": "build_list",
+            "version": "1.0.0",
+            "description": "List all builds, optionally filtered by template",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string", "description": "Filter by template name"}
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "build_inspect",
+            "version": "1.0.0",
+            "description": "Get detailed information about a build",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Build ID (base32-encoded)"}
+                },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "settings_list",
+            "version": "1.0.0",
+            "description": "List all settings with their current values",
+            "inputSchema": {"type": "object", "properties": {}, "required": []}
+        },
+        {
+            "name": "settings_get",
+            "version": "1.0.0",
+            "description": "Get the current value of a setting",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Setting key name"}
+                },
+                "required": ["key"]
+            }
+        },
+        {
+            "name": "settings_update",
+            "version": "1.0.0",
+            "description": "Update a setting value (validated against schema)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Setting key name"},
+                    "value": {"type": "string", "description": "New value for the setting"}
+                },
+                "required": ["key", "value"]
+            }
+        },
+        {
+            "name": "health",
+            "version": "1.0.0",
+            "description": "Check daemon health status including database info",
+            "inputSchema": {"type": "object", "properties": {}, "required": []}
+        },
+        {
+            "name": "cleanup_network",
+            "version": "1.0.0",
+            "description": "Clean up orphaned network resources (tap devices, IP allocations)",
+            "inputSchema": {"type": "object", "properties": {}, "required": []}
+        }
+    ]);
+
+    // Concatenate all tool groups into a single array
+    let mut tools = Vec::new();
+    for group in [&guest_tools, &vm_tools, &storage_tools, &asset_tools, &config_tools] {
+        if let Some(arr) = group.as_array() {
+            tools.extend(arr.iter().cloned());
+        }
+    }
+
+    Ok(json!({ "tools": tools }))
 }
 
 async fn handle_tools_call(
@@ -1383,10 +1481,187 @@ async fn handle_management_tool(
             }
         }
 
-        // Template tools -- Task 9
-        // Build tools -- Task 10
-        // Settings tools -- Task 11
-        // Admin tools -- Task 12
+        // --- Template Tools ---
+        "template_list" => {
+            let templates = state.store.list_templates().map_err(store_err)?;
+            Ok(mcp_text_response(&templates))
+        }
+
+        "template_create" => {
+            let name = require_str(arguments, "name")?;
+            let source_type = require_str(arguments, "source_type")?;
+            let source_id = require_str(arguments, "source_identifier")?;
+            let overlays = arguments.get("overlays").and_then(|v| {
+                serde_json::from_value::<std::collections::HashMap<String, String>>(v.clone()).ok()
+            });
+            let params = nexus_lib::template::CreateTemplateParams {
+                name: name.to_string(),
+                source_type: source_type.to_string(),
+                source_identifier: source_id.to_string(),
+                overlays,
+            };
+            let tpl = state.store.create_template(&params).map_err(store_err)?;
+            Ok(mcp_text_response(&tpl))
+        }
+
+        "template_inspect" => {
+            let name_or_id = require_str(arguments, "template")?;
+            let tpl = state
+                .store
+                .get_template(name_or_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("template '{}' not found", name_or_id))
+                })?;
+            Ok(mcp_text_response(&tpl))
+        }
+
+        "template_delete" => {
+            let name_or_id = require_str(arguments, "template")?;
+            let tpl = state
+                .store
+                .get_template(name_or_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("template '{}' not found", name_or_id))
+                })?;
+            let deleted = state.store.delete_template(tpl.id).map_err(store_err)?;
+            if deleted {
+                Ok(mcp_message_response(&format!(
+                    "Template '{}' deleted",
+                    name_or_id
+                )))
+            } else {
+                Err(McpError::InvalidParams(format!(
+                    "template '{}' not found",
+                    name_or_id
+                )))
+            }
+        }
+
+        "template_build" => {
+            let name_or_id = require_str(arguments, "template")?;
+            let build =
+                crate::api::trigger_build_for_template(state, name_or_id).map_err(|e| {
+                    match e {
+                        crate::api::TriggerBuildError::NotFound(msg) => {
+                            McpError::InvalidParams(msg)
+                        }
+                        crate::api::TriggerBuildError::Internal(msg) => McpError::Internal(msg),
+                    }
+                })?;
+            Ok(mcp_text_response(&build))
+        }
+
+        // --- Build Tools ---
+        "build_list" => {
+            let template = optional_str(arguments, "template");
+            let builds = state.store.list_builds(template).map_err(store_err)?;
+            Ok(mcp_text_response(&builds))
+        }
+
+        "build_inspect" => {
+            let id_str = require_str(arguments, "id")?;
+            let id = nexus_lib::id::Id::decode(id_str).map_err(|_| {
+                McpError::InvalidParams(format!("invalid build ID: '{}'", id_str))
+            })?;
+            let build = state
+                .store
+                .get_build(id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("build '{}' not found", id_str))
+                })?;
+            Ok(mcp_text_response(&build))
+        }
+
+        // --- Settings Tools ---
+        "settings_list" => {
+            let settings = state.store.list_settings().map_err(store_err)?;
+            let response: Vec<serde_json::Value> = settings
+                .into_iter()
+                .map(|(key, value, value_type)| {
+                    json!({"key": key, "value": value, "value_type": value_type})
+                })
+                .collect();
+            Ok(mcp_text_response(&response))
+        }
+
+        "settings_get" => {
+            let key = require_str(arguments, "key")?;
+            let value = state
+                .store
+                .get_setting(key)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("setting '{}' not found", key))
+                })?;
+            let value_type = state
+                .store
+                .list_settings()
+                .ok()
+                .and_then(|settings| {
+                    settings
+                        .iter()
+                        .find(|(k, _, _)| k == key)
+                        .map(|(_, _, t)| t.clone())
+                })
+                .unwrap_or_else(|| "string".to_string());
+            Ok(mcp_text_response(
+                &json!({"key": key, "value": value, "value_type": value_type}),
+            ))
+        }
+
+        "settings_update" => {
+            let key = require_str(arguments, "key")?;
+            let value = require_str(arguments, "value")?;
+            let value_type = state
+                .store
+                .list_settings()
+                .ok()
+                .and_then(|settings| {
+                    settings
+                        .iter()
+                        .find(|(k, _, _)| k == key)
+                        .map(|(_, _, t)| t.clone())
+                })
+                .unwrap_or_else(|| "string".to_string());
+            state.store.validate_setting(key, value).map_err(|e| {
+                McpError::InvalidParams(format!("validation failed: {}", e))
+            })?;
+            state
+                .store
+                .set_setting(key, value, &value_type)
+                .map_err(store_err)?;
+            Ok(mcp_message_response(&format!(
+                "Setting '{}' updated",
+                key
+            )))
+        }
+
+        // --- Admin Tools ---
+        "health" => {
+            let response = match state.store.status() {
+                Ok(db_status) => crate::api::HealthResponse {
+                    status: "ok".to_string(),
+                    database: Some(crate::api::DatabaseInfo::from(db_status)),
+                },
+                Err(_) => crate::api::HealthResponse {
+                    status: "degraded".to_string(),
+                    database: None,
+                },
+            };
+            Ok(mcp_text_response(&response))
+        }
+
+        "cleanup_network" => {
+            let report = state
+                .network_service
+                .cleanup_network()
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            Ok(mcp_text_response(&report))
+        }
+
         _ => Err(McpError::InvalidParams(format!(
             "Unknown tool: {}",
             tool_name
