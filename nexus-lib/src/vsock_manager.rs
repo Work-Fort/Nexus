@@ -222,7 +222,7 @@ impl VsockManager {
         // Update VM state to ready
         let store = self.store.clone();
         tokio::task::spawn_blocking(move || {
-            store.update_vm_state(vm_id, "ready", Some("guest-agent connected"))
+            store.update_vm_state(vm_id, "online", Some("guest-agent connected"))
         })
         .await
         .context("task panicked")?
@@ -365,6 +365,57 @@ impl VsockManager {
     pub async fn close_connection(&self, vm_id: crate::id::Id) {
         self.connections.lock().await.remove(&vm_id);
         self.mcp_pool.close(vm_id).await;
+    }
+
+    /// Run post-boot provisioning for a VM.
+    ///
+    /// Transitions: online → provisioning → ready
+    /// Provisioning steps: DNS configuration via MCP file_write.
+    pub async fn provision_vm(
+        &self,
+        vm_id: crate::id::Id,
+        runtime_dir: PathBuf,
+        resolv_conf: Option<String>,
+    ) -> Result<()> {
+        // Transition to provisioning
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || {
+            store.update_vm_state(vm_id, "provisioning", Some("provisioning started"))
+        })
+        .await
+        .context("task panicked")?
+        .context("failed to update VM state to provisioning")?;
+
+        // Provisioning step 1: Configure DNS
+        if let Some(resolv) = resolv_conf {
+            match self.get_mcp_connection(vm_id, runtime_dir.clone()).await {
+                Ok(stream) => {
+                    let mcp_client = crate::mcp_client::McpClient::new(stream);
+                    match mcp_client.file_write("/etc/resolv.conf", &resolv).await {
+                        Ok(_) => {
+                            info!("Provisioned DNS config for VM {}", vm_id);
+                        }
+                        Err(e) => {
+                            warn!("Failed to provision DNS for VM {}: {}", vm_id, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to get MCP connection for VM {} provisioning: {}", vm_id, e);
+                }
+            }
+        }
+
+        // Transition to ready
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || {
+            store.update_vm_state(vm_id, "ready", Some("provisioning complete"))
+        })
+        .await
+        .context("task panicked")?
+        .context("failed to update VM state to ready")?;
+
+        Ok(())
     }
 }
 
