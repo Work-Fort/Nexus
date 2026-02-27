@@ -176,6 +176,28 @@ enum VmAction {
         /// VM name or ID
         name: String,
     },
+    /// Create VM from rootfs (downloads, builds, creates drive, attaches)
+    FromRootfs {
+        /// Distribution name (e.g., alpine)
+        distro: String,
+        /// Distribution version (e.g., 3.21)
+        version: String,
+        /// VM name (auto-generated if omitted)
+        #[arg(long)]
+        name: Option<String>,
+        /// VM role: work, portal, service
+        #[arg(long, default_value = "work")]
+        role: String,
+        /// vCPU count
+        #[arg(long, default_value = "1")]
+        vcpu: u32,
+        /// Memory in MiB
+        #[arg(long, default_value = "128")]
+        mem: u32,
+        /// File overlay: path=content (can be repeated)
+        #[arg(long = "overlay", value_name = "PATH=CONTENT")]
+        overlays: Vec<String>,
+    },
     /// Add a provision file to inject into VM on start
     AddProvisionFile {
         /// VM name or ID
@@ -796,6 +818,10 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                     ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }
+        }
+        VmAction::FromRootfs { .. } => {
+            eprintln!("FromRootfs not yet implemented");
+            ExitCode::from(EXIT_GENERAL_ERROR)
         }
     }
 }
