@@ -825,6 +825,23 @@ impl NexusClient {
         Ok(settings.into_iter().map(|s| (s.key, s.value, s.value_type)).collect())
     }
 
+    // --- Admin methods ---
+
+    pub async fn admin_cleanup_network(&self) -> Result<crate::network_service::CleanupReport, ClientError> {
+        let url = format!("{}/v1/admin/cleanup-network", self.base_url);
+        let resp = self.http.post(&url).send().await.map_err(|e| {
+            if e.is_connect() || e.is_timeout() { ClientError::Connect(e.to_string()) }
+            else { ClientError::Api(e.to_string()) }
+        })?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Api(format!("cleanup-network failed: {body}")));
+        }
+
+        resp.json().await.map_err(|e| ClientError::Api(e.to_string()))
+    }
+
     pub async fn add_provision_file(
         &self,
         vm_name_or_id: &str,
@@ -996,5 +1013,13 @@ mod tests {
         // This test requires a running daemon, which is impractical for unit tests.
         // The integration test pattern would be in nexusctl/tests/cli.rs instead.
         // For now, just verify the method signature compiles.
+    }
+
+    #[tokio::test]
+    async fn admin_cleanup_network_returns_connect_error_when_no_daemon() {
+        let client = NexusClient::new("127.0.0.1:19997");
+        let result = client.admin_cleanup_network().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is_connect());
     }
 }
