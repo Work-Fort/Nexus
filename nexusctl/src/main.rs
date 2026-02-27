@@ -294,6 +294,29 @@ enum ImageAction {
         #[arg(short, long)]
         yes: bool,
     },
+
+    /// Create image from rootfs (downloads, builds)
+    FromRootfs {
+        /// Distribution name (e.g., alpine)
+        distro: String,
+        /// Distribution version (e.g., 3.21)
+        version: String,
+        /// Image name (derived from distro-version if omitted)
+        #[arg(long)]
+        name: Option<String>,
+        /// File overlay: path=content (can be repeated)
+        #[arg(long = "overlay", value_name = "PATH=CONTENT")]
+        overlays: Vec<String>,
+    },
+
+    /// Create image from template (builds)
+    FromTemplate {
+        /// Template name
+        template: String,
+        /// Image name (derived from template if omitted)
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1379,6 +1402,200 @@ async fn cmd_image(daemon_addr: &str, action: ImageAction) -> ExitCode {
                 Err(e) => {
                     eprintln!("Error: cannot delete image \"{}\"\n  {e}", name);
                     ExitCode::from(EXIT_CONFLICT)
+                }
+            }
+        }
+
+        ImageAction::FromRootfs { distro, version, name: _, overlays } => {
+            eprintln!("Downloading rootfs {} {}...", distro, version);
+
+            // Step 1: Download rootfs
+            let _rootfs = match client.download_rootfs(&distro, &version).await {
+                Ok(r) => {
+                    eprintln!("Downloaded rootfs {}-{}", r.distro, r.version);
+                    r
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot download rootfs {} {}\n  {}", distro, version, e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 2: Create ephemeral template
+            let template_name = format!("_ephemeral_{}_{}_{}",
+                distro, version, chrono::Utc::now().timestamp());
+
+            let overlay_map = if overlays.is_empty() {
+                None
+            } else {
+                let mut map = std::collections::HashMap::new();
+                for entry in &overlays {
+                    if let Some((path, content)) = entry.split_once('=') {
+                        map.insert(path.to_string(), content.to_string());
+                    } else {
+                        eprintln!("Error: invalid overlay format '{}' (expected PATH=CONTENT)", entry);
+                        return ExitCode::from(EXIT_GENERAL_ERROR);
+                    }
+                }
+                Some(map)
+            };
+
+            eprintln!("Creating ephemeral template...");
+            let template_params = CreateTemplateParams {
+                name: template_name.clone(),
+                source_type: "rootfs".to_string(),
+                source_identifier: format!("{}-{}", distro, version),
+                overlays: overlay_map,
+            };
+
+            let template = match client.create_template(&template_params).await {
+                Ok(t) => {
+                    eprintln!("Created template \"{}\"", t.name);
+                    t
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create template\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 3: Trigger build
+            eprintln!("Triggering build...");
+            let build = match client.trigger_build(&template.name).await {
+                Ok(b) => b,
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot trigger build\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 4: Wait for build completion
+            let build_id = build.id.encode();
+            let start_time = std::time::Instant::now();
+            if let Err(code) = poll_build_completion(&client, &build_id, start_time).await {
+                return code;
+            }
+
+            // Step 5: Get completed build to find image
+            let completed_build = match client.get_build(&build_id).await {
+                Ok(Some(b)) => b,
+                Ok(None) => {
+                    eprintln!("Error: build {} disappeared after completion", build_id);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot get build: {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            let image_id = match completed_build.master_image_id {
+                Some(id) => id,
+                None => {
+                    eprintln!("Error: build completed but no master image created");
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 6: Get image details
+            match client.get_image(&image_id.encode()).await {
+                Ok(Some(img)) => {
+                    println!("Created image \"{}\"", img.name);
+                    println!("  ID:   {}", img.id);
+                    println!("  Path: {}", img.subvolume_path);
+                    println!("\n  Create a drive: nexusctl drive from-image {}", img.name);
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    eprintln!("Error: image {} not found after build", image_id);
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+
+        ImageAction::FromTemplate { template, name: _ } => {
+            // Step 1: Trigger build
+            eprintln!("Triggering build from template \"{}\"...", template);
+            let build = match client.trigger_build(&template).await {
+                Ok(b) => b,
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot trigger build\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 2: Wait for build completion
+            let build_id = build.id.encode();
+            let start_time = std::time::Instant::now();
+            if let Err(code) = poll_build_completion(&client, &build_id, start_time).await {
+                return code;
+            }
+
+            // Step 3: Get completed build to find image
+            let completed_build = match client.get_build(&build_id).await {
+                Ok(Some(b)) => b,
+                Ok(None) => {
+                    eprintln!("Error: build {} disappeared after completion", build_id);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot get build: {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            let image_id = match completed_build.master_image_id {
+                Some(id) => id,
+                None => {
+                    eprintln!("Error: build completed but no master image created");
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 4: Get image details
+            match client.get_image(&image_id.encode()).await {
+                Ok(Some(img)) => {
+                    println!("Created image \"{}\"", img.name);
+                    println!("  ID:   {}", img.id);
+                    println!("  Path: {}", img.subvolume_path);
+                    println!("\n  Create a drive: nexusctl drive from-image {}", img.name);
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    eprintln!("Error: image {} not found after build", image_id);
+                    ExitCode::from(EXIT_NOT_FOUND)
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    ExitCode::from(EXIT_GENERAL_ERROR)
                 }
             }
         }
