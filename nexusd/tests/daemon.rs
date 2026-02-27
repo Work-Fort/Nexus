@@ -276,3 +276,17 @@ async fn vm_tags_crud() {
         .send().await.unwrap();
     assert_eq!(resp.status(), 200);
 }
+
+#[tokio::test]
+async fn exec_async_returns_404_for_missing_vm() {
+    let daemon = TestDaemon::start_with_binary(
+        env!("CARGO_BIN_EXE_nexusd").into(),
+    )
+    .await;
+    let client = reqwest::Client::new();
+
+    let resp = client.post(format!("http://{}/v1/vms/nonexistent/exec-async", daemon.addr))
+        .json(&serde_json::json!({"command": "/bin/true"}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 404);
+}

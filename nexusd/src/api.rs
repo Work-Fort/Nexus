@@ -1489,6 +1489,43 @@ async fn remove_vm_tag_handler(
     }
 }
 
+async fn exec_async_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "VM not found"}))),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+    };
+
+    if vm.state != VmState::Ready {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("VM is not ready (state: {})", vm.state)})));
+    }
+
+    let command = match body["command"].as_str() {
+        Some(c) => c.to_string(),
+        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "missing 'command' field"}))),
+    };
+    let args: Vec<String> = body.get("args")
+        .and_then(|a| a.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    let runtime_dir = nexus_lib::vm_service::vm_runtime_dir(&vm.id);
+    let stream = match state.vsock_manager.get_mcp_connection(vm.id, runtime_dir).await {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("vsock connection failed: {e}")}))),
+    };
+    let mcp_client = nexus_lib::mcp_client::McpClient::new(stream);
+
+    match mcp_client.run_command_async(&command, &args).await {
+        Ok(pid) => (StatusCode::OK, Json(serde_json::json!({"pid": pid}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+    }
+}
+
 async fn add_provision_file_handler(
     State(state): State<Arc<AppState>>,
     Path(name_or_id): Path<String>,
@@ -1593,6 +1630,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/vms/{name_or_id}/history", get(vm_history_handler))
         .route("/v1/vms/{name_or_id}/tags", post(add_vm_tag_handler).get(list_vm_tags_handler))
         .route("/v1/vms/{name_or_id}/tags/{tag}", delete(remove_vm_tag_handler))
+        .route("/v1/vms/{name_or_id}/exec-async", post(exec_async_handler))
         .route("/v1/vms/{name_or_id}/provision-files", post(add_provision_file_handler).get(list_provision_files_handler))
         .route("/v1/vms/{name_or_id}/provision-files/remove", post(remove_provision_file_handler))
         .route("/v1/images", post(import_image).get(list_images))
