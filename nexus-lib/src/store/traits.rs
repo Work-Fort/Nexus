@@ -308,6 +308,24 @@ pub trait NetworkStore {
     fn list_allocated_ips(&self, bridge_name: &str) -> Result<Vec<String>, StoreError>;
 }
 
+/// VM provision file management (Step 13.6)
+pub trait ProvisionStore {
+    /// Add a provision file configuration for a VM.
+    /// Returns the created record. Fails with Conflict if guest_path already exists for this VM.
+    fn add_provision_file(
+        &self,
+        vm_id: Id,
+        params: &crate::vm::AddProvisionFileParams,
+    ) -> Result<crate::vm::ProvisionFile, StoreError>;
+
+    /// List all provision files for a VM.
+    fn list_provision_files(&self, vm_id: Id) -> Result<Vec<crate::vm::ProvisionFile>, StoreError>;
+
+    /// Remove a provision file by VM ID and guest path.
+    /// Returns true if deleted, false if not found.
+    fn remove_provision_file(&self, vm_id: Id, guest_path: &str) -> Result<bool, StoreError>;
+}
+
 /// Settings store for runtime preferences (versioned key-value store).
 pub trait SettingsStore {
     /// Get the current value for a setting key.
@@ -339,7 +357,7 @@ pub trait SettingsStore {
 /// All state persistence goes through this trait. The pre-alpha
 /// implementation is SQLite; this trait exists so the backend can
 /// be swapped to Postgres or etcd for clustering later.
-pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStore + NetworkStore + SettingsStore {
+pub trait StateStore: VmStore + ImageStore + DriveStore + AssetStore + BuildStore + NetworkStore + SettingsStore + ProvisionStore {
     /// Initialize the store (create schema if needed, run migrations).
     fn init(&self) -> Result<(), StoreError>;
 
