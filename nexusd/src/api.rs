@@ -1387,6 +1387,97 @@ struct UpdateSettingRequest {
     value: String,
 }
 
+async fn add_provision_file_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+    Json(params): Json<nexus_lib::vm::AddProvisionFileParams>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    match state.store.add_provision_file(vm.id, &params) {
+        Ok(pf) => (StatusCode::CREATED, Json(serde_json::to_value(pf).unwrap())),
+        Err(e) => {
+            let status = match &e {
+                nexus_lib::store::traits::StoreError::Conflict(_) => StatusCode::CONFLICT,
+                nexus_lib::store::traits::StoreError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, Json(serde_json::json!({"error": e.to_string()})))
+        }
+    }
+}
+
+async fn list_provision_files_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    match state.store.list_provision_files(vm.id) {
+        Ok(files) => (StatusCode::OK, Json(serde_json::to_value(files).unwrap())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// Request body for removing a provision file.
+#[derive(serde::Deserialize)]
+struct RemoveProvisionFileParams {
+    guest_path: String,
+}
+
+async fn remove_provision_file_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+    Json(params): Json<RemoveProvisionFileParams>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let vm = match state.store.get_vm(&name_or_id) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
+        ),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    };
+
+    match state.store.remove_provision_file(vm.id, &params.guest_path) {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"deleted": true}))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("no provision file for guest path '{}'", params.guest_path)})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
@@ -1398,6 +1489,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/vms/{name_or_id}/stop", post(stop_vm_handler))
         .route("/v1/vms/{name_or_id}/logs", get(vm_logs_handler))
         .route("/v1/vms/{name_or_id}/history", get(vm_history_handler))
+        .route("/v1/vms/{name_or_id}/provision-files", post(add_provision_file_handler).get(list_provision_files_handler))
+        .route("/v1/vms/{name_or_id}/provision-files/remove", post(remove_provision_file_handler))
         .route("/v1/images", post(import_image).get(list_images))
         .route("/v1/images/{name_or_id}", get(get_image).delete(delete_image_handler))
         .route("/v1/drives", post(create_drive_handler).get(list_drives))
