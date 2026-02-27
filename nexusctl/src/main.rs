@@ -90,6 +90,11 @@ enum Commands {
     /// Manage configuration settings
     #[command(subcommand)]
     Config(ConfigCommands),
+    /// Administrative / debug commands
+    Admin {
+        #[command(subcommand)]
+        action: AdminAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -110,6 +115,12 @@ enum ConfigCommands {
     },
     /// List all configuration settings
     List,
+}
+
+#[derive(Subcommand)]
+enum AdminAction {
+    /// Clean up all nexus network state (taps, bridge, nftables)
+    CleanupNetwork,
 }
 
 #[derive(Subcommand)]
@@ -540,6 +551,7 @@ async fn main() -> ExitCode {
         Commands::McpBridge => cmd_mcp_bridge(&daemon_addr).await,
         Commands::SetupFirewall => cmd_setup_firewall().await,
         Commands::Config(cmd) => cmd_config(&daemon_addr, cmd).await,
+        Commands::Admin { action } => cmd_admin(&daemon_addr, action).await,
     }
 }
 
@@ -2710,6 +2722,32 @@ async fn poll_build_completion(
 // TODO: read bridge_name and subnet from a preferences table once it exists
 const BRIDGE_NAME: &str = "nexbr0";
 const VM_SUBNET: &str = "172.16.0.0/12";
+
+async fn cmd_admin(daemon_addr: &str, action: AdminAction) -> ExitCode {
+    let client = NexusClient::new(daemon_addr);
+
+    match action {
+        AdminAction::CleanupNetwork => {
+            match client.admin_cleanup_network().await {
+                Ok(report) => {
+                    println!("Network cleanup complete:");
+                    println!("  Taps deleted:    {}", report.taps_deleted);
+                    println!("  Bridge deleted:  {}", report.bridge_deleted);
+                    println!("  nftables flushed: {}", report.nftables_flushed);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+    }
+}
 
 async fn cmd_config(daemon_addr: &str, cmd: ConfigCommands) -> ExitCode {
     let client = NexusClient::new(daemon_addr);

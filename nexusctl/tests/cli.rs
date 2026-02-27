@@ -98,6 +98,23 @@ async fn vm_create_list_inspect_delete() {
     assert!(!output.status.success(), "expected inspect to fail after delete");
 }
 
+#[tokio::test]
+async fn admin_cleanup_network() {
+    let daemon = TestDaemon::start().await;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_nexusctl"))
+        .args(["--daemon", &daemon.addr, "admin", "cleanup-network"])
+        .output()
+        .expect("failed to run nexusctl");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "admin cleanup-network failed: {stdout}");
+    // With no VMs running, cleanup should report zeros
+    assert!(stdout.contains("Taps deleted:"), "expected taps line: {stdout}");
+    assert!(stdout.contains("Bridge deleted:"), "expected bridge line: {stdout}");
+    assert!(stdout.contains("nftables flushed:"), "expected nftables line: {stdout}");
+}
+
 #[test]
 fn version_prints_version() {
     let output = Command::new(env!("CARGO_BIN_EXE_nexusctl"))

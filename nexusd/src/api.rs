@@ -1315,7 +1315,6 @@ async fn vm_history_handler(
     }
 }
 
-// TODO: expose as `nexusctl admin cleanup-network` in nexusctl
 // Gate with #[cfg(debug_assertions)] to exclude from release builds
 async fn cleanup_network_handler(
     State(state): State<Arc<AppState>>,
