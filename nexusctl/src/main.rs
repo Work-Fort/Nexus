@@ -198,6 +198,42 @@ enum VmAction {
         #[arg(long = "overlay", value_name = "PATH=CONTENT")]
         overlays: Vec<String>,
     },
+
+    /// Create VM from template (builds, creates drive, attaches)
+    FromTemplate {
+        /// Template name
+        template: String,
+        /// VM name (auto-generated if omitted)
+        #[arg(long)]
+        name: Option<String>,
+        /// VM role: work, portal, service
+        #[arg(long, default_value = "work")]
+        role: String,
+        /// vCPU count
+        #[arg(long, default_value = "1")]
+        vcpu: u32,
+        /// Memory in MiB
+        #[arg(long, default_value = "128")]
+        mem: u32,
+    },
+
+    /// Create VM from image (creates drive, attaches)
+    FromImage {
+        /// Image name or ID
+        image: String,
+        /// VM name (auto-generated if omitted)
+        #[arg(long)]
+        name: Option<String>,
+        /// VM role: work, portal, service
+        #[arg(long, default_value = "work")]
+        role: String,
+        /// vCPU count
+        #[arg(long, default_value = "1")]
+        vcpu: u32,
+        /// Memory in MiB
+        #[arg(long, default_value = "128")]
+        mem: u32,
+    },
     /// Add a provision file to inject into VM on start
     AddProvisionFile {
         /// VM name or ID
@@ -983,6 +1019,212 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
             };
 
             // Step 8: Attach drive to VM
+            eprintln!("Attaching drive...");
+            let drive_id_encoded = drive.id.encode();
+            let drive_id_or_name = drive.name.as_deref().unwrap_or(&drive_id_encoded);
+            match client.attach_drive(drive_id_or_name, &vm.id.encode(), true).await {
+                Ok(_) => {
+                    println!("Created VM \"{}\" (state: {}, CID: {})", vm.name, vm.state, vm.cid);
+                    println!("\n  Start it: nexusctl vm start {}", vm.name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot attach drive\n  {}", e);
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+
+        VmAction::FromTemplate { template, name, role, vcpu, mem } => {
+            // Step 1: Trigger build
+            eprintln!("Triggering build from template \"{}\"...", template);
+            let build = match client.trigger_build(&template).await {
+                Ok(b) => b,
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot trigger build\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 2: Wait for build completion
+            let build_id = build.id.encode();
+            let start_time = std::time::Instant::now();
+            if let Err(code) = poll_build_completion(&client, &build_id, start_time).await {
+                return code;
+            }
+
+            // Step 3: Get completed build to find image ID
+            let completed_build = match client.get_build(&build_id).await {
+                Ok(Some(b)) => b,
+                Ok(None) => {
+                    eprintln!("Error: build {} disappeared after completion", build_id);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot get build: {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            let image_id = match completed_build.master_image_id {
+                Some(id) => id,
+                None => {
+                    eprintln!("Error: build completed but no master image created");
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 4: Create drive from image
+            eprintln!("Creating drive...");
+            let drive_name = name.as_ref().map(|n| format!("{}-drive", n));
+            let drive_params = CreateDriveParams {
+                name: drive_name.clone(),
+                base: image_id.encode(),
+                size: None,
+            };
+
+            let drive = match client.create_drive(&drive_params).await {
+                Ok(d) => {
+                    let id_fallback = d.id.encode();
+                    let d_name = d.name.as_deref().unwrap_or(&id_fallback);
+                    eprintln!("Created drive \"{}\"", d_name);
+                    d
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create drive\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 5: Create VM
+            eprintln!("Creating VM...");
+            let vm_name = name.unwrap_or_else(|| format!("vm-{}", chrono::Utc::now().timestamp()));
+
+            let role_parsed: VmRole = match role.parse() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            let vm_params = CreateVmParams {
+                name: vm_name.clone(),
+                role: role_parsed,
+                vcpu_count: vcpu,
+                mem_size_mib: mem,
+            };
+
+            let vm = match client.create_vm(&vm_params).await {
+                Ok(v) => {
+                    eprintln!("Created VM \"{}\"", v.name);
+                    v
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create VM\n  {}", e);
+                    return ExitCode::from(EXIT_CONFLICT);
+                }
+            };
+
+            // Step 6: Attach drive
+            eprintln!("Attaching drive...");
+            let drive_id_encoded = drive.id.encode();
+            let drive_id_or_name = drive.name.as_deref().unwrap_or(&drive_id_encoded);
+            match client.attach_drive(drive_id_or_name, &vm.id.encode(), true).await {
+                Ok(_) => {
+                    println!("Created VM \"{}\" (state: {}, CID: {})", vm.name, vm.state, vm.cid);
+                    println!("\n  Start it: nexusctl vm start {}", vm.name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot attach drive\n  {}", e);
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+
+        VmAction::FromImage { image, name, role, vcpu, mem } => {
+            // Step 1: Create drive from image
+            eprintln!("Creating drive from image \"{}\"...", image);
+            let drive_name = name.as_ref().map(|n| format!("{}-drive", n));
+            let drive_params = CreateDriveParams {
+                name: drive_name.clone(),
+                base: image.clone(),
+                size: None,
+            };
+
+            let drive = match client.create_drive(&drive_params).await {
+                Ok(d) => {
+                    let id_fallback = d.id.encode();
+                    let d_name = d.name.as_deref().unwrap_or(&id_fallback);
+                    eprintln!("Created drive \"{}\"", d_name);
+                    d
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create drive\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 2: Create VM
+            eprintln!("Creating VM...");
+            let vm_name = name.unwrap_or_else(|| format!("vm-{}", chrono::Utc::now().timestamp()));
+
+            let role_parsed: VmRole = match role.parse() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            let vm_params = CreateVmParams {
+                name: vm_name.clone(),
+                role: role_parsed,
+                vcpu_count: vcpu,
+                mem_size_mib: mem,
+            };
+
+            let vm = match client.create_vm(&vm_params).await {
+                Ok(v) => {
+                    eprintln!("Created VM \"{}\"", v.name);
+                    v
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create VM\n  {}", e);
+                    return ExitCode::from(EXIT_CONFLICT);
+                }
+            };
+
+            // Step 3: Attach drive
             eprintln!("Attaching drive...");
             let drive_id_encoded = drive.id.encode();
             let drive_id_or_name = drive.name.as_deref().unwrap_or(&drive_id_encoded);
