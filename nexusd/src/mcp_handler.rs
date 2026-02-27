@@ -207,6 +207,108 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
                     },
                     "required": ["vm", "command"]
                 }
+            },
+            // --- VM Lifecycle Tools ---
+            {
+                "name": "vm_list",
+                "version": "1.0.0",
+                "description": "List all VMs with optional filtering by role or state",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "role": {"type": "string", "description": "Filter by VM role: 'work', 'portal', or 'service'"},
+                        "state": {"type": "string", "description": "Filter by VM state (e.g., 'created', 'running', 'ready')"}
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "vm_create",
+                "version": "1.0.0",
+                "description": "Create a new VM record",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "VM name (must be unique)"},
+                        "role": {"type": "string", "description": "VM role: 'work' (default), 'portal', or 'service'"},
+                        "vcpu_count": {"type": "integer", "description": "Number of vCPUs (default: 1)"},
+                        "mem_size_mib": {"type": "integer", "description": "Memory in MiB (default: 128)"}
+                    },
+                    "required": ["name"]
+                }
+            },
+            {
+                "name": "vm_inspect",
+                "version": "1.0.0",
+                "description": "Get detailed information about a VM including network config",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vm": {"type": "string", "description": "VM name or ID"}
+                    },
+                    "required": ["vm"]
+                }
+            },
+            {
+                "name": "vm_delete",
+                "version": "1.0.0",
+                "description": "Delete a VM record (must not be running)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vm": {"type": "string", "description": "VM name or ID"}
+                    },
+                    "required": ["vm"]
+                }
+            },
+            {
+                "name": "vm_start",
+                "version": "1.0.0",
+                "description": "Start a VM (resolves rootfs, allocates network, spawns Firecracker, provisions guest)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vm": {"type": "string", "description": "VM name or ID"}
+                    },
+                    "required": ["vm"]
+                }
+            },
+            {
+                "name": "vm_stop",
+                "version": "1.0.0",
+                "description": "Stop a running VM (sends SIGTERM to Firecracker, cleans up network)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vm": {"type": "string", "description": "VM name or ID"}
+                    },
+                    "required": ["vm"]
+                }
+            },
+            {
+                "name": "vm_logs",
+                "version": "1.0.0",
+                "description": "Get console log output from a VM",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vm": {"type": "string", "description": "VM name or ID"},
+                        "tail": {"type": "integer", "description": "Number of lines from end (default: 100)"}
+                    },
+                    "required": ["vm"]
+                }
+            },
+            {
+                "name": "vm_history",
+                "version": "1.0.0",
+                "description": "Get state transition history for a VM",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vm": {"type": "string", "description": "VM name or ID"}
+                    },
+                    "required": ["vm"]
+                }
             }
         ]
     }))
@@ -420,11 +522,156 @@ async fn handle_guest_tool(
 
 async fn handle_management_tool(
     tool_name: &str,
-    _arguments: &serde_json::Map<String, Value>,
-    _state: &Arc<crate::api::AppState>,
+    arguments: &serde_json::Map<String, Value>,
+    state: &Arc<crate::api::AppState>,
 ) -> Result<Value, McpError> {
     match tool_name {
-        // VM lifecycle tools -- Task 2
+        // --- VM Lifecycle Tools ---
+        "vm_list" => {
+            let role = optional_str(arguments, "role");
+            let vm_state = optional_str(arguments, "state");
+            let vms = state.store.list_vms(role, vm_state).map_err(store_err)?;
+            Ok(mcp_text_response(&vms))
+        }
+
+        "vm_create" => {
+            let name = require_str(arguments, "name")?;
+            let role_str = optional_str(arguments, "role").unwrap_or("work");
+            let vcpu = arguments
+                .get("vcpu_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1) as u32;
+            let mem = arguments
+                .get("mem_size_mib")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(128) as u32;
+
+            let params = nexus_lib::vm::CreateVmParams {
+                name: name.to_string(),
+                role: serde_json::from_value(serde_json::json!(role_str))
+                    .unwrap_or(nexus_lib::vm::VmRole::Work),
+                vcpu_count: vcpu,
+                mem_size_mib: mem,
+            };
+            let vm = state.store.create_vm(&params).map_err(store_err)?;
+            Ok(mcp_text_response(&vm))
+        }
+
+        "vm_inspect" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state
+                .store
+                .get_vm(vm_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("VM '{}' not found", vm_id))
+                })?;
+            let network = state.store.get_vm_network(vm.id.as_i64()).ok().flatten();
+            let mut vm_json = serde_json::to_value(&vm).unwrap();
+            vm_json["network"] = network
+                .as_ref()
+                .map(|n| {
+                    json!({
+                        "ip_address": n.ip_address,
+                        "bridge_name": n.bridge_name,
+                    })
+                })
+                .unwrap_or(Value::Null);
+            Ok(json!({
+                "content": [{"type": "text", "text": serde_json::to_string_pretty(&vm_json).unwrap()}]
+            }))
+        }
+
+        "vm_delete" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state
+                .store
+                .get_vm(vm_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("VM '{}' not found", vm_id))
+                })?;
+            // Clean up tap device (best-effort)
+            if let Err(e) = state.network_service.destroy_tap(vm.id.as_i64()) {
+                tracing::warn!(
+                    "Failed to destroy tap device for VM {}: {}",
+                    vm.name,
+                    e
+                );
+            }
+            let deleted = state.store.delete_vm(vm.id).map_err(store_err)?;
+            if deleted {
+                Ok(mcp_message_response(&format!("VM '{}' deleted", vm_id)))
+            } else {
+                Err(McpError::InvalidParams(format!(
+                    "VM '{}' not found",
+                    vm_id
+                )))
+            }
+        }
+
+        "vm_start" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = crate::api::start_vm(state.as_ref(), vm_id)
+                .await
+                .map_err(|e| match e {
+                    crate::api::StartVmError::NotFound(msg) => McpError::InvalidParams(msg),
+                    crate::api::StartVmError::BadRequest(msg) => McpError::InvalidParams(msg),
+                    crate::api::StartVmError::Conflict(msg) => McpError::InvalidParams(msg),
+                    crate::api::StartVmError::Internal(msg) => McpError::Internal(msg),
+                })?;
+            Ok(mcp_text_response(&vm))
+        }
+
+        "vm_stop" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = crate::api::stop_vm(state.as_ref(), vm_id)
+                .await
+                .map_err(|e| match e {
+                    crate::api::StopVmError::NotFound(msg) => McpError::InvalidParams(msg),
+                    crate::api::StopVmError::Conflict(msg) => McpError::InvalidParams(msg),
+                    crate::api::StopVmError::Internal(msg) => McpError::Internal(msg),
+                })?;
+            Ok(mcp_text_response(&vm))
+        }
+
+        "vm_logs" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state
+                .store
+                .get_vm(vm_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("VM '{}' not found", vm_id))
+                })?;
+            let log_path = vm.console_log_path.as_ref().ok_or_else(|| {
+                McpError::InvalidParams(format!("no console log for VM '{}'", vm.name))
+            })?;
+            let tail: usize = arguments
+                .get("tail")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(100) as usize;
+            let content = std::fs::read_to_string(log_path)
+                .map_err(|e| McpError::Internal(format!("cannot read console log: {}", e)))?;
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(tail);
+            let output = lines[start..].join("\n");
+            Ok(mcp_message_response(&output))
+        }
+
+        "vm_history" => {
+            let vm_id = require_str(arguments, "vm")?;
+            let vm = state
+                .store
+                .get_vm(vm_id)
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::InvalidParams(format!("VM '{}' not found", vm_id))
+                })?;
+            let history = state.store.get_state_history(vm.id).map_err(store_err)?;
+            Ok(mcp_text_response(&history))
+        }
+
         // VM provisioning tools -- Task 3
         // Image tools -- Task 4
         // Drive tools -- Task 5
