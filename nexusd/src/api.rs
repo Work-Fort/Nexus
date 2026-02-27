@@ -2218,7 +2218,9 @@ mod tests {
 
         // Trigger state transitions
         state.store.update_vm_state(vm.id, "running", Some("started")).unwrap();
-        state.store.update_vm_state(vm.id, "ready", Some("agent connected")).unwrap();
+        state.store.update_vm_state(vm.id, "online", Some("agent connected")).unwrap();
+        state.store.update_vm_state(vm.id, "provisioning", Some("provisioning started")).unwrap();
+        state.store.update_vm_state(vm.id, "ready", Some("provisioning complete")).unwrap();
 
         let app = router(state);
 
@@ -2235,11 +2237,15 @@ mod tests {
             .unwrap();
         let history: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
 
-        assert_eq!(history.len(), 2);
-        assert_eq!(history[0]["from_state"], "running");
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0]["from_state"], "provisioning");
         assert_eq!(history[0]["to_state"], "ready");
-        assert_eq!(history[1]["from_state"], "created");
-        assert_eq!(history[1]["to_state"], "running");
+        assert_eq!(history[1]["from_state"], "online");
+        assert_eq!(history[1]["to_state"], "provisioning");
+        assert_eq!(history[2]["from_state"], "running");
+        assert_eq!(history[2]["to_state"], "online");
+        assert_eq!(history[3]["from_state"], "created");
+        assert_eq!(history[3]["to_state"], "running");
     }
 
     #[tokio::test]

@@ -2972,25 +2972,35 @@ mod tests {
 
         // Trigger state transitions
         store.update_vm_state(vm.id, "running", Some("started")).unwrap();
-        store.update_vm_state(vm.id, "ready", Some("agent connected")).unwrap();
+        store.update_vm_state(vm.id, "online", Some("agent connected")).unwrap();
+        store.update_vm_state(vm.id, "provisioning", Some("provisioning started")).unwrap();
+        store.update_vm_state(vm.id, "ready", Some("provisioning complete")).unwrap();
         store.update_vm_state(vm.id, "stopped", Some("user stopped")).unwrap();
 
         // Get history
         let history = store.get_state_history(vm.id).unwrap();
 
-        assert_eq!(history.len(), 3);
+        assert_eq!(history.len(), 5);
         // Newest first
         assert_eq!(history[0].from_state, "ready");
         assert_eq!(history[0].to_state, "stopped");
         assert_eq!(history[0].reason, Some("user stopped".to_string()));
 
-        assert_eq!(history[1].from_state, "running");
+        assert_eq!(history[1].from_state, "provisioning");
         assert_eq!(history[1].to_state, "ready");
-        assert_eq!(history[1].reason, Some("agent connected".to_string()));
+        assert_eq!(history[1].reason, Some("provisioning complete".to_string()));
 
-        assert_eq!(history[2].from_state, "created");
-        assert_eq!(history[2].to_state, "running");
-        assert_eq!(history[2].reason, Some("started".to_string()));
+        assert_eq!(history[2].from_state, "online");
+        assert_eq!(history[2].to_state, "provisioning");
+        assert_eq!(history[2].reason, Some("provisioning started".to_string()));
+
+        assert_eq!(history[3].from_state, "running");
+        assert_eq!(history[3].to_state, "online");
+        assert_eq!(history[3].reason, Some("agent connected".to_string()));
+
+        assert_eq!(history[4].from_state, "created");
+        assert_eq!(history[4].to_state, "running");
+        assert_eq!(history[4].reason, Some("started".to_string()));
     }
 
     #[test]
