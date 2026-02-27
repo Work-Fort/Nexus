@@ -819,9 +819,188 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                 }
             }
         }
-        VmAction::FromRootfs { .. } => {
-            eprintln!("FromRootfs not yet implemented");
-            ExitCode::from(EXIT_GENERAL_ERROR)
+        VmAction::FromRootfs { distro, version, name, role, vcpu, mem, overlays } => {
+            eprintln!("Downloading rootfs {} {}...", distro, version);
+
+            // Step 1: Download rootfs
+            let _rootfs = match client.download_rootfs(&distro, &version).await {
+                Ok(r) => {
+                    eprintln!("Downloaded rootfs {}-{}", r.distro, r.version);
+                    r
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot download rootfs {} {}\n  {}", distro, version, e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 2: Create ephemeral template
+            let template_name = format!("_ephemeral_{}_{}_{}",
+                distro, version, chrono::Utc::now().timestamp());
+
+            let overlay_map = if overlays.is_empty() {
+                None
+            } else {
+                let mut map = std::collections::HashMap::new();
+                for entry in &overlays {
+                    if let Some((path, content)) = entry.split_once('=') {
+                        map.insert(path.to_string(), content.to_string());
+                    } else {
+                        eprintln!("Error: invalid overlay format '{}' (expected PATH=CONTENT)", entry);
+                        return ExitCode::from(EXIT_GENERAL_ERROR);
+                    }
+                }
+                Some(map)
+            };
+
+            eprintln!("Creating ephemeral template...");
+            let template_params = CreateTemplateParams {
+                name: template_name.clone(),
+                source_type: "rootfs".to_string(),
+                source_identifier: format!("{}-{}", distro, version),
+                overlays: overlay_map,
+            };
+
+            let template = match client.create_template(&template_params).await {
+                Ok(t) => {
+                    eprintln!("Created template \"{}\"", t.name);
+                    t
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create template\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 3: Trigger build
+            eprintln!("Triggering build...");
+            let build = match client.trigger_build(&template.name).await {
+                Ok(b) => b,
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot trigger build\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 4: Wait for build completion
+            let build_id = build.id.encode();
+            let start_time = std::time::Instant::now();
+            if let Err(code) = poll_build_completion(&client, &build_id, start_time).await {
+                return code;
+            }
+
+            // Step 5: Get the completed build to find master_image_id
+            let completed_build = match client.get_build(&build_id).await {
+                Ok(Some(b)) => b,
+                Ok(None) => {
+                    eprintln!("Error: build {} disappeared after completion", build_id);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot get build: {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            let image_id = match completed_build.master_image_id {
+                Some(id) => id,
+                None => {
+                    eprintln!("Error: build completed but no master image created");
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 6: Create drive from image
+            eprintln!("Creating drive...");
+            let drive_name = name.as_ref().map(|n| format!("{}-drive", n));
+            let drive_params = CreateDriveParams {
+                name: drive_name.clone(),
+                base: image_id.encode(),
+                size: None,
+            };
+
+            let drive = match client.create_drive(&drive_params).await {
+                Ok(d) => {
+                    let id_fallback = d.id.encode();
+                    let d_name = d.name.as_deref().unwrap_or(&id_fallback);
+                    eprintln!("Created drive \"{}\"", d_name);
+                    d
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create drive\n  {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            // Step 7: Create VM
+            eprintln!("Creating VM...");
+            let vm_name = name.unwrap_or_else(|| format!("vm-{}", chrono::Utc::now().timestamp()));
+
+            let role_parsed: VmRole = match role.parse() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return ExitCode::from(EXIT_GENERAL_ERROR);
+                }
+            };
+
+            let vm_params = CreateVmParams {
+                name: vm_name.clone(),
+                role: role_parsed,
+                vcpu_count: vcpu,
+                mem_size_mib: mem,
+            };
+
+            let vm = match client.create_vm(&vm_params).await {
+                Ok(v) => {
+                    eprintln!("Created VM \"{}\"", v.name);
+                    v
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    return ExitCode::from(EXIT_DAEMON_UNREACHABLE);
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot create VM\n  {}", e);
+                    return ExitCode::from(EXIT_CONFLICT);
+                }
+            };
+
+            // Step 8: Attach drive to VM
+            eprintln!("Attaching drive...");
+            let drive_id_encoded = drive.id.encode();
+            let drive_id_or_name = drive.name.as_deref().unwrap_or(&drive_id_encoded);
+            match client.attach_drive(drive_id_or_name, &vm.id.encode(), true).await {
+                Ok(_) => {
+                    println!("Created VM \"{}\" (state: {}, CID: {})", vm.name, vm.state, vm.cid);
+                    println!("\n  Start it: nexusctl vm start {}", vm.name);
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: cannot attach drive\n  {}", e);
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
         }
     }
 }
