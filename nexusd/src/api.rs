@@ -1143,35 +1143,40 @@ fn find_rootfs_for_vm(state: &AppState, vm_id: &nexus_lib::id::Id) -> Result<Str
     ))
 }
 
-async fn stop_vm_handler(
-    State(state): State<Arc<AppState>>,
-    Path(name_or_id): Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let vm = match state.store.get_vm(&name_or_id) {
-        Ok(Some(vm)) => vm,
-        Ok(None) => return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("VM '{}' not found", name_or_id)})),
-        ),
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ),
-    };
+/// Error type for stop_vm operations.
+#[derive(Debug)]
+pub enum StopVmError {
+    NotFound(String),
+    Conflict(String),
+    Internal(String),
+}
+
+impl std::fmt::Display for StopVmError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StopVmError::NotFound(msg) => write!(f, "{}", msg),
+            StopVmError::Conflict(msg) => write!(f, "{}", msg),
+            StopVmError::Internal(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+/// Core VM stop logic: validate state, send SIGTERM, clean up process map
+/// and network resources. Used by both REST and MCP handlers.
+pub async fn stop_vm(state: &AppState, name_or_id: &str) -> Result<nexus_lib::vm::Vm, StopVmError> {
+    let vm = state.store.get_vm(name_or_id)
+        .map_err(|e| StopVmError::Internal(e.to_string()))?
+        .ok_or_else(|| StopVmError::NotFound(format!("VM '{}' not found", name_or_id)))?;
 
     if vm.state != VmState::Running && vm.state != VmState::Ready
         && vm.state != VmState::Unreachable && vm.state != VmState::Online
         && vm.state != VmState::Provisioning {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": format!("VM '{}' is not running (state: {})", vm.name, vm.state)})),
-        );
+        return Err(StopVmError::Conflict(format!(
+            "VM '{}' is not running (state: {})", vm.name, vm.state
+        )));
     }
 
-    // Send SIGTERM to the Firecracker process.
-    // Do NOT call blocking child.wait() while holding the tokio Mutex.
-    // Instead, just signal and remove from the process map — the monitor
-    // will detect the exit via try_wait() and transition state to `stopped`.
+    // Send SIGTERM to the Firecracker process
     if let Some(pid) = vm.pid {
         let _ = nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(pid as i32),
@@ -1197,11 +1202,27 @@ async fn stop_vm_handler(
         tracing::warn!("Failed to destroy tap device for VM {}: {}", vm.name, e);
     }
 
-    match state.store.stop_vm(vm.id) {
-        Ok(stopped) => (StatusCode::OK, Json(serde_json::to_value(stopped).unwrap())),
-        Err(e) => (
+    state.store.stop_vm(vm.id)
+        .map_err(|e| StopVmError::Internal(e.to_string()))
+}
+
+async fn stop_vm_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match stop_vm(&state, &name_or_id).await {
+        Ok(vm) => (StatusCode::OK, Json(serde_json::to_value(vm).unwrap())),
+        Err(StopVmError::NotFound(msg)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(StopVmError::Conflict(msg)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(StopVmError::Internal(msg)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
+            Json(serde_json::json!({"error": msg})),
         ),
     }
 }
