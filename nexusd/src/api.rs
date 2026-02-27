@@ -796,29 +796,36 @@ async fn delete_template_handler(
 // Build handlers
 // ---------------------------------------------------------------------------
 
-async fn trigger_build(
-    State(state): State<Arc<AppState>>,
-    Path(template_name_or_id): Path<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let template = match state.store.get_template(&template_name_or_id) {
-        Ok(Some(tpl)) => tpl,
-        Ok(None) => return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("template '{}' not found", template_name_or_id)})),
-        ),
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ),
-    };
+/// Error type for trigger_build operations.
+#[derive(Debug)]
+pub enum TriggerBuildError {
+    NotFound(String),
+    Internal(String),
+}
 
-    let build = match state.store.create_build(&template) {
-        Ok(b) => b,
-        Err(e) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ),
-    };
+impl std::fmt::Display for TriggerBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TriggerBuildError::NotFound(msg) => write!(f, "{}", msg),
+            TriggerBuildError::Internal(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+/// Trigger a build from a template: create the build record and spawn background
+/// execution. Returns the build record immediately. Used by both REST and MCP handlers.
+pub fn trigger_build_for_template(
+    state: &Arc<AppState>,
+    template_name_or_id: &str,
+) -> Result<nexus_lib::template::Build, TriggerBuildError> {
+    let template = state.store.get_template(template_name_or_id)
+        .map_err(|e| TriggerBuildError::Internal(e.to_string()))?
+        .ok_or_else(|| TriggerBuildError::NotFound(
+            format!("template '{}' not found", template_name_or_id)
+        ))?;
+
+    let build = state.store.create_build(&template)
+        .map_err(|e| TriggerBuildError::Internal(e.to_string()))?;
 
     // Spawn background build execution
     let build_clone = build.clone();
@@ -839,7 +846,24 @@ async fn trigger_build(
         svc.execute_build(&build_clone).await;
     });
 
-    (StatusCode::CREATED, Json(serde_json::to_value(build).unwrap()))
+    Ok(build)
+}
+
+async fn trigger_build(
+    State(state): State<Arc<AppState>>,
+    Path(template_name_or_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match trigger_build_for_template(&state, &template_name_or_id) {
+        Ok(build) => (StatusCode::CREATED, Json(serde_json::to_value(build).unwrap())),
+        Err(TriggerBuildError::NotFound(msg)) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        Err(TriggerBuildError::Internal(msg)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": msg})),
+        ),
+    }
 }
 
 async fn list_builds_handler(
