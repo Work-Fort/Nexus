@@ -2,14 +2,17 @@
 /// Schema version — increment when the schema changes.
 /// Pre-alpha migration strategy: if the stored version doesn't match,
 /// delete the DB and recreate.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// Database schema. Executed as a single batch on first start.
 /// Domain tables are added by later steps — each step bumps SCHEMA_VERSION
 /// and appends its tables here. Pre-alpha migration (delete + recreate)
 /// means all tables are always created from this single constant.
 pub const SCHEMA_SQL: &str = r#"
--- Nexus Database Schema v11 (Pre-Alpha)
+-- Nexus Database Schema v12 (Pre-Alpha)
+--
+-- Schema v12 changes:
+-- - Added 'online' and 'provisioning' to VmState CHECK constraint
 --
 -- Schema v11 changes:
 -- - Removed idx_settings_key_version UNIQUE constraint (JSON schema version is informational only)
@@ -60,7 +63,7 @@ CREATE TABLE vms (
     id INTEGER PRIMARY KEY,
     name TEXT UNIQUE,
     role TEXT NOT NULL CHECK(role IN ('portal', 'work', 'service')),
-    state TEXT NOT NULL CHECK(state IN ('created', 'running', 'ready', 'stopped', 'crashed', 'failed', 'unreachable')),
+    state TEXT NOT NULL CHECK(state IN ('created', 'running', 'online', 'provisioning', 'ready', 'stopped', 'crashed', 'failed', 'unreachable')),
     cid INTEGER NOT NULL UNIQUE,
     vcpu_count INTEGER NOT NULL DEFAULT 1,
     mem_size_mib INTEGER NOT NULL DEFAULT 128,
