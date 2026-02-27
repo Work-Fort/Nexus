@@ -472,6 +472,113 @@ async fn handle_tools_list(_params: Value) -> Result<Value> {
                     },
                     "required": ["drive"]
                 }
+            },
+            // --- Kernel Tools ---
+            {
+                "name": "kernel_list",
+                "version": "1.0.0",
+                "description": "List all downloaded kernels",
+                "inputSchema": {"type": "object", "properties": {}, "required": []}
+            },
+            {
+                "name": "kernel_download",
+                "version": "1.0.0",
+                "description": "Download a Linux kernel version from the configured provider",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "version": {"type": "string", "description": "Kernel version to download (e.g., '6.1.102')"}
+                    },
+                    "required": ["version"]
+                }
+            },
+            {
+                "name": "kernel_remove",
+                "version": "1.0.0",
+                "description": "Remove a downloaded kernel",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "version": {"type": "string", "description": "Kernel version or ID to remove"}
+                    },
+                    "required": ["version"]
+                }
+            },
+            {
+                "name": "kernel_verify",
+                "version": "1.0.0",
+                "description": "Verify a downloaded kernel's integrity",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "version": {"type": "string", "description": "Kernel version or ID to verify"}
+                    },
+                    "required": ["version"]
+                }
+            },
+            // --- Rootfs Tools ---
+            {
+                "name": "rootfs_list",
+                "version": "1.0.0",
+                "description": "List all downloaded rootfs images",
+                "inputSchema": {"type": "object", "properties": {}, "required": []}
+            },
+            {
+                "name": "rootfs_download",
+                "version": "1.0.0",
+                "description": "Download a rootfs image from the configured provider",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "distro": {"type": "string", "description": "Distribution name (e.g., 'alpine')"},
+                        "version": {"type": "string", "description": "Distribution version (e.g., '3.20')"}
+                    },
+                    "required": ["distro", "version"]
+                }
+            },
+            {
+                "name": "rootfs_remove",
+                "version": "1.0.0",
+                "description": "Remove a downloaded rootfs image",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "distro": {"type": "string", "description": "Distribution name"},
+                        "version": {"type": "string", "description": "Distribution version"}
+                    },
+                    "required": ["distro", "version"]
+                }
+            },
+            // --- Firecracker Tools ---
+            {
+                "name": "firecracker_list",
+                "version": "1.0.0",
+                "description": "List all downloaded Firecracker versions",
+                "inputSchema": {"type": "object", "properties": {}, "required": []}
+            },
+            {
+                "name": "firecracker_download",
+                "version": "1.0.0",
+                "description": "Download a Firecracker binary from the configured provider",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "version": {"type": "string", "description": "Firecracker version to download (e.g., '1.10.1')"}
+                    },
+                    "required": ["version"]
+                }
+            },
+            {
+                "name": "firecracker_remove",
+                "version": "1.0.0",
+                "description": "Remove a downloaded Firecracker version",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "version": {"type": "string", "description": "Firecracker version or ID to remove"}
+                    },
+                    "required": ["version"]
+                }
             }
         ]
     }))
@@ -1106,9 +1213,176 @@ async fn handle_management_tool(
             Ok(mcp_text_response(&detached))
         }
 
-        // Kernel tools -- Task 6
-        // Rootfs tools -- Task 7
-        // Firecracker tools -- Task 8
+        // --- Kernel Tools ---
+        "kernel_list" => {
+            let kernels = state.store.list_kernels().map_err(store_err)?;
+            Ok(mcp_text_response(&kernels))
+        }
+
+        "kernel_download" => {
+            let version = require_str(arguments, "version")?;
+            let provider_config = state
+                .store
+                .get_default_provider("kernel")
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::Internal("no default kernel provider configured".to_string())
+                })?;
+            let svc = nexus_lib::kernel_service::KernelService::from_provider_config(
+                state.store.as_ref(),
+                &state.executor,
+                state.assets_dir.clone(),
+                &provider_config,
+            );
+            let kernel = svc
+                .download(version, &provider_config)
+                .await
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            Ok(mcp_text_response(&kernel))
+        }
+
+        "kernel_remove" => {
+            let version = require_str(arguments, "version")?;
+            let svc = nexus_lib::kernel_service::KernelService::new(
+                state.store.as_ref(),
+                &state.executor,
+                state.assets_dir.clone(),
+            );
+            let removed = svc
+                .remove(version)
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            if removed {
+                Ok(mcp_message_response(&format!(
+                    "Kernel '{}' removed",
+                    version
+                )))
+            } else {
+                Err(McpError::InvalidParams(format!(
+                    "kernel '{}' not found",
+                    version
+                )))
+            }
+        }
+
+        "kernel_verify" => {
+            let version = require_str(arguments, "version")?;
+            let svc = nexus_lib::kernel_service::KernelService::new(
+                state.store.as_ref(),
+                &state.executor,
+                state.assets_dir.clone(),
+            );
+            let result = svc
+                .verify(version)
+                .map_err(|e| McpError::InvalidParams(e.to_string()))?;
+            Ok(mcp_text_response(&result))
+        }
+
+        // --- Rootfs Tools ---
+        "rootfs_list" => {
+            let images = state.store.list_rootfs_images().map_err(store_err)?;
+            Ok(mcp_text_response(&images))
+        }
+
+        "rootfs_download" => {
+            let distro = require_str(arguments, "distro")?;
+            let version = require_str(arguments, "version")?;
+            let provider_config = state
+                .store
+                .get_default_provider("rootfs")
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::Internal("no default rootfs provider configured".to_string())
+                })?;
+            let svc = nexus_lib::rootfs_service::RootfsService::from_provider_config(
+                state.store.as_ref(),
+                &state.executor,
+                state.assets_dir.clone(),
+                &provider_config,
+            );
+            let rootfs = svc
+                .download(distro, version, &provider_config)
+                .await
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            Ok(mcp_text_response(&rootfs))
+        }
+
+        "rootfs_remove" => {
+            let distro = require_str(arguments, "distro")?;
+            let version = require_str(arguments, "version")?;
+            let svc = nexus_lib::rootfs_service::RootfsService::new(
+                state.store.as_ref(),
+                &state.executor,
+                state.assets_dir.clone(),
+            );
+            let removed = svc
+                .remove(distro, version)
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            if removed {
+                Ok(mcp_message_response(&format!(
+                    "Rootfs '{}-{}' removed",
+                    distro, version
+                )))
+            } else {
+                Err(McpError::InvalidParams(format!(
+                    "rootfs '{}-{}' not found",
+                    distro, version
+                )))
+            }
+        }
+
+        // --- Firecracker Tools ---
+        "firecracker_list" => {
+            let versions = state.store.list_firecracker_versions().map_err(store_err)?;
+            Ok(mcp_text_response(&versions))
+        }
+
+        "firecracker_download" => {
+            let version = require_str(arguments, "version")?;
+            let provider_config = state
+                .store
+                .get_default_provider("firecracker")
+                .map_err(store_err)?
+                .ok_or_else(|| {
+                    McpError::Internal(
+                        "no default firecracker provider configured".to_string(),
+                    )
+                })?;
+            let svc = nexus_lib::firecracker_service::FirecrackerService::from_provider(
+                state.store.as_ref(),
+                &state.executor,
+                state.assets_dir.clone(),
+                &provider_config,
+            );
+            let fc = svc
+                .download(version, &provider_config)
+                .await
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            Ok(mcp_text_response(&fc))
+        }
+
+        "firecracker_remove" => {
+            let version = require_str(arguments, "version")?;
+            let svc = nexus_lib::firecracker_service::FirecrackerService::new(
+                state.store.as_ref(),
+                &state.executor,
+                state.assets_dir.clone(),
+            );
+            let removed = svc
+                .remove(version)
+                .map_err(|e| McpError::Internal(e.to_string()))?;
+            if removed {
+                Ok(mcp_message_response(&format!(
+                    "Firecracker '{}' removed",
+                    version
+                )))
+            } else {
+                Err(McpError::InvalidParams(format!(
+                    "firecracker '{}' not found",
+                    version
+                )))
+            }
+        }
+
         // Template tools -- Task 9
         // Build tools -- Task 10
         // Settings tools -- Task 11
