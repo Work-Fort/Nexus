@@ -11,7 +11,7 @@ use rtnetlink::packet_route::link::{
 };
 use std::os::fd::AsRawFd;
 
-#[derive(Debug, Default, serde::Serialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CleanupReport {
     pub taps_deleted: u32,
     pub bridge_deleted: bool,
