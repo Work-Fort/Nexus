@@ -176,6 +176,39 @@ enum VmAction {
         /// VM name or ID
         name: String,
     },
+    /// Add a provision file to inject into VM on start
+    AddProvisionFile {
+        /// VM name or ID
+        vm: String,
+        /// Path inside the guest where the file will be written
+        #[arg(long)]
+        guest_path: String,
+        /// Host file path to read at provision time
+        #[arg(long, conflicts_with = "content")]
+        host_path: Option<String>,
+        /// Inline content to write
+        #[arg(long, conflicts_with = "host_path")]
+        content: Option<String>,
+        /// Encoding: text or base64 (default: text, auto-set to base64 for --host-path of binary files)
+        #[arg(long, default_value = "text")]
+        encoding: String,
+        /// Unix file permissions (e.g., 0755)
+        #[arg(long)]
+        mode: Option<String>,
+    },
+    /// List provision files for a VM
+    ProvisionFiles {
+        /// VM name or ID
+        vm: String,
+    },
+    /// Remove a provision file from a VM
+    RemoveProvisionFile {
+        /// VM name or ID
+        vm: String,
+        /// Guest path to remove
+        #[arg(long)]
+        guest_path: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -665,6 +698,94 @@ async fn cmd_vm(daemon_addr: &str, action: VmAction) -> ExitCode {
                         println!("{:<20} {:<12} {:<12} {}", dt, record.from_state, record.to_state, reason);
                     }
                     ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        VmAction::AddProvisionFile { vm, guest_path, host_path, content, encoding, mode } => {
+            let (source_type, source) = if let Some(hp) = host_path {
+                ("host_path".to_string(), hp)
+            } else if let Some(c) = content {
+                ("inline".to_string(), c)
+            } else {
+                eprintln!("Error: either --host-path or --content is required");
+                return ExitCode::from(EXIT_GENERAL_ERROR);
+            };
+
+            let params = nexus_lib::vm::AddProvisionFileParams {
+                guest_path: guest_path.clone(),
+                source_type,
+                source,
+                encoding,
+                mode,
+            };
+
+            match client.add_provision_file(&vm, &params).await {
+                Ok(pf) => {
+                    println!("Added provision file for VM \"{}\"", vm);
+                    println!("  Guest path: {}", pf.guest_path);
+                    println!("  Source:     {} ({})", pf.source, pf.source_type);
+                    println!("  Encoding:  {}", pf.encoding);
+                    if let Some(ref m) = pf.mode {
+                        println!("  Mode:      {}", m);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        VmAction::ProvisionFiles { vm } => {
+            match client.list_provision_files(&vm).await {
+                Ok(files) => {
+                    if files.is_empty() {
+                        println!("No provision files configured for VM '{}'", vm);
+                        return ExitCode::SUCCESS;
+                    }
+                    println!("{:<40} {:<12} {:<10} {:<8} SOURCE", "GUEST PATH", "TYPE", "ENCODING", "MODE");
+                    for pf in &files {
+                        let mode = pf.mode.as_deref().unwrap_or("-");
+                        let source_display = if pf.source.len() > 40 {
+                            format!("{}...", &pf.source[..37])
+                        } else {
+                            pf.source.clone()
+                        };
+                        println!("{:<40} {:<12} {:<10} {:<8} {}", pf.guest_path, pf.source_type, pf.encoding, mode, source_display);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) if e.is_connect() => {
+                    print_connect_error(daemon_addr);
+                    ExitCode::from(EXIT_DAEMON_UNREACHABLE)
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(EXIT_GENERAL_ERROR)
+                }
+            }
+        }
+        VmAction::RemoveProvisionFile { vm, guest_path } => {
+            match client.remove_provision_file(&vm, &guest_path).await {
+                Ok(true) => {
+                    println!("Removed provision file '{}' from VM '{}'", guest_path, vm);
+                    ExitCode::SUCCESS
+                }
+                Ok(false) => {
+                    eprintln!("Error: no provision file '{}' found for VM '{}'", guest_path, vm);
+                    ExitCode::from(EXIT_NOT_FOUND)
                 }
                 Err(e) if e.is_connect() => {
                     print_connect_error(daemon_addr);
