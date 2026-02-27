@@ -1645,6 +1645,54 @@ fn format_timestamp(epoch_secs: i64) -> String {
         .unwrap_or_else(|| epoch_secs.to_string())
 }
 
+/// Poll a build until completion, displaying progress
+async fn poll_build_completion(
+    client: &NexusClient,
+    build_id: &str,
+    start_time: std::time::Instant,
+) -> Result<(), ExitCode> {
+    use std::io::{self, Write};
+    use tokio::time::{sleep, Duration};
+
+    loop {
+        match client.get_build(build_id).await {
+            Ok(Some(build)) => {
+                let elapsed = start_time.elapsed().as_secs_f32();
+                match build.status {
+                    nexus_lib::template::BuildStatus::Success => {
+                        eprintln!("\rBuild complete ({:.1}s)", elapsed);
+                        return Ok(());
+                    }
+                    nexus_lib::template::BuildStatus::Failed => {
+                        eprintln!("\rBuild failed");
+                        if let Some(log_path) = build.build_log_path {
+                            eprintln!("  Log: {}", log_path);
+                        }
+                        return Err(ExitCode::from(EXIT_GENERAL_ERROR));
+                    }
+                    nexus_lib::template::BuildStatus::Building => {
+                        eprint!("\rBuilding image ({:.1}s elapsed)...", elapsed);
+                        io::stderr().flush().ok();
+                        sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
+            Ok(None) => {
+                eprintln!("\rBuild {} not found", build_id);
+                return Err(ExitCode::from(EXIT_NOT_FOUND));
+            }
+            Err(e) if e.is_connect() => {
+                eprintln!("\rLost connection to daemon during build");
+                return Err(ExitCode::from(EXIT_DAEMON_UNREACHABLE));
+            }
+            Err(e) => {
+                eprintln!("\rError polling build: {}", e);
+                return Err(ExitCode::from(EXIT_GENERAL_ERROR));
+            }
+        }
+    }
+}
+
 // TODO: read bridge_name and subnet from a preferences table once it exists
 const BRIDGE_NAME: &str = "nexbr0";
 const VM_SUBNET: &str = "172.16.0.0/12";
