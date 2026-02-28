@@ -187,6 +187,9 @@ enum VmAction {
         /// VM name or ID
         name: String,
     },
+    // TODO: Add `Exec` variant for running commands in a VM via the exec-async REST endpoint
+    // (POST /v1/vms/{name}/exec-async). Usage: `nexusctl vm exec <VM> -- <COMMAND> [ARGS...]`
+
     /// Create VM from rootfs (downloads, builds, creates drive, attaches)
     FromRootfs {
         /// Distribution name (e.g., alpine)
