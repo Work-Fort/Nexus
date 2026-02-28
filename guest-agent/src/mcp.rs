@@ -267,6 +267,8 @@ async fn handle_file_delete(params: Value) -> Result<Value> {
 ///
 /// Uses std::process::Command (not tokio) for a fully detached process.
 /// The spawn() syscall is non-blocking (<1ms), so this is safe in async context.
+/// stdout/stderr are redirected to /tmp/async-{pid}.log so the spawned process
+/// can write output (required by tools like Claude Code that fail with null stdio).
 async fn handle_run_command_async(params: Value, env_vars: Arc<HashMap<String, String>>) -> Result<Value> {
     use std::os::unix::process::CommandExt;
 
@@ -279,25 +281,34 @@ async fn handle_run_command_async(params: Value, env_vars: Arc<HashMap<String, S
 
     info!("running command async: {} {:?}", command, args);
 
+    // Create a log file for stdout/stderr. Use a temp name first, rename after
+    // we know the PID.
+    let temp_log = std::fs::File::create("/tmp/async-pending.log")
+        .context("failed to create async log file")?;
+    let stderr_log = temp_log.try_clone()
+        .context("failed to clone log file handle")?;
+
     let child = std::process::Command::new(command)
         .args(&args)
         .env_clear()
         .envs(env_vars.iter())
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(temp_log))
+        .stderr(std::process::Stdio::from(stderr_log))
         .process_group(0) // setsid — detach from parent
         .spawn()
         .context("failed to spawn command")?;
 
     let pid = child.id();
+    let log_path = format!("/tmp/async-{pid}.log");
+    let _ = std::fs::rename("/tmp/async-pending.log", &log_path);
 
     Ok(serde_json::json!({
         "content": [{
             "type": "text",
-            "text": format!("Spawned PID {pid}")
+            "text": format!("Spawned PID {pid}, log: {log_path}")
         }],
-        "meta": { "pid": pid }
+        "meta": { "pid": pid, "log": log_path }
     }))
 }
 
