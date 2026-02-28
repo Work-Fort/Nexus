@@ -1559,20 +1559,22 @@ async fn sharkfin_webhook_handler(
         None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("no ready VM for user '{}'", payload.recipient)}))),
     };
 
-    // Build the claude command
+    // Build the claude command, wrapped in a shell to set HOME=/root.
+    // Alpine's root user has HOME=/ by default, but credentials and MCP config
+    // are provisioned to /root/.claude/.
     let prompt = format!(
         "You are {}. You have a new message from {} in the '{}' channel. \
          Check your unread messages using the sharkfin MCP tools and respond appropriately.",
         payload.recipient, payload.from, payload.channel
     );
 
-    let command = "claude".to_string();
-    let args = vec![
-        "-p".to_string(),
-        prompt,
-        "--allowedTools".to_string(),
-        "mcp__sharkfin__*".to_string(),
-    ];
+    let shell_cmd = format!(
+        "cd /root && HOME=/root claude -p '{}' --allowedTools 'mcp__sharkfin__*'",
+        prompt.replace('\'', "'\\''")
+    );
+
+    let command = "/bin/sh".to_string();
+    let args = vec!["-c".to_string(), shell_cmd];
 
     // Fire and forget — spawn in background
     let vsock_manager = state.vsock_manager.clone();
