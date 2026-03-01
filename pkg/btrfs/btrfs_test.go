@@ -361,3 +361,46 @@ func TestEnableQuotaIdempotent(t *testing.T) {
 		t.Fatalf("EnableQuota second call (should be idempotent): %v", err)
 	}
 }
+
+func TestSetQuota(t *testing.T) {
+	requireQuotaCap(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-set-quota")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota: %v", err)
+	}
+
+	// Set a 10 MiB limit.
+	if err := SetQuota(path, 10*1024*1024); err != nil {
+		t.Fatalf("SetQuota: %v", err)
+	}
+}
+
+func TestSetQuotaClear(t *testing.T) {
+	requireQuotaCap(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-clear-quota")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota: %v", err)
+	}
+
+	// Set then clear.
+	if err := SetQuota(path, 10*1024*1024); err != nil {
+		t.Fatalf("SetQuota(10M): %v", err)
+	}
+	if err := SetQuota(path, 0); err != nil {
+		t.Fatalf("SetQuota(0) to clear: %v", err)
+	}
+}

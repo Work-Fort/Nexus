@@ -248,3 +248,33 @@ func EnableQuota(path string) error {
 	}
 	return nil
 }
+
+// SetQuota sets the maximum referenced bytes (disk quota) for the subvolume at path.
+// Pass maxBytes=0 to clear the limit (unlimited).
+// Quotas must be enabled first with EnableQuota.
+// Uses qgroupid=0 which auto-detects the subvolume's qgroup from the fd.
+// Requires CAP_SYS_ADMIN.
+func SetQuota(path string, maxBytes uint64) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("btrfs: open %s: %w", path, err)
+	}
+	defer unix.Close(fd)
+
+	var args ioctlQgroupLimitArgs
+	// Qgroupid=0 means auto-detect from fd.
+	args.Qgroupid = 0
+	args.Lim.Flags = qgroupLimitMaxRfer
+
+	if maxBytes == 0 {
+		// Clear limit: set to max uint64.
+		args.Lim.MaxRfer = ^uint64(0)
+	} else {
+		args.Lim.MaxRfer = maxBytes
+	}
+
+	if err := ioctl(uintptr(fd), iocQgroupLimit, uintptr(unsafe.Pointer(&args))); err != nil {
+		return fmt.Errorf("btrfs: set quota %s: %w", path, err)
+	}
+	return nil
+}
