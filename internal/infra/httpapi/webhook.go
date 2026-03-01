@@ -10,6 +10,7 @@ import (
 
 func handleSharkfinWebhook(svc *app.VMService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 		var wh app.SharkfinWebhook
 		if err := json.NewDecoder(r.Body).Decode(&wh); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")

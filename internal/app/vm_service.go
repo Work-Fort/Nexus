@@ -66,10 +66,10 @@ func WithConfig(cfg VMServiceConfig) func(*VMService) {
 // persists the VM record.
 func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) (*domain.VM, error) {
 	if !domain.ValidRole(params.Role) {
-		return nil, fmt.Errorf("invalid role %q: %w", params.Role, errors.New("validation error"))
+		return nil, fmt.Errorf("invalid role %q: %w", params.Role, domain.ErrValidation)
 	}
 	if params.Name == "" {
-		return nil, fmt.Errorf("name is required: %w", errors.New("validation error"))
+		return nil, fmt.Errorf("name is required: %w", domain.ErrValidation)
 	}
 	if params.Image == "" {
 		params.Image = s.config.DefaultImage
@@ -155,8 +155,17 @@ func (s *VMService) StopVM(ctx context.Context, id string) error {
 	return nil
 }
 
-// DeleteVM removes the container and its store record.
+// DeleteVM stops the container if running, then removes it and its store record.
 func (s *VMService) DeleteVM(ctx context.Context, id string) error {
+	vm, err := s.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if vm.State == domain.VMStateRunning {
+		if err := s.runtime.Stop(ctx, id); err != nil {
+			log.Warn("runtime stop before delete failed", "id", id, "err", err)
+		}
+	}
 	if err := s.runtime.Delete(ctx, id); err != nil {
 		log.Warn("runtime delete failed", "id", id, "err", err)
 	}
@@ -171,6 +180,10 @@ func (s *VMService) DeleteVM(ctx context.Context, id string) error {
 
 // ExecVM runs a command in a running VM.
 func (s *VMService) ExecVM(ctx context.Context, id string, cmd []string) (*domain.ExecResult, error) {
+	if len(cmd) == 0 {
+		return nil, fmt.Errorf("cmd is required: %w", domain.ErrValidation)
+	}
+
 	vm, err := s.store.Get(ctx, id)
 	if err != nil {
 		return nil, err

@@ -8,9 +8,13 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/charmbracelet/log"
+
 	"github.com/Work-Fort/Nexus/internal/app"
 	"github.com/Work-Fort/Nexus/internal/domain"
 )
+
+const maxBodySize = 1 << 20 // 1 MiB
 
 // NewHandler returns an http.Handler with all Nexus API routes.
 func NewHandler(svc *app.VMService) http.Handler {
@@ -83,8 +87,11 @@ func mapError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "already exists")
 	case errors.Is(err, domain.ErrInvalidState):
 		writeError(w, http.StatusConflict, "invalid state transition")
+	case errors.Is(err, domain.ErrValidation):
+		writeError(w, http.StatusBadRequest, err.Error())
 	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Error("internal error", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 	}
 }
 
@@ -115,6 +122,7 @@ func vmToResponse(vm *domain.VM) vmResponse {
 
 func handleCreateVM(svc *app.VMService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 		var req createVMRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -141,6 +149,10 @@ func handleListVMs(svc *app.VMService) http.HandlerFunc {
 		var filter domain.VMFilter
 		if role := r.URL.Query().Get("role"); role != "" {
 			vmRole := domain.VMRole(role)
+			if !domain.ValidRole(vmRole) {
+				writeError(w, http.StatusBadRequest, "invalid role filter")
+				return
+			}
 			filter.Role = &vmRole
 		}
 
@@ -207,6 +219,7 @@ func handleExecVM(svc *app.VMService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 		var req execRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")

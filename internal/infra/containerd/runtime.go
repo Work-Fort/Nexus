@@ -8,11 +8,13 @@ import (
 	"context"
 	"fmt"
 	"syscall"
+	"time"
 
 	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/google/uuid"
 
 	"github.com/Work-Fort/Nexus/internal/domain"
 )
@@ -85,7 +87,8 @@ func (r *Runtime) Start(ctx context.Context, id string) error {
 	return nil
 }
 
-// Stop kills the task (SIGTERM), waits for it to exit, then deletes it.
+// Stop kills the task (SIGTERM), waits up to 10 seconds for exit, then
+// falls back to SIGKILL before deleting the task.
 func (r *Runtime) Stop(ctx context.Context, id string) error {
 	ctx = r.nsCtx(ctx)
 
@@ -99,15 +102,21 @@ func (r *Runtime) Stop(ctx context.Context, id string) error {
 		return fmt.Errorf("get task %s: %w", id, err)
 	}
 
-	if err := task.Kill(ctx, syscall.SIGTERM); err != nil {
-		return fmt.Errorf("kill task %s: %w", id, err)
-	}
-
 	ch, err := task.Wait(ctx)
 	if err != nil {
 		return fmt.Errorf("wait task %s: %w", id, err)
 	}
-	<-ch
+
+	if err := task.Kill(ctx, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("kill task %s: %w", id, err)
+	}
+
+	select {
+	case <-ch:
+	case <-time.After(10 * time.Second):
+		task.Kill(ctx, syscall.SIGKILL) //nolint:errcheck // best-effort force kill
+		<-ch
+	}
 
 	if _, err := task.Delete(ctx); err != nil {
 		return fmt.Errorf("delete task %s: %w", id, err)
@@ -148,11 +157,11 @@ func (r *Runtime) Exec(ctx context.Context, id string, cmd []string) (*domain.Ex
 		return nil, fmt.Errorf("get spec %s: %w", id, err)
 	}
 
-	pspec := spec.Process
+	pspec := *spec.Process // struct copy to avoid mutating shared spec
 	pspec.Args = cmd
 
-	execID := id + "-exec"
-	proc, err := task.Exec(ctx, execID, pspec,
+	execID := fmt.Sprintf("%s-exec-%s", id, uuid.New().String()[:8])
+	proc, err := task.Exec(ctx, execID, &pspec,
 		cio.NewCreator(cio.WithStreams(nil, &stdout, &stderr)),
 	)
 	if err != nil {

@@ -15,10 +15,8 @@ CREATE TABLE vms (
 
 CREATE INDEX idx_vms_role ON vms(role);
 CREATE INDEX idx_vms_state ON vms(state);
-CREATE UNIQUE INDEX idx_vms_name ON vms(name);
 
 -- +goose Down
-DROP INDEX IF EXISTS idx_vms_name;
 DROP INDEX IF EXISTS idx_vms_state;
 DROP INDEX IF EXISTS idx_vms_role;
 DROP TABLE IF EXISTS vms;

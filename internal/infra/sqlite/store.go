@@ -106,7 +106,7 @@ func (s *Store) Get(ctx context.Context, id string) (*domain.VM, error) {
 		}
 		return nil, fmt.Errorf("get vm: %w", err)
 	}
-	return vmFromRow(row), nil
+	return vmFromRow(row)
 }
 
 func (s *Store) GetByName(ctx context.Context, name string) (*domain.VM, error) {
@@ -117,7 +117,7 @@ func (s *Store) GetByName(ctx context.Context, name string) (*domain.VM, error) 
 		}
 		return nil, fmt.Errorf("get vm by name: %w", err)
 	}
-	return vmFromRow(row), nil
+	return vmFromRow(row)
 }
 
 func (s *Store) List(ctx context.Context, filter domain.VMFilter) ([]*domain.VM, error) {
@@ -128,7 +128,11 @@ func (s *Store) List(ctx context.Context, filter domain.VMFilter) ([]*domain.VM,
 		}
 		vms := make([]*domain.VM, len(rows))
 		for i, r := range rows {
-			vms[i] = vmFromRow(r)
+			vm, err := vmFromRow(r)
+			if err != nil {
+				return nil, err
+			}
+			vms[i] = vm
 		}
 		return vms, nil
 	}
@@ -138,7 +142,11 @@ func (s *Store) List(ctx context.Context, filter domain.VMFilter) ([]*domain.VM,
 	}
 	vms := make([]*domain.VM, len(rows))
 	for i, r := range rows {
-		vms[i] = vmFromRow(r)
+		vm, err := vmFromRow(r)
+		if err != nil {
+			return nil, err
+		}
+		vms[i] = vm
 	}
 	return vms, nil
 }
@@ -170,7 +178,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 // --- type conversion helper ---
 
 // vmFromRow converts a sqlc-generated Vm row into a domain.VM.
-func vmFromRow(row Vm) *domain.VM {
+func vmFromRow(row Vm) (*domain.VM, error) {
 	vm := &domain.VM{
 		ID:      row.ID,
 		Name:    row.Name,
@@ -179,14 +187,24 @@ func vmFromRow(row Vm) *domain.VM {
 		Image:   row.Image,
 		Runtime: row.Runtime,
 	}
-	vm.CreatedAt, _ = time.Parse(timeFormat, row.CreatedAt)
+	var err error
+	vm.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse created_at for %s: %w", row.ID, err)
+	}
 	if row.StartedAt.Valid {
-		t, _ := time.Parse(timeFormat, row.StartedAt.String)
+		t, err := time.Parse(timeFormat, row.StartedAt.String)
+		if err != nil {
+			return nil, fmt.Errorf("parse started_at for %s: %w", row.ID, err)
+		}
 		vm.StartedAt = &t
 	}
 	if row.StoppedAt.Valid {
-		t, _ := time.Parse(timeFormat, row.StoppedAt.String)
+		t, err := time.Parse(timeFormat, row.StoppedAt.String)
+		if err != nil {
+			return nil, fmt.Errorf("parse stopped_at for %s: %w", row.ID, err)
+		}
 		vm.StoppedAt = &t
 	}
-	return vm
+	return vm, nil
 }

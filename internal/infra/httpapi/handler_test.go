@@ -196,8 +196,8 @@ func TestCreateVMInvalidRole(t *testing.T) {
 		"name": "bad", "role": "invalid", "image": "alpine:latest", "runtime": "runc",
 	})
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 
@@ -441,6 +441,36 @@ func TestExecVMNotRunning(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+}
+
+func TestExecVMEmptyCmd(t *testing.T) {
+	h := setupHandler()
+
+	createRec := doRequest(h, "POST", "/v1/vms", map[string]string{
+		"name": "exec-empty", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	})
+	var created map[string]any
+	decodeJSON(t, createRec, &created)
+	id := created["id"].(string)
+	doRequest(h, "POST", "/v1/vms/"+id+"/start", nil)
+
+	rec := doRequest(h, "POST", "/v1/vms/"+id+"/exec", map[string]any{
+		"cmd": []string{},
+	})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestListVMsInvalidRoleFilter(t *testing.T) {
+	h := setupHandler()
+
+	rec := doRequest(h, "GET", "/v1/vms?role=invalid", nil)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 

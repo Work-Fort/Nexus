@@ -17,6 +17,9 @@ import (
 // Version is set at build time via ldflags.
 var Version string
 
+// logFile holds the log file handle for cleanup on shutdown.
+var logFile *os.File
+
 var rootCmd = &cobra.Command{
 	Use:   "nexusd",
 	Short: "Nexus VM lifecycle daemon",
@@ -48,11 +51,12 @@ var rootCmd = &cobra.Command{
 			level = log.DebugLevel
 		}
 
-		logFile := filepath.Join(config.GlobalPaths.StateDir, "debug.log")
-		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		logPath := filepath.Join(config.GlobalPaths.StateDir, "debug.log")
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			return fmt.Errorf("open log file: %w", err)
 		}
+		logFile = f
 
 		logger := log.NewWithOptions(f, log.Options{
 			ReportTimestamp: true,

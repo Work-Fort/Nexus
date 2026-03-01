@@ -268,6 +268,22 @@ func TestGetVM(t *testing.T) {
 	}
 }
 
+func TestExecVMEmptyCmd(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	svc := app.NewVMService(store, rt)
+
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "exec-empty", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	svc.StartVM(context.Background(), vm.ID)
+
+	_, err := svc.ExecVM(context.Background(), vm.ID, []string{})
+	if err == nil {
+		t.Fatal("expected error for empty cmd")
+	}
+}
+
 func TestHandleWebhookCreatesAgent(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()

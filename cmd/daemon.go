@@ -38,11 +38,16 @@ func newDaemonCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open database: %w", err)
 			}
+			defer store.Close()
 
 			runtime, err := ctrd.New(socketPath, namespace)
 			if err != nil {
-				store.Close()
 				return fmt.Errorf("connect to containerd: %w", err)
+			}
+			defer runtime.Close()
+
+			if logFile != nil {
+				defer logFile.Close()
 			}
 
 			svc := app.NewVMService(store, runtime, app.WithConfig(app.VMServiceConfig{
@@ -53,8 +58,11 @@ func newDaemonCmd() *cobra.Command {
 			handler := httpapi.NewHandler(svc)
 
 			httpServer := &http.Server{
-				Addr:    addr,
-				Handler: handler,
+				Addr:         addr,
+				Handler:      handler,
+				ReadTimeout:  10 * time.Second,
+				WriteTimeout: 30 * time.Second,
+				IdleTimeout:  60 * time.Second,
 			}
 
 			sigCh := make(chan os.Signal, 1)
@@ -86,8 +94,6 @@ func newDaemonCmd() *cobra.Command {
 			if err := httpServer.Shutdown(ctx); err != nil {
 				log.Error("http shutdown", "err", err)
 			}
-			runtime.Close()
-			store.Close()
 			return nil
 		},
 	}
@@ -98,11 +104,11 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("runtime", config.DefaultRuntime, "Default container runtime handler")
 	cmd.Flags().String("agent-image", config.DefaultAgentImage, "Default OCI image for agent VMs")
 
-	viper.BindPFlag("listen", cmd.Flags().Lookup("listen"))
-	viper.BindPFlag("containerd-socket", cmd.Flags().Lookup("containerd-socket"))
-	viper.BindPFlag("namespace", cmd.Flags().Lookup("namespace"))
-	viper.BindPFlag("runtime", cmd.Flags().Lookup("runtime"))
-	viper.BindPFlag("agent-image", cmd.Flags().Lookup("agent-image"))
+	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image"} {
+		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
+			panic(fmt.Sprintf("bind flag %s: %v", name, err))
+		}
+	}
 
 	return cmd
 }
