@@ -178,3 +178,44 @@ func TestSetReadOnly(t *testing.T) {
 		t.Fatal("expected subvolume to be writable after SetReadOnly(false)")
 	}
 }
+
+func TestDeleteSubvolume(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-delete")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+
+	if err := DeleteSubvolume(path); err != nil {
+		t.Fatalf("DeleteSubvolume: %v", err)
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected subvolume to be gone, got err: %v", err)
+	}
+}
+
+func TestDeleteReadOnlySubvolume(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-delete-ro")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(path, "data.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := SetReadOnly(path, true); err != nil {
+		t.Fatalf("SetReadOnly: %v", err)
+	}
+
+	if err := DeleteSubvolume(path); err != nil {
+		t.Fatalf("DeleteSubvolume: %v", err)
+	}
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected subvolume to be gone, got err: %v", err)
+	}
+}

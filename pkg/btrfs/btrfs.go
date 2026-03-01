@@ -119,7 +119,34 @@ func SetReadOnly(path string, readOnly bool) error {
 }
 
 // DeleteSubvolume removes a btrfs subvolume at path using VFS operations.
+// If the subvolume is read-only, the flag is cleared first.
+// This avoids BTRFS_IOC_SNAP_DESTROY (which requires CAP_SYS_ADMIN).
+// VFS rmdir on an empty subvolume works unprivileged since kernel 4.18.
 func DeleteSubvolume(path string) error {
-	// stub -- will be replaced in Task 6
-	return fmt.Errorf("btrfs: delete not implemented")
+	if _, err := os.Lstat(path); err != nil {
+		return fmt.Errorf("btrfs: delete %s: %w", path, err)
+	}
+
+	ro, _ := GetReadOnly(path)
+	if ro {
+		if err := SetReadOnly(path, false); err != nil {
+			return fmt.Errorf("btrfs: delete %s: cannot clear read-only: %w", path, err)
+		}
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return fmt.Errorf("btrfs: delete %s: read dir: %w", path, err)
+	}
+	for _, entry := range entries {
+		p := filepath.Join(path, entry.Name())
+		if err := os.RemoveAll(p); err != nil {
+			return fmt.Errorf("btrfs: delete %s: remove %s: %w", path, p, err)
+		}
+	}
+
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("btrfs: delete %s: rmdir: %w", path, err)
+	}
+	return nil
 }
