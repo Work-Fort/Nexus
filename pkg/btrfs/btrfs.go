@@ -26,10 +26,21 @@ var (
 
 	// ErrNameTooLong is returned when a subvolume or snapshot name exceeds the kernel limit.
 	ErrNameTooLong = errors.New("btrfs: name too long")
+
+	// ErrQuotaNotEnabled is returned when quotas are not enabled on the filesystem.
+	ErrQuotaNotEnabled = errors.New("btrfs: quotas not enabled")
 )
 
 // subvolNameMax is the maximum length of a subvolume name (BTRFS_SUBVOL_NAME_MAX).
 const subvolNameMax = len(ioctlVolArgsV2{}.Name) - 1
+
+// QuotaUsage contains disk usage and quota limits for a btrfs subvolume.
+type QuotaUsage struct {
+	Referenced    uint64 // total bytes referenced by this subvolume
+	Exclusive     uint64 // bytes exclusive to this subvolume (not shared via CoW)
+	MaxReferenced uint64 // quota limit (0 = unlimited)
+	MaxExclusive  uint64 // exclusive limit (0 = unlimited)
+}
 
 // IsBtrfs reports whether the given path resides on a btrfs filesystem.
 func IsBtrfs(path string) (bool, error) {
