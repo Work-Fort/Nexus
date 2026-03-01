@@ -6,6 +6,54 @@ Nexus is an HTTP service for managing VMs/containers via containerd, designed
 to run as an unprivileged systemd user service. Production workloads run in
 Kata Containers with Firecracker for hardware-level isolation.
 
+Nexus is one component in the WorkFort platform:
+
+```
+workfort (TUI)        User interface, setup wizard, chat client
+  │
+  ├── Portal VM       Tenant orchestrator — manages agent lifecycle,
+  │                   configures services, handles webhooks from Sharkfin
+  │
+  ├── Sharkfin VM     Messaging — channels, identity, presence, MCP bridge
+  │
+  ├── Agent VMs       Ephemeral — run Claude Code with Sharkfin MCP bridge
+  │
+  └── Nexus (host)    VM lifecycle, storage (btrfs), networking
+```
+
+WorkFort talks to Nexus (local or cloud) to provision service VMs (Portal,
+Sharkfin). The Portal orchestrates agent VMs through Nexus's API. Sharkfin
+handles inter-agent and human-agent messaging. Agent VMs run Claude Code
+with a Sharkfin MCP bridge for communication.
+
+## Nexus Responsibilities
+
+1. **VM lifecycle** — create, start, stop, exec, delete containers/VMs
+2. **Storage** — btrfs subvolumes with qgroups for per-VM data volumes
+3. **Networking** — VM-to-VM and VM-to-host communication
+
+## VM Roles
+
+### Service VMs (long-lived)
+
+- **Portal** — tenant orchestrator. Receives webhooks from Sharkfin when
+  agents are @mentioned. Decides when to create/start/stop agent VMs.
+  Manages credentials, agent configuration, and failure recovery. Talks
+  to Nexus's REST API.
+- **Sharkfin** — messaging daemon. Manages channels, identity, presence.
+  Fires webhooks to Portal on mentions/DMs. Agent VMs connect to it via
+  the `sharkfin mcp-bridge` command.
+
+### Agent VMs (ephemeral)
+
+Spun up on demand by the Portal when an agent is needed. Each agent VM runs:
+- `claude -p "..." --allowedTools "mcp__sharkfin__*"` — Claude Code session
+- `sharkfin mcp-bridge` — connects to the Sharkfin VM for messaging
+- `~/.claude/.credentials.json` — injected at startup
+
+Agent VMs are disposable. Data that needs to persist lives on btrfs data
+volumes that can be detached and reattached to new VMs.
+
 ## Hexagonal Architecture (Ports & Adapters)
 
 ```
@@ -76,14 +124,30 @@ Nexus owns and manages. Key properties:
 - **Per-VM quotas via btrfs qgroups** — enforced in all environments to
   prevent a single VM from consuming all host storage
 - **CoW snapshots** — efficient cloning for development workflows
+- **Data sharing** — mount the same subvolume (or a snapshot) into multiple
+  VMs
+
+## Networking
+
+VMs need to communicate with each other and with Nexus on the host:
+
+- **Agent VM → Sharkfin VM**: MCP bridge connection (TCP)
+- **Sharkfin VM → Portal VM**: Webhook notifications (HTTP)
+- **Portal VM → Nexus**: VM lifecycle API calls (HTTP to host gateway IP)
+- **WorkFort → Sharkfin VM**: WebSocket chat connection
+- **Agent VMs → Internet**: Claude API calls (HTTPS)
 
 ## Deployment Scenarios
 
-### Local Development
+The architecture is identical in all environments — same VM topology,
+same networking, same storage model.
 
+### Local
+
+- Nexus runs as a systemd user service
+- WorkFort setup wizard provisions service VMs (Portal, Sharkfin)
 - Data volumes on btrfs subvolumes with sensible default quotas
 - Quotas prevent runaway VMs from filling the host disk
-- Easy attach/detach for OS image upgrades
 
 ### WorkFort Cloud
 
