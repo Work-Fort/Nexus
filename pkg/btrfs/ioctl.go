@@ -19,7 +19,7 @@ const (
 const (
 	iocQuotaCtl    = 0xC0109428 // _IOWR(0x94, 40, btrfs_ioctl_quota_ctl_args)
 	iocQgroupLimit = 0x8030942B // _IOR(0x94, 43, btrfs_ioctl_qgroup_limit_args)
-	iocTreeSearch  = 0xC1009411 // _IOWR(0x94, 17, btrfs_ioctl_search_args)
+	iocTreeSearch  = 0xD0009411 // _IOWR(0x94, 17, btrfs_ioctl_search_args)
 	iocInoLookup   = 0xD0009412 // _IOWR(0x94, 18, btrfs_ioctl_ino_lookup_args)
 )
 

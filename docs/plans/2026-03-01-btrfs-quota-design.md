@@ -40,7 +40,7 @@ var ErrQuotaNotEnabled = errors.New("btrfs: quotas not enabled")
 |-------|-----|----|-------------|
 | `BTRFS_IOC_QUOTA_CTL` | `0xC0109428` | 40 | 16 bytes |
 | `BTRFS_IOC_QGROUP_LIMIT` | `0x8030942B` | 43 | 48 bytes |
-| `BTRFS_IOC_TREE_SEARCH` | `0xC1009411` | 17 | 4096 bytes |
+| `BTRFS_IOC_TREE_SEARCH` | `0xD0009411` | 17 | 4096 bytes |
 | `BTRFS_IOC_INO_LOOKUP` | `0xD0009412` | 18 | 4096 bytes |
 
 ### New structs

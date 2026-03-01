@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 // Package btrfs provides pure-Go wrappers for Linux btrfs kernel ioctls.
-// It supports subvolume and snapshot management without CGo or CAP_SYS_ADMIN.
+// Subvolume and snapshot management works without CGo or CAP_SYS_ADMIN.
+// Quota operations (EnableQuota, SetQuota, GetQuotaUsage) require CAP_SYS_ADMIN.
 package btrfs
 
 import (
@@ -354,6 +355,9 @@ func GetQuotaUsage(path string) (QuotaUsage, error) {
 		hdr.Type = binary.LittleEndian.Uint32(buf[24:28])
 		hdr.Len = binary.LittleEndian.Uint32(buf[28:32])
 
+		if len(buf) < int(32+hdr.Len) {
+			break
+		}
 		itemData := buf[32 : 32+hdr.Len]
 
 		switch hdr.Type {
