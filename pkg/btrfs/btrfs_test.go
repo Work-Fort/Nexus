@@ -219,3 +219,95 @@ func TestDeleteReadOnlySubvolume(t *testing.T) {
 		t.Fatalf("expected subvolume to be gone, got err: %v", err)
 	}
 }
+
+func TestCreateSnapshot(t *testing.T) {
+	dir := testDir(t)
+	src := filepath.Join(dir, "@test-snap-src")
+	dst := filepath.Join(dir, "@test-snap-dst")
+
+	if err := CreateSubvolume(src); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(src) })
+
+	if err := os.WriteFile(filepath.Join(src, "hello.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	if err := CreateSnapshot(src, dst, false); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(dst) })
+
+	ok, err := IsSubvolume(dst)
+	if err != nil {
+		t.Fatalf("IsSubvolume: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected snapshot to be a subvolume")
+	}
+
+	ro, err := GetReadOnly(dst)
+	if err != nil {
+		t.Fatalf("GetReadOnly: %v", err)
+	}
+	if ro {
+		t.Fatal("expected writable snapshot")
+	}
+
+	data, err := os.ReadFile(filepath.Join(dst, "hello.txt"))
+	if err != nil {
+		t.Fatalf("read snapshot file: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("expected 'hello', got %q", string(data))
+	}
+}
+
+func TestCreateSnapshotReadOnly(t *testing.T) {
+	dir := testDir(t)
+	src := filepath.Join(dir, "@test-snap-ro-src")
+	dst := filepath.Join(dir, "@test-snap-ro-dst")
+
+	if err := CreateSubvolume(src); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(src) })
+
+	if err := CreateSnapshot(src, dst, true); err != nil {
+		t.Fatalf("CreateSnapshot(readOnly=true): %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(dst) })
+
+	ro, err := GetReadOnly(dst)
+	if err != nil {
+		t.Fatalf("GetReadOnly: %v", err)
+	}
+	if !ro {
+		t.Fatal("expected read-only snapshot")
+	}
+}
+
+func TestCreateSnapshotAlreadyExists(t *testing.T) {
+	dir := testDir(t)
+	src := filepath.Join(dir, "@test-snap-exists-src")
+	dst := filepath.Join(dir, "@test-snap-exists-dst")
+
+	if err := CreateSubvolume(src); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(src) })
+
+	if err := CreateSubvolume(dst); err != nil {
+		t.Fatalf("CreateSubvolume dst: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(dst) })
+
+	err := CreateSnapshot(src, dst, false)
+	if err == nil {
+		t.Fatal("expected error for existing destination")
+	}
+	if !errors.Is(err, ErrExists) {
+		t.Fatalf("expected ErrExists, got: %v", err)
+	}
+}

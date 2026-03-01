@@ -150,3 +150,46 @@ func DeleteSubvolume(path string) error {
 	}
 	return nil
 }
+
+// CreateSnapshot creates a CoW snapshot of the source subvolume at dest.
+// If readOnly is true, the snapshot is created with the read-only flag set.
+func CreateSnapshot(source, dest string, readOnly bool) error {
+	parent := filepath.Dir(dest)
+	name := filepath.Base(dest)
+
+	ok, err := IsSubvolume(source)
+	if err != nil {
+		return fmt.Errorf("btrfs: snapshot: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("btrfs: snapshot source %s: %w", source, ErrNotSubvolume)
+	}
+
+	if _, err := os.Lstat(dest); err == nil {
+		return fmt.Errorf("btrfs: snapshot dest %s: %w", dest, ErrExists)
+	}
+
+	srcFd, err := unix.Open(source, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("btrfs: open source %s: %w", source, err)
+	}
+	defer unix.Close(srcFd)
+
+	dstFd, err := unix.Open(parent, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("btrfs: open dest parent %s: %w", parent, err)
+	}
+	defer unix.Close(dstFd)
+
+	var args ioctlVolArgsV2
+	args.Fd = int64(srcFd)
+	if readOnly {
+		args.Flags = subvolRdonly
+	}
+	copy(args.Name[:], name)
+
+	if err := ioctl(uintptr(dstFd), iocSnapCreateV2, uintptr(unsafe.Pointer(&args))); err != nil {
+		return fmt.Errorf("btrfs: snapshot %s -> %s: %w", source, dest, err)
+	}
+	return nil
+}
