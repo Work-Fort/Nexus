@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // requireBtrfsCLI skips the test if the btrfs binary is not in PATH.
@@ -216,4 +218,97 @@ func extractField(output, field string) string {
 		}
 	}
 	return ""
+}
+
+func TestE2EEnableQuota(t *testing.T) {
+	requireBtrfsCLI(t)
+	requireQuotaCap(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@e2e-quota-enable")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota: %v", err)
+	}
+
+	// Verify via CLI: "btrfs qgroup show" should work (it fails if quotas not enabled).
+	out, err := btrfsCmd(t, "qgroup", "show", path)
+	if err != nil {
+		t.Fatalf("btrfs qgroup show failed (quotas not enabled?): %v\n%s", err, out)
+	}
+}
+
+func TestE2ESetQuota(t *testing.T) {
+	requireBtrfsCLI(t)
+	requireQuotaCap(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@e2e-quota-set")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota: %v", err)
+	}
+
+	limit := uint64(100 * 1024 * 1024) // 100 MiB
+	if err := SetQuota(path, limit); err != nil {
+		t.Fatalf("SetQuota: %v", err)
+	}
+
+	// Verify via CLI.
+	out, err := btrfsCmd(t, "qgroup", "show", "--raw", path)
+	if err != nil {
+		t.Fatalf("btrfs qgroup show failed: %v\n%s", err, out)
+	}
+	// The output should contain "104857600" (100 MiB in bytes).
+	if !strings.Contains(out, "104857600") {
+		t.Fatalf("expected 104857600 in qgroup output, got:\n%s", out)
+	}
+}
+
+func TestE2EGetQuotaUsageAfterWrite(t *testing.T) {
+	requireBtrfsCLI(t)
+	requireQuotaCap(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@e2e-quota-usage")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota: %v", err)
+	}
+
+	// Write data.
+	data := make([]byte, 128*1024) // 128 KiB
+	if err := os.WriteFile(filepath.Join(path, "payload.bin"), data, 0644); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+
+	// Sync to flush accounting.
+	syncFd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		t.Fatalf("open for sync: %v", err)
+	}
+	unix.Syncfs(syncFd)
+	unix.Close(syncFd)
+
+	usage, err := GetQuotaUsage(path)
+	if err != nil {
+		t.Fatalf("GetQuotaUsage: %v", err)
+	}
+
+	// Verify Referenced is at least 128 KiB (metadata adds some overhead).
+	if usage.Referenced < 128*1024 {
+		t.Fatalf("expected Referenced >= %d, got %d", 128*1024, usage.Referenced)
+	}
 }
