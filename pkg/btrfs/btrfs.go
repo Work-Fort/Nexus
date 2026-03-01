@@ -300,6 +300,43 @@ func getSubvolumeID(path string) (uint64, error) {
 	return args.Treeid, nil
 }
 
+// treeSearchOne searches the quota tree for a single item with the given
+// subvolume ID and key type. Returns the item data or nil if not found.
+func treeSearchOne(fd uintptr, subvolID uint64, keyType uint32) ([]byte, error) {
+	var args ioctlSearchArgs
+	args.Key.TreeID = quotaTreeObjectid
+	args.Key.MinObjectid = 0
+	args.Key.MaxObjectid = 0
+	args.Key.MinOffset = subvolID
+	args.Key.MaxOffset = subvolID
+	args.Key.MinType = keyType
+	args.Key.MaxType = keyType
+	args.Key.MaxTransid = ^uint64(0)
+	args.Key.NrItems = 1
+
+	if err := ioctl(fd, iocTreeSearch, uintptr(unsafe.Pointer(&args))); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil, ErrQuotaNotEnabled
+		}
+		return nil, fmt.Errorf("btrfs: tree search: %w", err)
+	}
+
+	if args.Key.NrItems == 0 {
+		return nil, nil
+	}
+
+	buf := args.Buf[:]
+	if len(buf) < 32 {
+		return nil, nil
+	}
+
+	hdrLen := binary.LittleEndian.Uint32(buf[28:32])
+	if len(buf) < int(32+hdrLen) {
+		return nil, nil
+	}
+	return buf[32 : 32+hdrLen], nil
+}
+
 // GetQuotaUsage returns disk usage and quota limits for the subvolume at path.
 // Quotas must be enabled first with EnableQuota.
 // Returns ErrQuotaNotEnabled if quotas are not enabled on the filesystem.
@@ -317,93 +354,59 @@ func GetQuotaUsage(path string) (QuotaUsage, error) {
 	defer unix.Close(fd)
 
 	var usage QuotaUsage
-	var foundInfo bool
 
-	// Search for qgroup info item (type 242) and limit item (type 244).
-	var args ioctlSearchArgs
-	args.Key.TreeID = quotaTreeObjectid
-	args.Key.MinObjectid = 0
-	args.Key.MaxObjectid = subvolID
-	args.Key.MinOffset = subvolID
-	args.Key.MaxOffset = subvolID
-	args.Key.MinType = qgroupInfoKey
-	args.Key.MaxType = qgroupLimitKey
-	args.Key.MaxTransid = ^uint64(0)
-	args.Key.NrItems = 16
+	// The btrfs tree search uses composite key comparison — it iterates
+	// from (MinObjectid, MinType, MinOffset) to (MaxObjectid, MaxType,
+	// MaxOffset) in key order. Items between type 242 and 244 at the same
+	// offset can include info items for higher-numbered subvolumes and
+	// relation items (type 243), so we do two targeted searches.
 
-	if err := ioctl(uintptr(fd), iocTreeSearch, uintptr(unsafe.Pointer(&args))); err != nil {
-		if errors.Is(err, unix.ENOENT) {
-			return QuotaUsage{}, fmt.Errorf("btrfs: get quota usage %s: %w", path, ErrQuotaNotEnabled)
-		}
-		return QuotaUsage{}, fmt.Errorf("btrfs: tree search %s: %w", path, err)
+	// Search 1: qgroup info item (type 242).
+	info, err := treeSearchOne(uintptr(fd), subvolID, qgroupInfoKey)
+	if err != nil {
+		return QuotaUsage{}, fmt.Errorf("btrfs: get quota usage %s: %w", path, err)
 	}
-
-	if args.Key.NrItems == 0 {
+	if info == nil {
 		return QuotaUsage{}, fmt.Errorf("btrfs: get quota usage %s: %w", path, ErrQuotaNotEnabled)
 	}
-
-	buf := args.Buf[:]
-	for i := uint32(0); i < args.Key.NrItems; i++ {
-		if len(buf) < 32 {
-			break
+	if len(info) >= 40 {
+		r := bytes.NewReader(info)
+		var qi struct {
+			Generation uint64
+			Rfer       uint64
+			RferCmpr   uint64
+			Excl       uint64
+			ExclCmpr   uint64
 		}
-
-		var hdr searchHeader
-		hdr.Transid = binary.LittleEndian.Uint64(buf[0:8])
-		hdr.Objectid = binary.LittleEndian.Uint64(buf[8:16])
-		hdr.Offset = binary.LittleEndian.Uint64(buf[16:24])
-		hdr.Type = binary.LittleEndian.Uint32(buf[24:28])
-		hdr.Len = binary.LittleEndian.Uint32(buf[28:32])
-
-		if len(buf) < int(32+hdr.Len) {
-			break
+		if err := binary.Read(r, binary.LittleEndian, &qi); err == nil {
+			usage.Referenced = qi.Rfer
+			usage.Exclusive = qi.Excl
 		}
-		itemData := buf[32 : 32+hdr.Len]
-
-		switch hdr.Type {
-		case qgroupInfoKey:
-			if hdr.Len >= 40 {
-				r := bytes.NewReader(itemData)
-				var info struct {
-					Generation uint64
-					Rfer       uint64
-					RferCmpr   uint64
-					Excl       uint64
-					ExclCmpr   uint64
-				}
-				if err := binary.Read(r, binary.LittleEndian, &info); err == nil {
-					usage.Referenced = info.Rfer
-					usage.Exclusive = info.Excl
-					foundInfo = true
-				}
-			}
-		case qgroupLimitKey:
-			if hdr.Len >= 40 {
-				r := bytes.NewReader(itemData)
-				var lim struct {
-					Flags   uint64
-					MaxRfer uint64
-					MaxExcl uint64
-					RsvRfer uint64
-					RsvExcl uint64
-				}
-				if err := binary.Read(r, binary.LittleEndian, &lim); err == nil {
-					// MaxRfer of ^uint64(0) means "no limit".
-					if lim.MaxRfer != ^uint64(0) {
-						usage.MaxReferenced = lim.MaxRfer
-					}
-					if lim.MaxExcl != ^uint64(0) {
-						usage.MaxExclusive = lim.MaxExcl
-					}
-				}
-			}
-		}
-
-		buf = buf[32+hdr.Len:]
 	}
 
-	if !foundInfo {
-		return QuotaUsage{}, fmt.Errorf("btrfs: get quota usage %s: %w", path, ErrQuotaNotEnabled)
+	// Search 2: qgroup limit item (type 244). Optional — may not exist.
+	lim, err := treeSearchOne(uintptr(fd), subvolID, qgroupLimitKey)
+	if err != nil {
+		return QuotaUsage{}, fmt.Errorf("btrfs: get quota usage %s: %w", path, err)
+	}
+	if lim != nil && len(lim) >= 40 {
+		r := bytes.NewReader(lim)
+		var ql struct {
+			Flags   uint64
+			MaxRfer uint64
+			MaxExcl uint64
+			RsvRfer uint64
+			RsvExcl uint64
+		}
+		if err := binary.Read(r, binary.LittleEndian, &ql); err == nil {
+			// ^uint64(0) means "no limit".
+			if ql.MaxRfer != ^uint64(0) {
+				usage.MaxReferenced = ql.MaxRfer
+			}
+			if ql.MaxExcl != ^uint64(0) {
+				usage.MaxExclusive = ql.MaxExcl
+			}
+		}
 	}
 
 	return usage, nil
