@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // requireBtrfs skips the test if the working directory is not on btrfs.
@@ -402,5 +404,75 @@ func TestSetQuotaClear(t *testing.T) {
 	}
 	if err := SetQuota(path, 0); err != nil {
 		t.Fatalf("SetQuota(0) to clear: %v", err)
+	}
+}
+
+func TestGetQuotaUsage(t *testing.T) {
+	requireQuotaCap(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-get-usage")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota: %v", err)
+	}
+
+	// Write some data so Referenced > 0.
+	data := make([]byte, 64*1024) // 64 KiB
+	if err := os.WriteFile(filepath.Join(path, "data.bin"), data, 0644); err != nil {
+		t.Fatalf("write data: %v", err)
+	}
+
+	// Force a sync so quota accounting picks up the write.
+	syncFd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		t.Fatalf("open for sync: %v", err)
+	}
+	unix.Syncfs(syncFd)
+	unix.Close(syncFd)
+
+	usage, err := GetQuotaUsage(path)
+	if err != nil {
+		t.Fatalf("GetQuotaUsage: %v", err)
+	}
+
+	if usage.Referenced == 0 {
+		t.Fatal("expected Referenced > 0 after writing data")
+	}
+	if usage.MaxReferenced != 0 {
+		t.Fatalf("expected MaxReferenced=0 (unlimited), got %d", usage.MaxReferenced)
+	}
+}
+
+func TestGetQuotaUsageWithLimit(t *testing.T) {
+	requireQuotaCap(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-usage-limit")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota: %v", err)
+	}
+
+	limit := uint64(50 * 1024 * 1024) // 50 MiB
+	if err := SetQuota(path, limit); err != nil {
+		t.Fatalf("SetQuota: %v", err)
+	}
+
+	usage, err := GetQuotaUsage(path)
+	if err != nil {
+		t.Fatalf("GetQuotaUsage: %v", err)
+	}
+
+	if usage.MaxReferenced != limit {
+		t.Fatalf("expected MaxReferenced=%d, got %d", limit, usage.MaxReferenced)
 	}
 }
