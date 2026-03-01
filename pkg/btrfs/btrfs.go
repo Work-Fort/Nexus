@@ -4,6 +4,9 @@ package btrfs
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -40,4 +43,43 @@ func IsSubvolume(path string) (bool, error) {
 		return false, nil
 	}
 	return IsBtrfs(path)
+}
+
+// CreateSubvolume creates a new btrfs subvolume at path.
+// The parent directory must exist and reside on a btrfs filesystem.
+func CreateSubvolume(path string) error {
+	parent := filepath.Dir(path)
+	name := filepath.Base(path)
+
+	ok, err := IsBtrfs(parent)
+	if err != nil {
+		return fmt.Errorf("btrfs: create subvolume: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("btrfs: create subvolume %s: %w", path, ErrNotBtrfs)
+	}
+
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("btrfs: create subvolume %s: %w", path, ErrExists)
+	}
+
+	fd, err := unix.Open(parent, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("btrfs: open parent %s: %w", parent, err)
+	}
+	defer unix.Close(fd)
+
+	var args ioctlVolArgsV2
+	copy(args.Name[:], name)
+
+	if err := ioctl(uintptr(fd), iocSubvolCreateV2, uintptr(unsafe.Pointer(&args))); err != nil {
+		return fmt.Errorf("btrfs: create subvolume %s: %w", path, err)
+	}
+	return nil
+}
+
+// DeleteSubvolume removes a btrfs subvolume at path using VFS operations.
+func DeleteSubvolume(path string) error {
+	// stub -- will be replaced in Task 6
+	return fmt.Errorf("btrfs: delete not implemented")
 }

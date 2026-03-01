@@ -20,12 +20,23 @@ func requireBtrfs(t *testing.T) {
 	}
 }
 
-// testDir returns a temp directory on the current filesystem and registers
-// cleanup. All subvolumes created inside must be deleted before the test ends.
+// testDir returns a temp directory on the current btrfs filesystem and
+// registers cleanup. All subvolumes created inside must be deleted before
+// the test ends.  We cannot use t.TempDir() because it defaults to /tmp
+// which is typically tmpfs.
 func testDir(t *testing.T) string {
 	t.Helper()
 	requireBtrfs(t)
-	return t.TempDir()
+	dir, err := os.MkdirTemp(".", ".btrfs-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("Abs: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(abs) })
+	return abs
 }
 
 func TestIsBtrfs(t *testing.T) {
@@ -64,7 +75,56 @@ func TestIsSubvolumeNonExistent(t *testing.T) {
 	}
 }
 
-// Silence "unused" errors for variables used in later tasks.
-var _ = errors.Is
-var _ = os.Lstat
-var _ = filepath.Join
+func TestCreateSubvolume(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-subvol")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	ok, err := IsSubvolume(path)
+	if err != nil {
+		t.Fatalf("IsSubvolume: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected path to be a subvolume after creation")
+	}
+}
+
+func TestCreateSubvolumeAlreadyExists(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-exists")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	err := CreateSubvolume(path)
+	if err == nil {
+		t.Fatal("expected error for duplicate subvolume")
+	}
+	if !errors.Is(err, ErrExists) {
+		t.Fatalf("expected ErrExists, got: %v", err)
+	}
+}
+
+func TestCreateSubvolumeNotBtrfs(t *testing.T) {
+	if _, err := os.Stat("/dev/shm"); err != nil {
+		t.Skip("/dev/shm not available")
+	}
+	ok, _ := IsBtrfs("/dev/shm")
+	if ok {
+		t.Skip("/dev/shm is on btrfs")
+	}
+
+	err := CreateSubvolume("/dev/shm/btrfs-test-subvol")
+	if err == nil {
+		t.Fatal("expected error on non-btrfs filesystem")
+	}
+	if !errors.Is(err, ErrNotBtrfs) {
+		t.Fatalf("expected ErrNotBtrfs, got: %v", err)
+	}
+}
