@@ -224,3 +224,27 @@ func CreateSnapshot(source, dest string, readOnly bool) error {
 	}
 	return nil
 }
+
+// EnableQuota enables btrfs qgroup quotas on the filesystem containing path.
+// This is idempotent — calling it on a filesystem that already has quotas
+// enabled returns nil.
+// Requires CAP_SYS_ADMIN.
+func EnableQuota(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("btrfs: open %s: %w", path, err)
+	}
+	defer unix.Close(fd)
+
+	var args ioctlQuotaCtlArgs
+	args.Cmd = quotaCtlEnable
+
+	if err := ioctl(uintptr(fd), iocQuotaCtl, uintptr(unsafe.Pointer(&args))); err != nil {
+		// EEXIST means quotas are already enabled — idempotent.
+		if errors.Is(err, unix.EEXIST) {
+			return nil
+		}
+		return fmt.Errorf("btrfs: enable quota %s: %w", path, err)
+	}
+	return nil
+}

@@ -39,6 +39,22 @@ func testDir(t *testing.T) string {
 	return abs
 }
 
+// requireQuotaCap skips the test if the process lacks CAP_SYS_ADMIN,
+// which is required for all btrfs quota operations.
+func requireQuotaCap(t *testing.T) {
+	t.Helper()
+	requireBtrfs(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@quota-cap-check")
+	if err := CreateSubvolume(path); err != nil {
+		t.Skipf("cannot create subvolume for cap check: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+	if err := EnableQuota(path); err != nil {
+		t.Skipf("CAP_SYS_ADMIN not available (quota ops will skip): %v", err)
+	}
+}
+
 func TestIsBtrfs(t *testing.T) {
 	requireBtrfs(t)
 	ok, err := IsBtrfs(".")
@@ -309,5 +325,39 @@ func TestCreateSnapshotAlreadyExists(t *testing.T) {
 	}
 	if !errors.Is(err, ErrExists) {
 		t.Fatalf("expected ErrExists, got: %v", err)
+	}
+}
+
+func TestEnableQuota(t *testing.T) {
+	requireQuotaCap(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-quota-enable")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota: %v", err)
+	}
+}
+
+func TestEnableQuotaIdempotent(t *testing.T) {
+	requireQuotaCap(t)
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-quota-idempotent")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota first call: %v", err)
+	}
+	// Second call should succeed (idempotent).
+	if err := EnableQuota(path); err != nil {
+		t.Fatalf("EnableQuota second call (should be idempotent): %v", err)
 	}
 }
