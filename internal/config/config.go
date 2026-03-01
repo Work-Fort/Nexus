@@ -19,7 +19,9 @@ const (
 	DefaultSocketPath = "/run/containerd/containerd.sock"
 	DefaultRuntime    = "io.containerd.runc.v2"
 	DefaultNamespace  = "nexus"
-	DefaultAgentImage = "docker.io/library/alpine:latest"
+	DefaultAgentImage  = "docker.io/library/alpine:latest"
+	DefaultCNIBinDir   = "/opt/cni/bin"
+	DefaultNetSubnet   = "10.88.0.0/16"
 )
 
 // Paths holds XDG-compliant directory paths.
@@ -85,6 +87,9 @@ func InitViper() {
 	viper.SetDefault("namespace", DefaultNamespace)
 	viper.SetDefault("agent-image", DefaultAgentImage)
 	viper.SetDefault("webhook-url", "")
+	viper.SetDefault("cni-bin-dir", DefaultCNIBinDir)
+	viper.SetDefault("network-subnet", DefaultNetSubnet)
+	viper.SetDefault("network-enabled", true)
 
 	viper.SetConfigName(ConfigFileName)
 	viper.SetConfigType(ConfigType)

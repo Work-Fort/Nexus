@@ -12,6 +12,7 @@ import (
 
 	"github.com/Work-Fort/Nexus/internal/app"
 	"github.com/Work-Fort/Nexus/internal/domain"
+	"github.com/Work-Fort/Nexus/internal/infra/cni"
 	"github.com/Work-Fort/Nexus/internal/infra/httpapi"
 )
 
@@ -91,7 +92,7 @@ func newMockRuntime() *mockRuntime {
 	return &mockRuntime{containers: make(map[string]bool)}
 }
 
-func (m *mockRuntime) Create(_ context.Context, id, image, runtime string) error {
+func (m *mockRuntime) Create(_ context.Context, id, image, runtime string, _ ...domain.CreateOpt) error {
 	m.containers[id] = false
 	return nil
 }
@@ -120,7 +121,7 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 func setupHandler() http.Handler {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 	return httpapi.NewHandler(svc)
 }
 

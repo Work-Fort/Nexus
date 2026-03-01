@@ -40,6 +40,9 @@ type VM struct {
 	State     VMState
 	Image     string
 	Runtime   string
+	IP        string
+	Gateway   string
+	NetNSPath string
 	CreatedAt time.Time
 	StartedAt *time.Time
 	StoppedAt *time.Time

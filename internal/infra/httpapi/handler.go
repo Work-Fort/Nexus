@@ -48,6 +48,8 @@ type vmResponse struct {
 	State     string  `json:"state"`
 	Image     string  `json:"image"`
 	Runtime   string  `json:"runtime"`
+	IP        string  `json:"ip,omitempty"`
+	Gateway   string  `json:"gateway,omitempty"`
 	CreatedAt string  `json:"created_at"`
 	StartedAt *string `json:"started_at,omitempty"`
 	StoppedAt *string `json:"stopped_at,omitempty"`
@@ -105,6 +107,8 @@ func vmToResponse(vm *domain.VM) vmResponse {
 		State:     string(vm.State),
 		Image:     vm.Image,
 		Runtime:   vm.Runtime,
+		IP:        vm.IP,
+		Gateway:   vm.Gateway,
 		CreatedAt: vm.CreatedAt.UTC().Format(timeFormatJSON),
 	}
 	if vm.StartedAt != nil {

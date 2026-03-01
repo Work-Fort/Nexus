@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
+	"github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/Work-Fort/Nexus/internal/domain"
 )
@@ -61,7 +62,7 @@ func (r *Runtime) nsCtx(ctx context.Context) context.Context {
 // Trade-off: named USER directives (e.g. "USER nginx") cannot be resolved
 // to a UID without mounting the rootfs. We support numeric UIDs only.
 // See README.md "Known Limitations" for details.
-func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string) error {
+func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, opts ...domain.CreateOpt) error {
 	ctx = r.nsCtx(ctx)
 
 	img, err := r.client.Pull(ctx, image, client.WithPullUnpack)
@@ -96,6 +97,17 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string) 
 			return fmt.Errorf("non-numeric USER %q in image %s (see README known limitations): %w", cfg.User, image, err)
 		}
 		specOpts = append(specOpts, oci.WithUIDGID(uid, gid))
+	}
+
+	var createCfg domain.CreateConfig
+	for _, opt := range opts {
+		opt(&createCfg)
+	}
+	if createCfg.NetNSPath != "" {
+		specOpts = append(specOpts, oci.WithLinuxNamespace(specs.LinuxNamespace{
+			Type: specs.NetworkNamespace,
+			Path: createCfg.NetNSPath,
+		}))
 	}
 
 	_, err = r.client.NewContainer(ctx, id,

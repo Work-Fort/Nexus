@@ -95,6 +95,9 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 		Runtime:   vm.Runtime,
 		State:     string(vm.State),
 		CreatedAt: vm.CreatedAt.UTC().Format(timeFormat),
+		Ip:        vm.IP,
+		Gateway:   vm.Gateway,
+		NetnsPath: vm.NetNSPath,
 	})
 }
 
@@ -180,12 +183,15 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 // vmFromRow converts a sqlc-generated Vm row into a domain.VM.
 func vmFromRow(row Vm) (*domain.VM, error) {
 	vm := &domain.VM{
-		ID:      row.ID,
-		Name:    row.Name,
-		Role:    domain.VMRole(row.Role),
-		State:   domain.VMState(row.State),
-		Image:   row.Image,
-		Runtime: row.Runtime,
+		ID:        row.ID,
+		Name:      row.Name,
+		Role:      domain.VMRole(row.Role),
+		State:     domain.VMState(row.State),
+		Image:     row.Image,
+		Runtime:   row.Runtime,
+		IP:        row.Ip,
+		Gateway:   row.Gateway,
+		NetNSPath: row.NetnsPath,
 	}
 	var err error
 	vm.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)

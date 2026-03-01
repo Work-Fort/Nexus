@@ -8,6 +8,7 @@ import (
 
 	"github.com/Work-Fort/Nexus/internal/app"
 	"github.com/Work-Fort/Nexus/internal/domain"
+	"github.com/Work-Fort/Nexus/internal/infra/cni"
 )
 
 // --- mock VMStore ---
@@ -86,7 +87,7 @@ func newMockRuntime() *mockRuntime {
 	return &mockRuntime{containers: make(map[string]bool)}
 }
 
-func (m *mockRuntime) Create(_ context.Context, id, image, runtime string) error {
+func (m *mockRuntime) Create(_ context.Context, id, image, runtime string, _ ...domain.CreateOpt) error {
 	m.containers[id] = false
 	return nil
 }
@@ -115,7 +116,7 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 func TestCreateVM(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name:    "test-agent",
@@ -149,7 +150,7 @@ func TestCreateVM(t *testing.T) {
 }
 
 func TestCreateVMInvalidRole(t *testing.T) {
-	svc := app.NewVMService(newMockStore(), newMockRuntime())
+	svc := app.NewVMService(newMockStore(), newMockRuntime(), &cni.NoopNetwork{})
 	_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "bad", Role: "invalid", Image: "alpine:latest", Runtime: "runc",
 	})
@@ -161,7 +162,7 @@ func TestCreateVMInvalidRole(t *testing.T) {
 func TestStartVM(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "start-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -180,7 +181,7 @@ func TestStartVM(t *testing.T) {
 func TestStartVMAlreadyRunning(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "running", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -196,7 +197,7 @@ func TestStartVMAlreadyRunning(t *testing.T) {
 func TestStopVM(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "stop-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -216,7 +217,7 @@ func TestStopVM(t *testing.T) {
 func TestDeleteVM(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "delete-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -237,7 +238,7 @@ func TestDeleteVM(t *testing.T) {
 
 func TestListVMs(t *testing.T) {
 	store := newMockStore()
-	svc := app.NewVMService(store, newMockRuntime())
+	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
 
 	svc.CreateVM(context.Background(), domain.CreateVMParams{Name: "a1", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc"})
 	svc.CreateVM(context.Background(), domain.CreateVMParams{Name: "s1", Role: domain.VMRoleService, Image: "alpine:latest", Runtime: "runc"})
@@ -253,7 +254,7 @@ func TestListVMs(t *testing.T) {
 
 func TestGetVM(t *testing.T) {
 	store := newMockStore()
-	svc := app.NewVMService(store, newMockRuntime())
+	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
 
 	created, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "get-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -271,7 +272,7 @@ func TestGetVM(t *testing.T) {
 func TestExecVMEmptyCmd(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "exec-empty", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -287,7 +288,7 @@ func TestExecVMEmptyCmd(t *testing.T) {
 func TestHandleWebhookCreatesAgent(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	webhook := app.SharkfinWebhook{
 		Event:     "message.new",
@@ -316,7 +317,7 @@ func TestHandleWebhookCreatesAgent(t *testing.T) {
 func TestHandleWebhookStartsExistingStopped(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "existing-bot", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -339,7 +340,7 @@ func TestHandleWebhookStartsExistingStopped(t *testing.T) {
 func TestHandleWebhookNoopIfRunning(t *testing.T) {
 	store := newMockStore()
 	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt)
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "active-bot", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",

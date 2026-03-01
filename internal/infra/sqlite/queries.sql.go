@@ -31,7 +31,7 @@ func (q *Queries) DeleteVM(ctx context.Context, id string) error {
 }
 
 const getVM = `-- name: GetVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
 FROM vms WHERE id = ?
 `
 
@@ -48,12 +48,15 @@ func (q *Queries) GetVM(ctx context.Context, id string) (Vm, error) {
 		&i.CreatedAt,
 		&i.StartedAt,
 		&i.StoppedAt,
+		&i.Ip,
+		&i.Gateway,
+		&i.NetnsPath,
 	)
 	return i, err
 }
 
 const getVMByName = `-- name: GetVMByName :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
 FROM vms WHERE name = ?
 `
 
@@ -70,14 +73,17 @@ func (q *Queries) GetVMByName(ctx context.Context, name string) (Vm, error) {
 		&i.CreatedAt,
 		&i.StartedAt,
 		&i.StoppedAt,
+		&i.Ip,
+		&i.Gateway,
+		&i.NetnsPath,
 	)
 	return i, err
 }
 
 const insertVM = `-- name: InsertVM :exec
 
-INSERT INTO vms (id, name, role, image, runtime, state, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertVMParams struct {
@@ -88,6 +94,9 @@ type InsertVMParams struct {
 	Runtime   string `json:"runtime"`
 	State     string `json:"state"`
 	CreatedAt string `json:"created_at"`
+	Ip        string `json:"ip"`
+	Gateway   string `json:"gateway"`
+	NetnsPath string `json:"netns_path"`
 }
 
 // SPDX-License-Identifier: Apache-2.0
@@ -100,12 +109,15 @@ func (q *Queries) InsertVM(ctx context.Context, arg InsertVMParams) error {
 		arg.Runtime,
 		arg.State,
 		arg.CreatedAt,
+		arg.Ip,
+		arg.Gateway,
+		arg.NetnsPath,
 	)
 	return err
 }
 
 const listVMs = `-- name: ListVMs :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
 FROM vms ORDER BY created_at DESC
 `
 
@@ -128,6 +140,9 @@ func (q *Queries) ListVMs(ctx context.Context) ([]Vm, error) {
 			&i.CreatedAt,
 			&i.StartedAt,
 			&i.StoppedAt,
+			&i.Ip,
+			&i.Gateway,
+			&i.NetnsPath,
 		); err != nil {
 			return nil, err
 		}
@@ -143,7 +158,7 @@ func (q *Queries) ListVMs(ctx context.Context) ([]Vm, error) {
 }
 
 const listVMsByRole = `-- name: ListVMsByRole :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
 FROM vms WHERE role = ? ORDER BY created_at DESC
 `
 
@@ -166,6 +181,9 @@ func (q *Queries) ListVMsByRole(ctx context.Context, role string) ([]Vm, error) 
 			&i.CreatedAt,
 			&i.StartedAt,
 			&i.StoppedAt,
+			&i.Ip,
+			&i.Gateway,
+			&i.NetnsPath,
 		); err != nil {
 			return nil, err
 		}

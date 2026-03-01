@@ -18,6 +18,8 @@ import (
 
 	"github.com/Work-Fort/Nexus/internal/app"
 	"github.com/Work-Fort/Nexus/internal/config"
+	"github.com/Work-Fort/Nexus/internal/domain"
+	"github.com/Work-Fort/Nexus/internal/infra/cni"
 	ctrd "github.com/Work-Fort/Nexus/internal/infra/containerd"
 	"github.com/Work-Fort/Nexus/internal/infra/httpapi"
 	"github.com/Work-Fort/Nexus/internal/infra/sqlite"
@@ -46,11 +48,26 @@ func newDaemonCmd() *cobra.Command {
 			}
 			defer runtime.Close()
 
+			var network domain.Network
+			if viper.GetBool("network-enabled") {
+				cniNet, err := cni.New(cni.Config{
+					BinDir: viper.GetString("cni-bin-dir"),
+					Subnet: viper.GetString("network-subnet"),
+				})
+				if err != nil {
+					return fmt.Errorf("init cni: %w", err)
+				}
+				defer cniNet.Close()
+				network = cniNet
+			} else {
+				network = &cni.NoopNetwork{}
+			}
+
 			if logFile != nil {
 				defer logFile.Close()
 			}
 
-			svc := app.NewVMService(store, runtime, app.WithConfig(app.VMServiceConfig{
+			svc := app.NewVMService(store, runtime, network, app.WithConfig(app.VMServiceConfig{
 				DefaultImage:   viper.GetString("agent-image"),
 				DefaultRuntime: viper.GetString("runtime"),
 			}))
@@ -103,8 +120,11 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("namespace", config.DefaultNamespace, "containerd namespace")
 	cmd.Flags().String("runtime", config.DefaultRuntime, "Default container runtime handler")
 	cmd.Flags().String("agent-image", config.DefaultAgentImage, "Default OCI image for agent VMs")
+	cmd.Flags().String("cni-bin-dir", config.DefaultCNIBinDir, "Directory containing CNI plugin binaries")
+	cmd.Flags().String("network-subnet", config.DefaultNetSubnet, "CIDR subnet for the VM bridge network")
+	cmd.Flags().Bool("network-enabled", true, "Enable CNI networking for VMs")
 
-	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image"} {
+	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}

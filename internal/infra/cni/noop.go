@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: Apache-2.0
+
+// Package cni implements domain.Network using CNI plugins.
+package cni
+
+import (
+	"context"
+
+	"github.com/Work-Fort/Nexus/internal/domain"
+)
+
+// NoopNetwork implements domain.Network as a no-op. Used when networking
+// is disabled or during testing.
+type NoopNetwork struct{}
+
+func (n *NoopNetwork) Setup(_ context.Context, _ string) (*domain.NetworkInfo, error) {
+	return &domain.NetworkInfo{}, nil
+}
+
+func (n *NoopNetwork) Teardown(_ context.Context, _ string) error {
+	return nil
+}

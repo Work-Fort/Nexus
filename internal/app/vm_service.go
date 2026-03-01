@@ -36,14 +36,16 @@ type VMServiceConfig struct {
 type VMService struct {
 	store   domain.VMStore
 	runtime domain.Runtime
+	network domain.Network
 	config  VMServiceConfig
 }
 
 // NewVMService creates a VMService with the given ports and config.
-func NewVMService(store domain.VMStore, runtime domain.Runtime, opts ...func(*VMService)) *VMService {
+func NewVMService(store domain.VMStore, runtime domain.Runtime, network domain.Network, opts ...func(*VMService)) *VMService {
 	svc := &VMService{
 		store:   store,
 		runtime: runtime,
+		network: network,
 		config: VMServiceConfig{
 			DefaultImage:   "docker.io/library/alpine:latest",
 			DefaultRuntime: "io.containerd.runc.v2",
@@ -88,16 +90,31 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		CreatedAt: time.Now().UTC(),
 	}
 
-	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime); err != nil {
+	netInfo, err := s.network.Setup(ctx, vm.ID)
+	if err != nil {
+		return nil, fmt.Errorf("network setup: %w", err)
+	}
+	vm.IP = netInfo.IP
+	vm.Gateway = netInfo.Gateway
+	vm.NetNSPath = netInfo.NetNSPath
+
+	var createOpts []domain.CreateOpt
+	if netInfo.NetNSPath != "" {
+		createOpts = append(createOpts, domain.WithNetNS(netInfo.NetNSPath))
+	}
+
+	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
+		s.network.Teardown(ctx, vm.ID) //nolint:errcheck // best-effort rollback
 		return nil, fmt.Errorf("runtime create: %w", err)
 	}
 
 	if err := s.store.Create(ctx, vm); err != nil {
-		s.runtime.Delete(ctx, vm.ID) //nolint:errcheck // best-effort rollback
+		s.runtime.Delete(ctx, vm.ID)    //nolint:errcheck // best-effort rollback
+		s.network.Teardown(ctx, vm.ID) //nolint:errcheck // best-effort rollback
 		return nil, fmt.Errorf("store create: %w", err)
 	}
 
-	log.Info("vm created", "id", vm.ID, "name", vm.Name, "role", vm.Role)
+	log.Info("vm created", "id", vm.ID, "name", vm.Name, "role", vm.Role, "ip", vm.IP)
 	return vm, nil
 }
 
@@ -168,6 +185,10 @@ func (s *VMService) DeleteVM(ctx context.Context, id string) error {
 	}
 	if err := s.runtime.Delete(ctx, id); err != nil {
 		log.Warn("runtime delete failed", "id", id, "err", err)
+	}
+
+	if err := s.network.Teardown(ctx, id); err != nil {
+		log.Warn("network teardown failed", "id", id, "err", err)
 	}
 
 	if err := s.store.Delete(ctx, id); err != nil {

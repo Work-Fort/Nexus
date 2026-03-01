@@ -1,0 +1,11 @@
+-- SPDX-License-Identifier: Apache-2.0
+
+-- +goose Up
+ALTER TABLE vms ADD COLUMN ip TEXT NOT NULL DEFAULT '';
+ALTER TABLE vms ADD COLUMN gateway TEXT NOT NULL DEFAULT '';
+ALTER TABLE vms ADD COLUMN netns_path TEXT NOT NULL DEFAULT '';
+
+-- +goose Down
+ALTER TABLE vms DROP COLUMN netns_path;
+ALTER TABLE vms DROP COLUMN gateway;
+ALTER TABLE vms DROP COLUMN ip;

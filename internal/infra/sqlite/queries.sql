@@ -1,23 +1,23 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- name: InsertVM :exec
-INSERT INTO vms (id, name, role, image, runtime, state, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
 FROM vms WHERE id = ?;
 
 -- name: GetVMByName :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
 FROM vms WHERE name = ?;
 
 -- name: ListVMs :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
 FROM vms ORDER BY created_at DESC;
 
 -- name: ListVMsByRole :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
 FROM vms WHERE role = ? ORDER BY created_at DESC;
 
 -- name: UpdateVMStateCreated :exec
