@@ -128,3 +128,53 @@ func TestCreateSubvolumeNotBtrfs(t *testing.T) {
 		t.Fatalf("expected ErrNotBtrfs, got: %v", err)
 	}
 }
+
+func TestGetReadOnlyDefault(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-ro-default")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	ro, err := GetReadOnly(path)
+	if err != nil {
+		t.Fatalf("GetReadOnly: %v", err)
+	}
+	if ro {
+		t.Fatal("expected new subvolume to be writable by default")
+	}
+}
+
+func TestSetReadOnly(t *testing.T) {
+	dir := testDir(t)
+	path := filepath.Join(dir, "@test-set-ro")
+
+	if err := CreateSubvolume(path); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(path) })
+
+	if err := SetReadOnly(path, true); err != nil {
+		t.Fatalf("SetReadOnly(true): %v", err)
+	}
+	ro, err := GetReadOnly(path)
+	if err != nil {
+		t.Fatalf("GetReadOnly: %v", err)
+	}
+	if !ro {
+		t.Fatal("expected subvolume to be read-only after SetReadOnly(true)")
+	}
+
+	if err := SetReadOnly(path, false); err != nil {
+		t.Fatalf("SetReadOnly(false): %v", err)
+	}
+	ro, err = GetReadOnly(path)
+	if err != nil {
+		t.Fatalf("GetReadOnly: %v", err)
+	}
+	if ro {
+		t.Fatal("expected subvolume to be writable after SetReadOnly(false)")
+	}
+}

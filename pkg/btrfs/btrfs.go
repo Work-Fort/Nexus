@@ -78,6 +78,46 @@ func CreateSubvolume(path string) error {
 	return nil
 }
 
+// GetReadOnly reports whether the subvolume at path has the read-only flag set.
+func GetReadOnly(path string) (bool, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return false, fmt.Errorf("btrfs: open %s: %w", path, err)
+	}
+	defer unix.Close(fd)
+
+	var flags uint64
+	if err := ioctl(uintptr(fd), iocSubvolGetflags, uintptr(unsafe.Pointer(&flags))); err != nil {
+		return false, fmt.Errorf("btrfs: get flags %s: %w", path, err)
+	}
+	return flags&subvolRdonly != 0, nil
+}
+
+// SetReadOnly sets or clears the read-only flag on the subvolume at path.
+func SetReadOnly(path string, readOnly bool) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("btrfs: open %s: %w", path, err)
+	}
+	defer unix.Close(fd)
+
+	var flags uint64
+	if err := ioctl(uintptr(fd), iocSubvolGetflags, uintptr(unsafe.Pointer(&flags))); err != nil {
+		return fmt.Errorf("btrfs: get flags %s: %w", path, err)
+	}
+
+	if readOnly {
+		flags |= subvolRdonly
+	} else {
+		flags &^= subvolRdonly
+	}
+
+	if err := ioctl(uintptr(fd), iocSubvolSetflags, uintptr(unsafe.Pointer(&flags))); err != nil {
+		return fmt.Errorf("btrfs: set flags %s: %w", path, err)
+	}
+	return nil
+}
+
 // DeleteSubvolume removes a btrfs subvolume at path using VFS operations.
 func DeleteSubvolume(path string) error {
 	// stub -- will be replaced in Task 6
