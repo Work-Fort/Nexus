@@ -1,256 +1,100 @@
 [tools]
-rust = { version = "latest", targets = "x86_64-unknown-linux-musl" }
-"cargo:cargo-sweep" = "latest"
 go = "1.26.0"
 
 [tasks.build]
-description = "Build all crates (debug)"
-run = """
-cargo build -p guest-agent --target x86_64-unknown-linux-musl --release
-cargo build
-"""
+description = "Build nexusd (debug)"
+run = "go build -o nexusd ."
 
 [tasks."build:release"]
-description = "Build all crates (release)"
-run = "cargo build --release"
+description = "Build nexusd (static release binary)"
+run = "CGO_ENABLED=0 go build -ldflags='-s -w' -o nexusd ."
 
 [tasks.test]
-description = "Run all workspace tests"
-run = "cargo test --workspace"
+description = "Run all tests"
+run = "go test ./..."
 
 [tasks."test:unit"]
-description = "Run unit tests only (no integration tests)"
-run = "cargo test --workspace --lib"
+description = "Run unit tests only (skip integration)"
+run = "go test -short ./..."
 
-[tasks."test:lib"]
-description = "Run tests for nexus-lib"
-run = "cargo test -p nexus-lib"
-
-[tasks."test:nexusd"]
-description = "Run tests for nexusd"
-run = "cargo test -p nexusd"
-
-[tasks."test:nexusctl"]
-description = "Run tests for nexusctl"
-run = "cargo test -p nexusctl"
-
-[tasks."test:guest-agent"]
-description = "Run tests for guest-agent"
-run = "cargo test -p guest-agent"
-
-[tasks."build:guest-agent"]
-description = "Build guest-agent binary (requires: rustup target add x86_64-unknown-linux-musl)"
-run = "cargo build -p guest-agent --target x86_64-unknown-linux-musl --release"
+[tasks."test:btrfs"]
+description = "Run btrfs package tests"
+run = "go test -v ./pkg/btrfs/"
 
 [tasks.run]
-description = "Run nexusd (debug build)"
-run = "cargo run -p nexusd --"
-
-[tasks."run:nexusctl"]
-description = "Run nexusctl (debug build)"
-run = "cargo run -p nexusctl --"
+description = "Run nexusd daemon"
+run = "go run . daemon"
 
 [tasks.check]
-description = "Check all crates for errors without building"
-run = "cargo check --workspace"
+description = "Vet and lint"
+run = "go vet ./..."
 
-[tasks.clippy]
-description = "Run clippy lints"
-run = "cargo clippy --workspace"
-
-# nexusd install tasks
-[tasks."install:nexusd:debug"]
-description = "Install nexusd debug build + systemd unit"
-depends = ["build"]
-run = """
-mkdir -p ~/.local/bin
-cp target/debug/nexusd ~/.local/bin/
-mkdir -p ~/.config/systemd/user
-cp dist/nexus.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-
-# Grant CAP_NET_ADMIN for networking features
-if command -v setcap &> /dev/null; then
-    sudo setcap cap_net_admin=+eip ~/.local/bin/nexusd
-    echo "Granted CAP_NET_ADMIN to nexusd"
-else
-    echo "WARNING: setcap not found. Networking features will require manual capability grant."
-    echo "See docs/networking.md for details."
-fi
-
-echo "Installed nexusd (debug) to ~/.local/bin/ and nexus.service"
-"""
-
-[tasks."install:nexusd:release"]
-description = "Install nexusd release build + systemd unit"
-depends = ["build:release"]
-run = """
-mkdir -p ~/.local/bin
-cp target/release/nexusd ~/.local/bin/
-mkdir -p ~/.config/systemd/user
-cp dist/nexus.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-
-# Grant CAP_NET_ADMIN for networking features
-if command -v setcap &> /dev/null; then
-    sudo setcap cap_net_admin=+eip ~/.local/bin/nexusd
-    echo "Granted CAP_NET_ADMIN to nexusd"
-else
-    echo "WARNING: setcap not found. Networking features will require manual capability grant."
-    echo "See docs/networking.md for details."
-fi
-
-echo "Installed nexusd (release) to ~/.local/bin/ and nexus.service"
-"""
-
-# nexusctl install tasks
-[tasks."install:nexusctl:debug"]
-description = "Install nexusctl debug build"
-depends = ["build"]
-run = """
-mkdir -p ~/.local/bin
-cp target/debug/nexusctl ~/.local/bin/
-echo "Installed nexusctl (debug) to ~/.local/bin/"
-"""
-
-[tasks."install:nexusctl:release"]
-description = "Install nexusctl release build"
-depends = ["build:release"]
-run = """
-mkdir -p ~/.local/bin
-cp target/release/nexusctl ~/.local/bin/
-echo "Installed nexusctl (release) to ~/.local/bin/"
-"""
-
-# Aggregate install tasks
-[tasks."install:release"]
-description = "Install all binaries (release) + systemd unit"
-depends = ["install:nexusd:release", "install:nexusctl:release"]
-
-[tasks."install:debug"]
-description = "Install all binaries (debug) + systemd unit"
-depends = ["install:nexusd:debug", "install:nexusctl:debug"]
-
-[tasks.rootfs]
-description = "Build Alpine rootfs ext4 image"
-run = "bash scripts/build-rootfs.sh --output artifacts/rootfs.ext4 --force"
-
-[tasks."rootfs:clean"]
-description = "Remove built rootfs artifacts"
-run = "rm -rf artifacts/rootfs.ext4"
+[tasks.sqlc]
+description = "Generate sqlc code"
+run = "sqlc generate"
 
 [tasks.clean]
-description = "Remove stale build artifacts (incremental cache + old dep hashes)"
+description = "Remove build artifacts"
+run = "rm -f nexusd"
+
+[tasks."install:local"]
+description = "Install nexusd to ~/.local/bin + systemd unit"
+depends = ["build:release"]
 run = """
-rm -rf target/debug/incremental target/release/incremental
-cargo sweep --toolchains stable-x86_64-unknown-linux-gnu
+mkdir -p ~/.local/bin
+cp nexusd ~/.local/bin/
+mkdir -p ~/.config/systemd/user
+cp dist/nexus.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+echo "Installed nexusd to ~/.local/bin/ and nexus.service"
 """
 
 [tasks.wipe]
-description = "Remove all Nexus state (database, config, cache, drives)"
+description = "Remove all Nexus state (database, config, logs)"
 run = """
 #!/usr/bin/env bash
 set -e
 
-echo "🧹 Cleaning Nexus state..."
+echo "Cleaning Nexus state..."
 
-# Stop and remove systemd service (if exists - optional, for users who installed via systemd)
+# Stop systemd service if running
 if command -v systemctl >/dev/null 2>&1; then
     if systemctl --user is-active --quiet nexusd 2>/dev/null; then
-        echo "  → Stopping systemd service"
+        echo "  Stopping systemd service"
         systemctl --user stop nexusd
-    fi
-
-    if systemctl --user is-enabled --quiet nexusd 2>/dev/null; then
-        echo "  → Disabling systemd service"
-        systemctl --user disable nexusd
-    fi
-
-    if [ -f "$HOME/.config/systemd/user/nexusd.service" ]; then
-        echo "  → Removing systemd unit file"
-        rm -f "$HOME/.config/systemd/user/nexusd.service"
-        systemctl --user daemon-reload
     fi
 fi
 
-# Remove database (XDG_STATE_HOME, not XDG_DATA_HOME)
+# Remove database
 if [ -f "$HOME/.local/state/nexus/nexus.db" ]; then
-    echo "  → Removing database"
+    echo "  Removing database"
     rm -f "$HOME/.local/state/nexus/nexus.db"
     rm -f "$HOME/.local/state/nexus/nexus.db-shm"
     rm -f "$HOME/.local/state/nexus/nexus.db-wal"
 fi
 
+# Remove logs
+if [ -f "$HOME/.local/state/nexus/debug.log" ]; then
+    echo "  Removing logs"
+    rm -f "$HOME/.local/state/nexus/debug.log"
+fi
+
 # Remove config
-if [ -f "$HOME/.config/nexus/nexus.yaml" ]; then
-    echo "  → Removing config"
-    rm -f "$HOME/.config/nexus/nexus.yaml"
+if [ -f "$HOME/.config/nexus/config.yaml" ]; then
+    echo "  Removing config"
+    rm -f "$HOME/.config/nexus/config.yaml"
 fi
 
-# Remove cache and assets
-if [ -d "$HOME/.local/share/nexus/assets" ]; then
-    echo "  → Removing assets cache"
-    rm -rf "$HOME/.local/share/nexus/assets"
-fi
-
-# Remove build logs and orphaned temp dirs
-if [ -d "$HOME/.local/share/nexus/builds" ]; then
-    echo "  → Removing build artifacts"
-    rm -rf "$HOME/.local/share/nexus/builds"
-fi
-
-# Remove drives (btrfs subvolumes) using VFS workaround (no sudo needed)
-# Same approach as btrfs.rs: unset read-only, remove contents, rmdir empty subvolume
-if [ -d "$HOME/.local/share/nexus/drives" ]; then
-    echo "  → Removing drives"
-    for subvol in "$HOME/.local/share/nexus/drives"/@*; do
-        if [ -d "$subvol" ]; then
-            echo "    → Deleting subvolume: $(basename "$subvol")"
-            # Make writable if read-only (same as libbtrfsutil::set_subvolume_read_only(false))
-            if btrfs property get "$subvol" ro 2>/dev/null | grep -q 'ro=true'; then
-                btrfs property set "$subvol" ro false
-            fi
-            # Remove contents via VFS, then rmdir the empty subvolume (kernel 4.18+)
-            rm -rf "$subvol"/*
-            rmdir "$subvol"
-        fi
+# Clean up containerd namespace
+if command -v ctr >/dev/null 2>&1; then
+    echo "  Cleaning containerd nexus namespace"
+    for c in $(sudo ctr -n nexus containers list -q 2>/dev/null); do
+        echo "    Removing container: $c"
+        sudo ctr -n nexus tasks kill "$c" 2>/dev/null || true
+        sudo ctr -n nexus tasks delete "$c" 2>/dev/null || true
+        sudo ctr -n nexus containers delete "$c" 2>/dev/null || true
     done
-    rm -rf "$HOME/.local/share/nexus/drives"
 fi
 
-# Clean network interfaces via nexusd API (uses daemon's CAP_NET_ADMIN, no sudo)
-# Removes tap devices, bridge, and nftables rules
-if curl -s http://localhost:9600/v1/health >/dev/null 2>&1; then
-    echo "  → Cleaning network via API"
-    result=$(curl -s -X POST http://localhost:9600/v1/admin/cleanup-network)
-    echo "    $result"
-else
-    echo "  → Daemon not running, skipping network cleanup (start nexusd first or clean manually)"
-fi
-
-# Remove runtime directory
-if [ -d "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/nexus" ]; then
-    echo "  → Removing runtime directory"
-    rm -rf "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/nexus"
-fi
-
-echo "✅ Nexus state cleaned"
-"""
-
-[tasks.integration-test]
-description = "Run real integration tests (requires KVM + btrfs + network)"
-run = """
-#!/usr/bin/env bash
-set -e
-
-echo "🧪 Running Nexus integration tests..."
-echo ""
-echo "Prerequisites:"
-echo "  - KVM access (/dev/kvm)"
-echo "  - btrfs filesystem"
-echo "  - Network connectivity"
-echo ""
-
-cargo build -p integration-tests --release
-exec ./target/release/integration-test-runner
+echo "Nexus state cleaned"
 """
