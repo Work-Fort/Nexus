@@ -1,4 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: MIT
+
+// Package btrfs provides pure-Go wrappers for Linux btrfs kernel ioctls.
+// It supports subvolume and snapshot management without CGo or CAP_SYS_ADMIN.
 package btrfs
 
 import (
@@ -20,7 +23,13 @@ var (
 
 	// ErrExists is returned when the destination already exists.
 	ErrExists = errors.New("btrfs: already exists")
+
+	// ErrNameTooLong is returned when a subvolume or snapshot name exceeds the kernel limit.
+	ErrNameTooLong = errors.New("btrfs: name too long")
 )
+
+// subvolNameMax is the maximum length of a subvolume name (BTRFS_SUBVOL_NAME_MAX).
+const subvolNameMax = len(ioctlVolArgsV2{}.Name) - 1
 
 // IsBtrfs reports whether the given path resides on a btrfs filesystem.
 func IsBtrfs(path string) (bool, error) {
@@ -50,6 +59,10 @@ func IsSubvolume(path string) (bool, error) {
 func CreateSubvolume(path string) error {
 	parent := filepath.Dir(path)
 	name := filepath.Base(path)
+
+	if len(name) > subvolNameMax {
+		return fmt.Errorf("btrfs: create subvolume %s: %w", path, ErrNameTooLong)
+	}
 
 	ok, err := IsBtrfs(parent)
 	if err != nil {
@@ -122,13 +135,16 @@ func SetReadOnly(path string, readOnly bool) error {
 // If the subvolume is read-only, the flag is cleared first.
 // This avoids BTRFS_IOC_SNAP_DESTROY (which requires CAP_SYS_ADMIN).
 // VFS rmdir on an empty subvolume works unprivileged since kernel 4.18.
+//
+// Nested subvolumes are not supported — the caller must delete inner
+// subvolumes before deleting an outer one.
 func DeleteSubvolume(path string) error {
 	if _, err := os.Lstat(path); err != nil {
 		return fmt.Errorf("btrfs: delete %s: %w", path, err)
 	}
 
-	ro, _ := GetReadOnly(path)
-	if ro {
+	ro, err := GetReadOnly(path)
+	if err == nil && ro {
 		if err := SetReadOnly(path, false); err != nil {
 			return fmt.Errorf("btrfs: delete %s: cannot clear read-only: %w", path, err)
 		}
@@ -156,6 +172,10 @@ func DeleteSubvolume(path string) error {
 func CreateSnapshot(source, dest string, readOnly bool) error {
 	parent := filepath.Dir(dest)
 	name := filepath.Base(dest)
+
+	if len(name) > subvolNameMax {
+		return fmt.Errorf("btrfs: snapshot dest %s: %w", dest, ErrNameTooLong)
+	}
 
 	ok, err := IsSubvolume(source)
 	if err != nil {

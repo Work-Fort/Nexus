@@ -1,6 +1,7 @@
 [tools]
 rust = { version = "latest", targets = "x86_64-unknown-linux-musl" }
 "cargo:cargo-sweep" = "latest"
+go = "1.26.0"
 
 [tasks.build]
 description = "Build all crates (debug)"

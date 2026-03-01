@@ -1,9 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: MIT
 package btrfs
 
 import (
-	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // btrfs ioctl numbers from include/uapi/linux/btrfs.h.
@@ -36,7 +37,7 @@ var _ [4096]byte = [unsafe.Sizeof(ioctlVolArgsV2{})]byte{}
 
 // ioctl performs a raw ioctl syscall.
 func ioctl(fd uintptr, req uintptr, arg uintptr) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, req, arg)
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, req, arg)
 	if errno != 0 {
 		return errno
 	}
