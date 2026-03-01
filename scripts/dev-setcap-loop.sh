@@ -15,7 +15,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Handle Ctrl-C gracefully
 trap 'echo -e "\nStopping CAP_NET_ADMIN auto-setter..."; exit 0' SIGINT SIGTERM
 
-BINARY="$PROJECT_ROOT/Nexus"
+BINARY="$PROJECT_ROOT/nexusd"
 
 echo "Starting CAP_NET_ADMIN auto-setter (Ctrl+C to stop)"
 echo "Watching for: $BINARY"

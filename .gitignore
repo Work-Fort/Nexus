@@ -1,6 +1,5 @@
 # Build output
-/nexusd/nexusd
-/Nexus
+/nexusd
 *.exe
 
 # Database
