@@ -1,4 +1,11 @@
-/target
-/artifacts/
-/arch/
-/linux-*/
+# Build output
+/nexusd/nexusd
+/Nexus
+*.exe
+
+# Database
+*.db
+
+# OS/editor
+.DS_Store
+*.swp
