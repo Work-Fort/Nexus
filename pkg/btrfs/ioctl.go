@@ -15,11 +15,28 @@ const (
 	iocSubvolSetflags = 0x4008941a // _IOW(0x94, 26, uint64)
 )
 
+// Quota ioctl numbers. All require CAP_SYS_ADMIN.
+const (
+	iocQuotaCtl    = 0xC0109428 // _IOWR(0x94, 40, btrfs_ioctl_quota_ctl_args)
+	iocQgroupLimit = 0x8030942B // _IOR(0x94, 43, btrfs_ioctl_qgroup_limit_args)
+	iocTreeSearch  = 0xC1009411 // _IOWR(0x94, 17, btrfs_ioctl_search_args)
+	iocInoLookup   = 0xD0009412 // _IOWR(0x94, 18, btrfs_ioctl_ino_lookup_args)
+)
+
 // btrfs flags.
 const (
 	subvolRdonly   = uint64(1 << 1) // BTRFS_SUBVOL_RDONLY
 	superMagic     = 0x9123683e     // BTRFS_SUPER_MAGIC (statfs f_type)
 	firstFreeObjID = 256            // BTRFS_FIRST_FREE_OBJECTID (subvolume root inode)
+)
+
+// Quota constants.
+const (
+	quotaCtlEnable     = uint64(1)       // BTRFS_QUOTA_CTL_ENABLE
+	qgroupLimitMaxRfer = uint64(1 << 0)  // BTRFS_QGROUP_LIMIT_MAX_RFER
+	quotaTreeObjectid  = uint64(8)       // BTRFS_QUOTA_TREE_OBJECTID
+	qgroupInfoKey      = uint32(242)     // BTRFS_QGROUP_INFO_KEY
+	qgroupLimitKey     = uint32(244)     // BTRFS_QGROUP_LIMIT_KEY
 )
 
 // ioctlVolArgsV2 maps to struct btrfs_ioctl_vol_args_v2 (4096 bytes).
@@ -32,8 +49,74 @@ type ioctlVolArgsV2 struct {
 	Name    [4040]byte // BTRFS_SUBVOL_NAME_MAX + 1
 }
 
-// Compile-time size assertion: kernel requires exactly 4096 bytes.
+// ioctlQuotaCtlArgs maps to struct btrfs_ioctl_quota_ctl_args (16 bytes).
+type ioctlQuotaCtlArgs struct {
+	Cmd    uint64
+	Status uint64
+}
+
+// qgroupLimit maps to struct btrfs_qgroup_limit (40 bytes).
+type qgroupLimit struct {
+	Flags   uint64
+	MaxRfer uint64
+	MaxExcl uint64
+	RsvRfer uint64
+	RsvExcl uint64
+}
+
+// ioctlQgroupLimitArgs maps to struct btrfs_ioctl_qgroup_limit_args (48 bytes).
+type ioctlQgroupLimitArgs struct {
+	Qgroupid uint64
+	Lim      qgroupLimit
+}
+
+// searchKey maps to struct btrfs_ioctl_search_key (104 bytes).
+type searchKey struct {
+	TreeID      uint64
+	MinObjectid uint64
+	MaxObjectid uint64
+	MinOffset   uint64
+	MaxOffset   uint64
+	MinTransid  uint64
+	MaxTransid  uint64
+	MinType     uint32
+	MaxType     uint32
+	NrItems     uint32
+	Unused      uint32
+	Unused1     uint64
+	Unused2     uint64
+	Unused3     uint64
+	Unused4     uint64
+}
+
+// ioctlSearchArgs maps to struct btrfs_ioctl_search_args (4096 bytes).
+type ioctlSearchArgs struct {
+	Key searchKey
+	Buf [3992]byte
+}
+
+// searchHeader maps to struct btrfs_ioctl_search_header (32 bytes).
+type searchHeader struct {
+	Transid  uint64
+	Objectid uint64
+	Offset   uint64
+	Type     uint32
+	Len      uint32
+}
+
+// ioctlInoLookupArgs maps to struct btrfs_ioctl_ino_lookup_args (4096 bytes).
+type ioctlInoLookupArgs struct {
+	Treeid   uint64
+	Objectid uint64
+	Name     [4080]byte
+}
+
+// Compile-time size assertions: kernel requires exact sizes.
 var _ [4096]byte = [unsafe.Sizeof(ioctlVolArgsV2{})]byte{}
+var _ [16]byte = [unsafe.Sizeof(ioctlQuotaCtlArgs{})]byte{}
+var _ [48]byte = [unsafe.Sizeof(ioctlQgroupLimitArgs{})]byte{}
+var _ [4096]byte = [unsafe.Sizeof(ioctlSearchArgs{})]byte{}
+var _ [4096]byte = [unsafe.Sizeof(ioctlInoLookupArgs{})]byte{}
 
 // ioctl performs a raw ioctl syscall.
 func ioctl(fd uintptr, req uintptr, arg uintptr) error {
