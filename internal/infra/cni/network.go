@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/containernetworking/cni/libcni"
 	"github.com/containernetworking/cni/pkg/invoke"
@@ -36,12 +37,16 @@ func netnsDir() string {
 
 // Network implements domain.Network using CNI plugins.
 type Network struct {
-	cni        *libcni.CNIConfig
-	confList   *libcni.NetworkConfigList
-	confDir    string // temp dir where we write the CNI config
-	wrapperDir string // temp dir with symlinks to nexus-cni-exec
-	netnsDir   string
-	helperBin  string
+	cni         *libcni.CNIConfig
+	confList    *libcni.NetworkConfigList
+	confDir     string // temp dir where we write the CNI config
+	wrapperDir  string // temp dir with symlinks to nexus-cni-exec
+	netnsDir    string
+	helperBin   string
+	bridgeName  string // name of the bridge interface (e.g. "nexus0")
+	cniExecBin  string // resolved path to the nexus-cni-exec binary
+	ipamDataDir string // host-local IPAM allocation directory
+	cacheDir    string // CNI result cache directory
 }
 
 // New creates a CNI-backed Network adapter. It creates a wrapper directory
@@ -164,12 +169,16 @@ func New(cfg Config) (*Network, error) {
 	)
 
 	return &Network{
-		cni:        cniConfig,
-		confList:   confList,
-		confDir:    confDir,
-		wrapperDir: wrapperDir,
-		netnsDir:   nsDir,
-		helperBin:  cfg.HelperBin,
+		cni:         cniConfig,
+		confList:    confList,
+		confDir:     confDir,
+		wrapperDir:  wrapperDir,
+		netnsDir:    nsDir,
+		helperBin:   cfg.HelperBin,
+		bridgeName:  "nexus0",
+		cniExecBin:  cniExecAbs,
+		ipamDataDir: ipamDataDir,
+		cacheDir:    cacheDir,
 	}, nil
 }
 
@@ -230,5 +239,44 @@ func (n *Network) Teardown(ctx context.Context, id string) error {
 		return fmt.Errorf("delete netns %s: %w: %s", id, err, out)
 	}
 
+	return nil
+}
+
+// ResetNetwork deletes the bridge interface and clears IPAM/cache state.
+// Idempotent: succeeds if the bridge doesn't exist.
+func (n *Network) ResetNetwork(ctx context.Context) error {
+	out, err := exec.CommandContext(ctx, n.cniExecBin, "delete-bridge", n.bridgeName).CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "Cannot find device") {
+			// Bridge already gone — idempotent success.
+		} else {
+			return fmt.Errorf("delete bridge %s: %w: %s", n.bridgeName, err, out)
+		}
+	}
+
+	if err := clearDir(n.ipamDataDir); err != nil {
+		return fmt.Errorf("clear ipam data: %w", err)
+	}
+	if err := clearDir(n.cacheDir); err != nil {
+		return fmt.Errorf("clear cni cache: %w", err)
+	}
+
+	return nil
+}
+
+// clearDir removes all entries inside dir without removing dir itself.
+func clearDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
 	return nil
 }

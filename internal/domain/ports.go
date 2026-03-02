@@ -3,6 +3,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -52,4 +53,8 @@ type NetworkInfo struct {
 type Network interface {
 	Setup(ctx context.Context, id string) (*NetworkInfo, error)
 	Teardown(ctx context.Context, id string) error
+	ResetNetwork(ctx context.Context) error
 }
+
+// ErrNetworkInUse is returned when a network reset is attempted while VMs exist.
+var ErrNetworkInUse = errors.New("network in use")

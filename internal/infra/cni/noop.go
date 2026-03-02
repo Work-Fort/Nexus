@@ -20,3 +20,7 @@ func (n *NoopNetwork) Setup(_ context.Context, _ string) (*domain.NetworkInfo, e
 func (n *NoopNetwork) Teardown(_ context.Context, _ string) error {
 	return nil
 }
+
+func (n *NoopNetwork) ResetNetwork(_ context.Context) error {
+	return nil
+}

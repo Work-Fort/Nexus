@@ -27,6 +27,7 @@ func NewHandler(svc *app.VMService) http.Handler {
 	mux.HandleFunc("POST /v1/vms/{id}/start", handleStartVM(svc))
 	mux.HandleFunc("POST /v1/vms/{id}/stop", handleStopVM(svc))
 	mux.HandleFunc("POST /v1/vms/{id}/exec", handleExecVM(svc))
+	mux.HandleFunc("POST /v1/network/reset", handleResetNetwork(svc))
 	mux.HandleFunc("POST /webhooks/sharkfin", handleSharkfinWebhook(svc))
 
 	return mux
@@ -89,6 +90,8 @@ func mapError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "already exists")
 	case errors.Is(err, domain.ErrInvalidState):
 		writeError(w, http.StatusConflict, "invalid state transition")
+	case errors.Is(err, domain.ErrNetworkInUse):
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrValidation):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
@@ -241,5 +244,15 @@ func handleExecVM(svc *app.VMService) http.HandlerFunc {
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,
 		})
+	}
+}
+
+func handleResetNetwork(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := svc.ResetNetwork(r.Context()); err != nil {
+			mapError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }

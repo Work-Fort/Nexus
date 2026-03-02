@@ -3,6 +3,7 @@ package app_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -334,6 +335,31 @@ func TestHandleWebhookStartsExistingStopped(t *testing.T) {
 	got, _ := store.Get(context.Background(), vm.ID)
 	if got.State != domain.VMStateRunning {
 		t.Errorf("state = %q, want running", got.State)
+	}
+}
+
+func TestResetNetworkNoVMs(t *testing.T) {
+	svc := app.NewVMService(newMockStore(), newMockRuntime(), &cni.NoopNetwork{})
+
+	if err := svc.ResetNetwork(context.Background()); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+}
+
+func TestResetNetworkWithVMs(t *testing.T) {
+	store := newMockStore()
+	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
+
+	svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "blocker", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+
+	err := svc.ResetNetwork(context.Background())
+	if err == nil {
+		t.Fatal("expected error when VMs exist")
+	}
+	if !errors.Is(err, domain.ErrNetworkInUse) {
+		t.Errorf("err = %v, want ErrNetworkInUse", err)
 	}
 }
 

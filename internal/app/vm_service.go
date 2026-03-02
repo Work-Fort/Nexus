@@ -216,6 +216,18 @@ func (s *VMService) ExecVM(ctx context.Context, id string, cmd []string) (*domai
 	return s.runtime.Exec(ctx, id, cmd)
 }
 
+// ResetNetwork deletes the bridge and clears CNI state. Refuses if any VMs exist.
+func (s *VMService) ResetNetwork(ctx context.Context) error {
+	vms, err := s.store.List(ctx, domain.VMFilter{})
+	if err != nil {
+		return fmt.Errorf("list vms: %w", err)
+	}
+	if len(vms) > 0 {
+		return fmt.Errorf("%d VM(s) exist, delete them first: %w", len(vms), domain.ErrNetworkInUse)
+	}
+	return s.network.ResetNetwork(ctx)
+}
+
 // HandleWebhook processes a Sharkfin webhook. It finds or creates an agent
 // VM for the recipient, and ensures it's running.
 func (s *VMService) HandleWebhook(ctx context.Context, wh SharkfinWebhook) error {

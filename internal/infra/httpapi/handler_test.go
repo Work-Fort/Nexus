@@ -475,6 +475,37 @@ func TestListVMsInvalidRoleFilter(t *testing.T) {
 	}
 }
 
+func TestResetNetworkSuccess(t *testing.T) {
+	h := setupHandler()
+
+	rec := doRequest(h, "POST", "/v1/network/reset", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp map[string]string
+	decodeJSON(t, rec, &resp)
+	if resp["status"] != "ok" {
+		t.Errorf("status = %q, want ok", resp["status"])
+	}
+}
+
+func TestResetNetworkWithVMs(t *testing.T) {
+	h := setupHandler()
+
+	// Create a VM first
+	doRequest(h, "POST", "/v1/vms", map[string]string{
+		"name": "blocker", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	})
+
+	rec := doRequest(h, "POST", "/v1/network/reset", nil)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
 func TestExecVMBadJSON(t *testing.T) {
 	h := setupHandler()
 
