@@ -47,6 +47,20 @@ func (m *mockStore) GetByName(_ context.Context, name string) (*domain.VM, error
 	return nil, domain.ErrNotFound
 }
 
+func (m *mockStore) Resolve(_ context.Context, ref string) (*domain.VM, error) {
+	// Try by ID first
+	if vm, ok := m.vms[ref]; ok {
+		return vm, nil
+	}
+	// Fall back to name
+	for _, vm := range m.vms {
+		if vm.Name == ref {
+			return vm, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
 func (m *mockStore) List(_ context.Context, filter domain.VMFilter) ([]*domain.VM, error) {
 	var result []*domain.VM
 	for _, vm := range m.vms {
@@ -152,6 +166,18 @@ func (m *mockDriveStore) GetDriveByName(_ context.Context, name string) (*domain
 	return nil, domain.ErrNotFound
 }
 
+func (m *mockDriveStore) ResolveDrive(_ context.Context, ref string) (*domain.Drive, error) {
+	if d, ok := m.drives[ref]; ok {
+		return d, nil
+	}
+	for _, d := range m.drives {
+		if d.Name == ref {
+			return d, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
 func (m *mockDriveStore) ListDrives(_ context.Context) ([]*domain.Drive, error) {
 	var result []*domain.Drive
 	for _, d := range m.drives {
@@ -226,6 +252,27 @@ func (m *mockDeviceStore) GetDevice(_ context.Context, id string) (*domain.Devic
 		return nil, domain.ErrNotFound
 	}
 	return d, nil
+}
+
+func (m *mockDeviceStore) GetDeviceByName(_ context.Context, name string) (*domain.Device, error) {
+	for _, d := range m.devices {
+		if d.Name == name {
+			return d, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (m *mockDeviceStore) ResolveDevice(_ context.Context, ref string) (*domain.Device, error) {
+	if d, ok := m.devices[ref]; ok {
+		return d, nil
+	}
+	for _, d := range m.devices {
+		if d.Name == ref {
+			return d, nil
+		}
+	}
+	return nil, domain.ErrNotFound
 }
 
 func (m *mockDeviceStore) ListDevices(_ context.Context) ([]*domain.Device, error) {
@@ -798,6 +845,7 @@ func TestCreateDevice(t *testing.T) {
 	svc, _, _, devStore := newSvcWithDevices()
 
 	d, err := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
+		Name:          "my-null",
 		HostPath:      "/dev/null",
 		ContainerPath: "/dev/null",
 		Permissions:   "rw",
@@ -829,14 +877,15 @@ func TestCreateDeviceValidation(t *testing.T) {
 		name   string
 		params domain.CreateDeviceParams
 	}{
-		{"empty host_path", domain.CreateDeviceParams{ContainerPath: "/dev/x", Permissions: "rw"}},
-		{"nonexistent host_path", domain.CreateDeviceParams{HostPath: "/dev/nonexistent-device-xyz", ContainerPath: "/dev/x", Permissions: "rw"}},
-		{"host_path not a device", domain.CreateDeviceParams{HostPath: "/tmp", ContainerPath: "/dev/x", Permissions: "rw"}},
-		{"empty container_path", domain.CreateDeviceParams{HostPath: "/dev/null", Permissions: "rw"}},
-		{"non-absolute container_path", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "dev/x", Permissions: "rw"}},
-		{"empty permissions", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/x"}},
-		{"invalid permissions char", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/x", Permissions: "rwx"}},
-		{"duplicate permissions", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/x", Permissions: "rrw"}},
+		{"missing name", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw"}},
+		{"empty host_path", domain.CreateDeviceParams{Name: "dev1", ContainerPath: "/dev/x", Permissions: "rw"}},
+		{"nonexistent host_path", domain.CreateDeviceParams{Name: "dev2", HostPath: "/dev/nonexistent-device-xyz", ContainerPath: "/dev/x", Permissions: "rw"}},
+		{"host_path not a device", domain.CreateDeviceParams{Name: "dev3", HostPath: "/tmp", ContainerPath: "/dev/x", Permissions: "rw"}},
+		{"empty container_path", domain.CreateDeviceParams{Name: "dev4", HostPath: "/dev/null", Permissions: "rw"}},
+		{"non-absolute container_path", domain.CreateDeviceParams{Name: "dev5", HostPath: "/dev/null", ContainerPath: "dev/x", Permissions: "rw"}},
+		{"empty permissions", domain.CreateDeviceParams{Name: "dev6", HostPath: "/dev/null", ContainerPath: "/dev/x"}},
+		{"invalid permissions char", domain.CreateDeviceParams{Name: "dev7", HostPath: "/dev/null", ContainerPath: "/dev/x", Permissions: "rwx"}},
+		{"duplicate permissions", domain.CreateDeviceParams{Name: "dev8", HostPath: "/dev/null", ContainerPath: "/dev/x", Permissions: "rrw"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -852,7 +901,7 @@ func TestDeleteDevice(t *testing.T) {
 	svc, _, _, devStore := newSvcWithDevices()
 
 	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+		Name: "del-me", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 
 	if err := svc.DeleteDevice(context.Background(), d.ID); err != nil {
@@ -867,7 +916,7 @@ func TestDeleteDeviceAttached(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
 	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+		Name: "attached-dev", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "vm1", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -884,7 +933,7 @@ func TestAttachDetachDevice(t *testing.T) {
 	svc, store, rt, devStore := newSvcWithDevices()
 
 	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+		Name: "attach-dev", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "worker", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -922,7 +971,7 @@ func TestAttachDeviceRunningVMFails(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
 	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+		Name: "run-dev", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "running-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -939,7 +988,7 @@ func TestDeleteVMAutoDetachesDevices(t *testing.T) {
 	svc, _, _, devStore := newSvcWithDevices()
 
 	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+		Name: "auto-detach", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "ephemeral-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -965,10 +1014,10 @@ func TestListDevices(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
 	svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "r",
+		Name: "list-null", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "r",
 	})
 	svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/zero", ContainerPath: "/dev/zero", Permissions: "rw",
+		Name: "list-zero", HostPath: "/dev/zero", ContainerPath: "/dev/zero", Permissions: "rw",
 	})
 
 	devices, err := svc.ListDevices(context.Background())
@@ -984,7 +1033,7 @@ func TestGetDevice(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
 	created, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw", GID: 10,
+		Name: "get-dev", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw", GID: 10,
 	})
 
 	got, err := svc.GetDevice(context.Background(), created.ID)
@@ -1000,7 +1049,7 @@ func TestDetachDeviceAlreadyDetached(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
 	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+		Name: "unattached", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 
 	// Detach an unattached device — should be idempotent (no error)
@@ -1013,7 +1062,7 @@ func TestAttachDeviceAlreadyAttached(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
 	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+		Name: "double-attach", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vmA, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "vm-a", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -1033,7 +1082,7 @@ func TestDetachDeviceRunningVMFails(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
 	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+		Name: "detach-run", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name: "running-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
@@ -1051,6 +1100,7 @@ func TestCreateDeviceWithGID(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
 	d, err := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
+		Name:          "gid-dev",
 		HostPath:      "/dev/null",
 		ContainerPath: "/dev/null",
 		Permissions:   "rw",
@@ -1061,5 +1111,62 @@ func TestCreateDeviceWithGID(t *testing.T) {
 	}
 	if d.GID != 44 {
 		t.Errorf("gid = %d, want 44", d.GID)
+	}
+}
+
+func TestCreateVMInvalidName(t *testing.T) {
+	svc := app.NewVMService(newMockStore(), newMockRuntime(), &cni.NoopNetwork{})
+	tests := []struct {
+		name   string
+		vmName string
+	}{
+		{"starts with dash", "-bad"},
+		{"ends with dash", "bad-"},
+		{"uppercase", "Bad"},
+		{"too long", "abcdefghijklmnopqrstuvwxy"}, // 25 chars
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+				Name: tt.vmName, Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+			})
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+		})
+	}
+}
+
+func TestGetVMByName(t *testing.T) {
+	store := newMockStore()
+	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
+
+	created, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "find-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+
+	got, err := svc.GetVM(context.Background(), "find-me")
+	if err != nil {
+		t.Fatalf("get by name: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Errorf("id = %q, want %q", got.ID, created.ID)
+	}
+}
+
+func TestDeleteVMByName(t *testing.T) {
+	store := newMockStore()
+	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
+
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "delete-by-name", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+
+	if err := svc.DeleteVM(context.Background(), "delete-by-name"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	_, err := store.Get(context.Background(), vm.ID)
+	if err != domain.ErrNotFound {
+		t.Errorf("after delete: err = %v, want ErrNotFound", err)
 	}
 }

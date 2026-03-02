@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
-	"github.com/google/uuid"
 
 	"github.com/Work-Fort/Nexus/internal/domain"
 	"github.com/Work-Fort/Nexus/pkg/bytesize"
+	"github.com/Work-Fort/Nexus/pkg/nxid"
 )
 
 // SharkfinWebhook is the payload Sharkfin POSTs on mentions and DMs.
@@ -94,6 +94,9 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	if params.Name == "" {
 		return nil, fmt.Errorf("name is required: %w", domain.ErrValidation)
 	}
+	if err := nxid.ValidateName(params.Name); err != nil {
+		return nil, fmt.Errorf("invalid name: %v: %w", err, domain.ErrValidation)
+	}
 	if params.Image == "" {
 		params.Image = s.config.DefaultImage
 	}
@@ -102,7 +105,7 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	}
 
 	vm := &domain.VM{
-		ID:        uuid.New().String(),
+		ID:        nxid.New(),
 		Name:      params.Name,
 		Role:      params.Role,
 		State:     domain.VMStateCreated,
@@ -139,9 +142,9 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	return vm, nil
 }
 
-// GetVM retrieves a VM by ID.
-func (s *VMService) GetVM(ctx context.Context, id string) (*domain.VM, error) {
-	return s.store.Get(ctx, id)
+// GetVM retrieves a VM by ID or name.
+func (s *VMService) GetVM(ctx context.Context, ref string) (*domain.VM, error) {
+	return s.store.Resolve(ctx, ref)
 }
 
 // ListVMs returns VMs matching the filter.
@@ -150,8 +153,8 @@ func (s *VMService) ListVMs(ctx context.Context, filter domain.VMFilter) ([]*dom
 }
 
 // StartVM starts a created or stopped VM.
-func (s *VMService) StartVM(ctx context.Context, id string) error {
-	vm, err := s.store.Get(ctx, id)
+func (s *VMService) StartVM(ctx context.Context, ref string) error {
+	vm, err := s.store.Resolve(ctx, ref)
 	if err != nil {
 		return err
 	}
@@ -159,21 +162,21 @@ func (s *VMService) StartVM(ctx context.Context, id string) error {
 		return domain.ErrInvalidState
 	}
 
-	if err := s.runtime.Start(ctx, id); err != nil {
+	if err := s.runtime.Start(ctx, vm.ID); err != nil {
 		return fmt.Errorf("runtime start: %w", err)
 	}
 
-	if err := s.store.UpdateState(ctx, id, domain.VMStateRunning, time.Now().UTC()); err != nil {
+	if err := s.store.UpdateState(ctx, vm.ID, domain.VMStateRunning, time.Now().UTC()); err != nil {
 		return fmt.Errorf("store update: %w", err)
 	}
 
-	log.Info("vm started", "id", id)
+	log.Info("vm started", "id", vm.ID)
 	return nil
 }
 
 // StopVM stops a running VM.
-func (s *VMService) StopVM(ctx context.Context, id string) error {
-	vm, err := s.store.Get(ctx, id)
+func (s *VMService) StopVM(ctx context.Context, ref string) error {
+	vm, err := s.store.Resolve(ctx, ref)
 	if err != nil {
 		return err
 	}
@@ -181,64 +184,64 @@ func (s *VMService) StopVM(ctx context.Context, id string) error {
 		return domain.ErrInvalidState
 	}
 
-	if err := s.runtime.Stop(ctx, id); err != nil {
+	if err := s.runtime.Stop(ctx, vm.ID); err != nil {
 		return fmt.Errorf("runtime stop: %w", err)
 	}
 
-	if err := s.store.UpdateState(ctx, id, domain.VMStateStopped, time.Now().UTC()); err != nil {
+	if err := s.store.UpdateState(ctx, vm.ID, domain.VMStateStopped, time.Now().UTC()); err != nil {
 		return fmt.Errorf("store update: %w", err)
 	}
 
-	log.Info("vm stopped", "id", id)
+	log.Info("vm stopped", "id", vm.ID)
 	return nil
 }
 
 // DeleteVM stops the container if running, then removes it and its store record.
-func (s *VMService) DeleteVM(ctx context.Context, id string) error {
-	vm, err := s.store.Get(ctx, id)
+func (s *VMService) DeleteVM(ctx context.Context, ref string) error {
+	vm, err := s.store.Resolve(ctx, ref)
 	if err != nil {
 		return err
 	}
 	if vm.State == domain.VMStateRunning {
-		if err := s.runtime.Stop(ctx, id); err != nil {
-			log.Warn("runtime stop before delete failed", "id", id, "err", err)
+		if err := s.runtime.Stop(ctx, vm.ID); err != nil {
+			log.Warn("runtime stop before delete failed", "id", vm.ID, "err", err)
 		}
 	}
-	if err := s.runtime.Delete(ctx, id); err != nil {
-		log.Warn("runtime delete failed", "id", id, "err", err)
+	if err := s.runtime.Delete(ctx, vm.ID); err != nil {
+		log.Warn("runtime delete failed", "id", vm.ID, "err", err)
 	}
 
-	if err := s.network.Teardown(ctx, id); err != nil {
-		log.Warn("network teardown failed", "id", id, "err", err)
+	if err := s.network.Teardown(ctx, vm.ID); err != nil {
+		log.Warn("network teardown failed", "id", vm.ID, "err", err)
 	}
 
 	if s.driveStore != nil {
-		if err := s.driveStore.DetachAllDrives(ctx, id); err != nil {
-			log.Warn("detach drives failed", "id", id, "err", err)
+		if err := s.driveStore.DetachAllDrives(ctx, vm.ID); err != nil {
+			log.Warn("detach drives failed", "id", vm.ID, "err", err)
 		}
 	}
 
 	if s.deviceStore != nil {
-		if err := s.deviceStore.DetachAllDevices(ctx, id); err != nil {
-			log.Warn("detach devices failed", "id", id, "err", err)
+		if err := s.deviceStore.DetachAllDevices(ctx, vm.ID); err != nil {
+			log.Warn("detach devices failed", "id", vm.ID, "err", err)
 		}
 	}
 
-	if err := s.store.Delete(ctx, id); err != nil {
+	if err := s.store.Delete(ctx, vm.ID); err != nil {
 		return fmt.Errorf("store delete: %w", err)
 	}
 
-	log.Info("vm deleted", "id", id)
+	log.Info("vm deleted", "id", vm.ID)
 	return nil
 }
 
 // ExecVM runs a command in a running VM.
-func (s *VMService) ExecVM(ctx context.Context, id string, cmd []string) (*domain.ExecResult, error) {
+func (s *VMService) ExecVM(ctx context.Context, ref string, cmd []string) (*domain.ExecResult, error) {
 	if len(cmd) == 0 {
 		return nil, fmt.Errorf("cmd is required: %w", domain.ErrValidation)
 	}
 
-	vm, err := s.store.Get(ctx, id)
+	vm, err := s.store.Resolve(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +249,7 @@ func (s *VMService) ExecVM(ctx context.Context, id string, cmd []string) (*domai
 		return nil, domain.ErrInvalidState
 	}
 
-	return s.runtime.Exec(ctx, id, cmd)
+	return s.runtime.Exec(ctx, vm.ID, cmd)
 }
 
 // ResetNetwork deletes the bridge and clears CNI state. Refuses if any VMs exist.
@@ -266,7 +269,7 @@ func (s *VMService) ResetNetwork(ctx context.Context) error {
 func (s *VMService) HandleWebhook(ctx context.Context, wh SharkfinWebhook) error {
 	log.Info("webhook received", "event", wh.Event, "recipient", wh.Recipient, "from", wh.From, "channel", wh.Channel)
 
-	vm, err := s.store.GetByName(ctx, wh.Recipient)
+	vm, err := s.store.Resolve(ctx, wh.Recipient)
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return fmt.Errorf("lookup recipient: %w", err)
 	}
@@ -307,6 +310,9 @@ func (s *VMService) CreateDrive(ctx context.Context, params domain.CreateDrivePa
 	if params.Name == "" {
 		return nil, fmt.Errorf("name is required: %w", domain.ErrValidation)
 	}
+	if err := nxid.ValidateName(params.Name); err != nil {
+		return nil, fmt.Errorf("invalid name: %v: %w", err, domain.ErrValidation)
+	}
 	if params.MountPath == "" {
 		return nil, fmt.Errorf("mount_path is required: %w", domain.ErrValidation)
 	}
@@ -320,7 +326,7 @@ func (s *VMService) CreateDrive(ctx context.Context, params domain.CreateDrivePa
 	}
 
 	d := &domain.Drive{
-		ID:        uuid.New().String(),
+		ID:        nxid.New(),
 		Name:      params.Name,
 		SizeBytes: sizeBytes,
 		MountPath: params.MountPath,
@@ -340,9 +346,9 @@ func (s *VMService) CreateDrive(ctx context.Context, params domain.CreateDrivePa
 	return d, nil
 }
 
-// GetDrive retrieves a drive by ID.
-func (s *VMService) GetDrive(ctx context.Context, id string) (*domain.Drive, error) {
-	return s.driveStore.GetDrive(ctx, id)
+// GetDrive retrieves a drive by ID or name.
+func (s *VMService) GetDrive(ctx context.Context, ref string) (*domain.Drive, error) {
+	return s.driveStore.ResolveDrive(ctx, ref)
 }
 
 // ListDrives returns all drives.
@@ -351,8 +357,8 @@ func (s *VMService) ListDrives(ctx context.Context) ([]*domain.Drive, error) {
 }
 
 // DeleteDrive removes a drive. Fails if the drive is attached to a VM.
-func (s *VMService) DeleteDrive(ctx context.Context, id string) error {
-	d, err := s.driveStore.GetDrive(ctx, id)
+func (s *VMService) DeleteDrive(ctx context.Context, ref string) error {
+	d, err := s.driveStore.ResolveDrive(ctx, ref)
 	if err != nil {
 		return err
 	}
@@ -363,18 +369,18 @@ func (s *VMService) DeleteDrive(ctx context.Context, id string) error {
 	if err := s.storage.DeleteVolume(ctx, d.Name); err != nil {
 		return fmt.Errorf("delete volume: %w", err)
 	}
-	if err := s.driveStore.DeleteDrive(ctx, id); err != nil {
+	if err := s.driveStore.DeleteDrive(ctx, d.ID); err != nil {
 		return fmt.Errorf("store delete drive: %w", err)
 	}
 
-	log.Info("drive deleted", "id", id, "name", d.Name)
+	log.Info("drive deleted", "id", d.ID, "name", d.Name)
 	return nil
 }
 
 // AttachDrive attaches a drive to a stopped VM, recreating the container
 // with the new mount.
-func (s *VMService) AttachDrive(ctx context.Context, driveID, vmID string) error {
-	vm, err := s.store.Get(ctx, vmID)
+func (s *VMService) AttachDrive(ctx context.Context, driveRef, vmRef string) error {
+	vm, err := s.store.Resolve(ctx, vmRef)
 	if err != nil {
 		return err
 	}
@@ -382,7 +388,7 @@ func (s *VMService) AttachDrive(ctx context.Context, driveID, vmID string) error
 		return fmt.Errorf("VM must be stopped to attach drives: %w", domain.ErrInvalidState)
 	}
 
-	d, err := s.driveStore.GetDrive(ctx, driveID)
+	d, err := s.driveStore.ResolveDrive(ctx, driveRef)
 	if err != nil {
 		return err
 	}
@@ -390,12 +396,12 @@ func (s *VMService) AttachDrive(ctx context.Context, driveID, vmID string) error
 		return fmt.Errorf("drive already attached to VM %s: %w", d.VMID, domain.ErrDriveAttached)
 	}
 
-	if err := s.driveStore.AttachDrive(ctx, driveID, vmID); err != nil {
+	if err := s.driveStore.AttachDrive(ctx, d.ID, vm.ID); err != nil {
 		return fmt.Errorf("store attach: %w", err)
 	}
 
 	if err := s.recreateContainer(ctx, vm); err != nil {
-		s.driveStore.DetachDrive(ctx, driveID) //nolint:errcheck // best-effort rollback
+		s.driveStore.DetachDrive(ctx, d.ID) //nolint:errcheck // best-effort rollback
 		return fmt.Errorf("recreate container: %w", err)
 	}
 
@@ -405,8 +411,8 @@ func (s *VMService) AttachDrive(ctx context.Context, driveID, vmID string) error
 
 // DetachDrive detaches a drive from its VM, recreating the container
 // without the mount.
-func (s *VMService) DetachDrive(ctx context.Context, driveID string) error {
-	d, err := s.driveStore.GetDrive(ctx, driveID)
+func (s *VMService) DetachDrive(ctx context.Context, driveRef string) error {
+	d, err := s.driveStore.ResolveDrive(ctx, driveRef)
 	if err != nil {
 		return err
 	}
@@ -422,7 +428,7 @@ func (s *VMService) DetachDrive(ctx context.Context, driveID string) error {
 		return fmt.Errorf("VM must be stopped to detach drives: %w", domain.ErrInvalidState)
 	}
 
-	if err := s.driveStore.DetachDrive(ctx, driveID); err != nil {
+	if err := s.driveStore.DetachDrive(ctx, d.ID); err != nil {
 		return fmt.Errorf("store detach: %w", err)
 	}
 
@@ -459,6 +465,12 @@ func (s *VMService) CreateDevice(ctx context.Context, params domain.CreateDevice
 	if s.deviceStore == nil {
 		return nil, fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
 	}
+	if params.Name == "" {
+		return nil, fmt.Errorf("name is required: %w", domain.ErrValidation)
+	}
+	if err := nxid.ValidateName(params.Name); err != nil {
+		return nil, fmt.Errorf("invalid name: %v: %w", err, domain.ErrValidation)
+	}
 	if params.HostPath == "" {
 		return nil, fmt.Errorf("host_path is required: %w", domain.ErrValidation)
 	}
@@ -481,7 +493,8 @@ func (s *VMService) CreateDevice(ctx context.Context, params domain.CreateDevice
 	}
 
 	d := &domain.Device{
-		ID:            uuid.New().String(),
+		ID:            nxid.New(),
+		Name:          params.Name,
 		HostPath:      params.HostPath,
 		ContainerPath: params.ContainerPath,
 		Permissions:   params.Permissions,
@@ -493,16 +506,16 @@ func (s *VMService) CreateDevice(ctx context.Context, params domain.CreateDevice
 		return nil, fmt.Errorf("store create device: %w", err)
 	}
 
-	log.Info("device created", "id", d.ID, "host_path", d.HostPath)
+	log.Info("device created", "id", d.ID, "name", d.Name, "host_path", d.HostPath)
 	return d, nil
 }
 
-// GetDevice retrieves a device by ID.
-func (s *VMService) GetDevice(ctx context.Context, id string) (*domain.Device, error) {
+// GetDevice retrieves a device by ID or name.
+func (s *VMService) GetDevice(ctx context.Context, ref string) (*domain.Device, error) {
 	if s.deviceStore == nil {
 		return nil, fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
 	}
-	return s.deviceStore.GetDevice(ctx, id)
+	return s.deviceStore.ResolveDevice(ctx, ref)
 }
 
 // ListDevices returns all devices.
@@ -514,11 +527,11 @@ func (s *VMService) ListDevices(ctx context.Context) ([]*domain.Device, error) {
 }
 
 // DeleteDevice removes a device. Fails if the device is attached to a VM.
-func (s *VMService) DeleteDevice(ctx context.Context, id string) error {
+func (s *VMService) DeleteDevice(ctx context.Context, ref string) error {
 	if s.deviceStore == nil {
 		return fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
 	}
-	d, err := s.deviceStore.GetDevice(ctx, id)
+	d, err := s.deviceStore.ResolveDevice(ctx, ref)
 	if err != nil {
 		return err
 	}
@@ -526,21 +539,21 @@ func (s *VMService) DeleteDevice(ctx context.Context, id string) error {
 		return fmt.Errorf("device %q attached to VM %s: %w", d.HostPath, d.VMID, domain.ErrDeviceAttached)
 	}
 
-	if err := s.deviceStore.DeleteDevice(ctx, id); err != nil {
+	if err := s.deviceStore.DeleteDevice(ctx, d.ID); err != nil {
 		return fmt.Errorf("store delete device: %w", err)
 	}
 
-	log.Info("device deleted", "id", id, "host_path", d.HostPath)
+	log.Info("device deleted", "id", d.ID, "host_path", d.HostPath)
 	return nil
 }
 
 // AttachDevice attaches a device to a stopped VM, recreating the container
 // with the new device mapping.
-func (s *VMService) AttachDevice(ctx context.Context, deviceID, vmID string) error {
+func (s *VMService) AttachDevice(ctx context.Context, deviceRef, vmRef string) error {
 	if s.deviceStore == nil {
 		return fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
 	}
-	vm, err := s.store.Get(ctx, vmID)
+	vm, err := s.store.Resolve(ctx, vmRef)
 	if err != nil {
 		return err
 	}
@@ -548,7 +561,7 @@ func (s *VMService) AttachDevice(ctx context.Context, deviceID, vmID string) err
 		return fmt.Errorf("VM must be stopped to attach devices: %w", domain.ErrInvalidState)
 	}
 
-	d, err := s.deviceStore.GetDevice(ctx, deviceID)
+	d, err := s.deviceStore.ResolveDevice(ctx, deviceRef)
 	if err != nil {
 		return err
 	}
@@ -556,12 +569,12 @@ func (s *VMService) AttachDevice(ctx context.Context, deviceID, vmID string) err
 		return fmt.Errorf("device already attached to VM %s: %w", d.VMID, domain.ErrDeviceAttached)
 	}
 
-	if err := s.deviceStore.AttachDevice(ctx, deviceID, vmID); err != nil {
+	if err := s.deviceStore.AttachDevice(ctx, d.ID, vm.ID); err != nil {
 		return fmt.Errorf("store attach: %w", err)
 	}
 
 	if err := s.recreateContainer(ctx, vm); err != nil {
-		s.deviceStore.DetachDevice(ctx, deviceID) //nolint:errcheck // best-effort rollback
+		s.deviceStore.DetachDevice(ctx, d.ID) //nolint:errcheck // best-effort rollback
 		return fmt.Errorf("recreate container: %w", err)
 	}
 
@@ -571,11 +584,11 @@ func (s *VMService) AttachDevice(ctx context.Context, deviceID, vmID string) err
 
 // DetachDevice detaches a device from its VM, recreating the container
 // without the device mapping.
-func (s *VMService) DetachDevice(ctx context.Context, deviceID string) error {
+func (s *VMService) DetachDevice(ctx context.Context, deviceRef string) error {
 	if s.deviceStore == nil {
 		return fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
 	}
-	d, err := s.deviceStore.GetDevice(ctx, deviceID)
+	d, err := s.deviceStore.ResolveDevice(ctx, deviceRef)
 	if err != nil {
 		return err
 	}
@@ -591,7 +604,7 @@ func (s *VMService) DetachDevice(ctx context.Context, deviceID string) error {
 		return fmt.Errorf("VM must be stopped to detach devices: %w", domain.ErrInvalidState)
 	}
 
-	if err := s.deviceStore.DetachDevice(ctx, deviceID); err != nil {
+	if err := s.deviceStore.DetachDevice(ctx, d.ID); err != nil {
 		return fmt.Errorf("store detach: %w", err)
 	}
 
