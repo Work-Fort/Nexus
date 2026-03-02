@@ -13,6 +13,7 @@ type VMStore interface {
 	Get(ctx context.Context, id string) (*VM, error)
 	List(ctx context.Context, filter VMFilter) ([]*VM, error)
 	GetByName(ctx context.Context, name string) (*VM, error)
+	Resolve(ctx context.Context, ref string) (*VM, error)
 	UpdateState(ctx context.Context, id string, state VMState, now time.Time) error
 	Delete(ctx context.Context, id string) error
 }
@@ -100,6 +101,7 @@ type DriveStore interface {
 	CreateDrive(ctx context.Context, d *Drive) error
 	GetDrive(ctx context.Context, id string) (*Drive, error)
 	GetDriveByName(ctx context.Context, name string) (*Drive, error)
+	ResolveDrive(ctx context.Context, ref string) (*Drive, error)
 	ListDrives(ctx context.Context) ([]*Drive, error)
 	AttachDrive(ctx context.Context, driveID, vmID string) error
 	DetachDrive(ctx context.Context, driveID string) error
@@ -112,6 +114,8 @@ type DriveStore interface {
 type DeviceStore interface {
 	CreateDevice(ctx context.Context, d *Device) error
 	GetDevice(ctx context.Context, id string) (*Device, error)
+	GetDeviceByName(ctx context.Context, name string) (*Device, error)
+	ResolveDevice(ctx context.Context, ref string) (*Device, error)
 	ListDevices(ctx context.Context) ([]*Device, error)
 	AttachDevice(ctx context.Context, deviceID, vmID string) error
 	DetachDevice(ctx context.Context, deviceID string) error
