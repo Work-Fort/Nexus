@@ -19,7 +19,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
-	"github.com/google/uuid"
+	"github.com/Work-Fort/Nexus/pkg/nxid"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
@@ -312,7 +312,7 @@ func (r *Runtime) Exec(ctx context.Context, id string, cmd []string) (*domain.Ex
 	pspec := *spec.Process // struct copy to avoid mutating shared spec
 	pspec.Args = cmd
 
-	execID := fmt.Sprintf("%s-exec-%s", id, uuid.New().String()[:8])
+	execID := fmt.Sprintf("%s-exec-%s", id, nxid.New())
 	proc, err := task.Exec(ctx, execID, &pspec,
 		cio.NewCreator(cio.WithFIFODir(os.TempDir()), cio.WithStreams(nil, &stdout, &stderr)),
 	)
