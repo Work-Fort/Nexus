@@ -653,6 +653,29 @@ func (s *VMService) DetachDevice(ctx context.Context, deviceRef string) error {
 	return nil
 }
 
+// SyncDNS loads all existing VM records into the DNS manager.
+// Called once at startup to populate the hosts file.
+func (s *VMService) SyncDNS(ctx context.Context) error {
+	if s.dns == nil {
+		return nil
+	}
+	vms, err := s.store.List(ctx, domain.VMFilter{})
+	if err != nil {
+		return fmt.Errorf("list vms for dns sync: %w", err)
+	}
+	var count int
+	for _, vm := range vms {
+		if vm.IP != "" {
+			if err := s.dns.AddRecord(ctx, vm.Name, vm.IP); err != nil {
+				return fmt.Errorf("dns sync %s: %w", vm.Name, err)
+			}
+			count++
+		}
+	}
+	log.Info("dns synced", "records", count)
+	return nil
+}
+
 // recreateContainer deletes and recreates the containerd container for a VM,
 // applying the current set of attached drives as mounts and devices.
 func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error {

@@ -147,6 +147,10 @@ func newDaemonCmd() *cobra.Command {
 
 			svc := app.NewVMService(store, runtime, network, svcOpts...)
 
+			if err := svc.SyncDNS(context.Background()); err != nil {
+				return fmt.Errorf("sync dns: %w", err)
+			}
+
 			handler := httpapi.NewHandler(svc)
 
 			httpServer := &http.Server{
