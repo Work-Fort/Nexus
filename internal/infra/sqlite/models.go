@@ -10,6 +10,7 @@ import (
 
 type Device struct {
 	ID            string         `json:"id"`
+	Name          string         `json:"name"`
 	HostPath      string         `json:"host_path"`
 	ContainerPath string         `json:"container_path"`
 	Permissions   string         `json:"permissions"`

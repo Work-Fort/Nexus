@@ -113,7 +113,7 @@ func (q *Queries) DetachDrive(ctx context.Context, id string) error {
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
 FROM devices WHERE id = ?
 `
 
@@ -122,6 +122,28 @@ func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
 	var i Device
 	err := row.Scan(
 		&i.ID,
+		&i.Name,
+		&i.HostPath,
+		&i.ContainerPath,
+		&i.Permissions,
+		&i.Gid,
+		&i.VmID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getDeviceByName = `-- name: GetDeviceByName :one
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices WHERE name = ?
+`
+
+func (q *Queries) GetDeviceByName(ctx context.Context, name string) (Device, error) {
+	row := q.db.QueryRowContext(ctx, getDeviceByName, name)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
 		&i.HostPath,
 		&i.ContainerPath,
 		&i.Permissions,
@@ -133,7 +155,7 @@ func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
 }
 
 const getDevicesByVM = `-- name: GetDevicesByVM :many
-SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
 FROM devices WHERE vm_id = ? ORDER BY host_path
 `
 
@@ -148,6 +170,7 @@ func (q *Queries) GetDevicesByVM(ctx context.Context, vmID sql.NullString) ([]De
 		var i Device
 		if err := rows.Scan(
 			&i.ID,
+			&i.Name,
 			&i.HostPath,
 			&i.ContainerPath,
 			&i.Permissions,
@@ -292,12 +315,13 @@ func (q *Queries) GetVMByName(ctx context.Context, name string) (Vm, error) {
 }
 
 const insertDevice = `-- name: InsertDevice :exec
-INSERT INTO devices (id, host_path, container_path, permissions, gid, vm_id, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO devices (id, name, host_path, container_path, permissions, gid, vm_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertDeviceParams struct {
 	ID            string         `json:"id"`
+	Name          string         `json:"name"`
 	HostPath      string         `json:"host_path"`
 	ContainerPath string         `json:"container_path"`
 	Permissions   string         `json:"permissions"`
@@ -309,6 +333,7 @@ type InsertDeviceParams struct {
 func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) error {
 	_, err := q.db.ExecContext(ctx, insertDevice,
 		arg.ID,
+		arg.Name,
 		arg.HostPath,
 		arg.ContainerPath,
 		arg.Permissions,
@@ -382,7 +407,7 @@ func (q *Queries) InsertVM(ctx context.Context, arg InsertVMParams) error {
 }
 
 const listDevices = `-- name: ListDevices :many
-SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
 FROM devices ORDER BY created_at DESC
 `
 
@@ -397,6 +422,7 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 		var i Device
 		if err := rows.Scan(
 			&i.ID,
+			&i.Name,
 			&i.HostPath,
 			&i.ContainerPath,
 			&i.Permissions,
@@ -532,6 +558,86 @@ func (q *Queries) ListVMsByRole(ctx context.Context, role string) ([]Vm, error) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const resolveDevice = `-- name: ResolveDevice :one
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices WHERE id = ? OR name = ?
+`
+
+type ResolveDeviceParams struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (q *Queries) ResolveDevice(ctx context.Context, arg ResolveDeviceParams) (Device, error) {
+	row := q.db.QueryRowContext(ctx, resolveDevice, arg.ID, arg.Name)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.HostPath,
+		&i.ContainerPath,
+		&i.Permissions,
+		&i.Gid,
+		&i.VmID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const resolveDrive = `-- name: ResolveDrive :one
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives WHERE id = ? OR name = ?
+`
+
+type ResolveDriveParams struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (q *Queries) ResolveDrive(ctx context.Context, arg ResolveDriveParams) (Drive, error) {
+	row := q.db.QueryRowContext(ctx, resolveDrive, arg.ID, arg.Name)
+	var i Drive
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.SizeBytes,
+		&i.MountPath,
+		&i.VmID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const resolveVM = `-- name: ResolveVM :one
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+FROM vms WHERE id = ? OR name = ?
+`
+
+type ResolveVMParams struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (q *Queries) ResolveVM(ctx context.Context, arg ResolveVMParams) (Vm, error) {
+	row := q.db.QueryRowContext(ctx, resolveVM, arg.ID, arg.Name)
+	var i Vm
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Role,
+		&i.Image,
+		&i.Runtime,
+		&i.State,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.StoppedAt,
+		&i.Ip,
+		&i.Gateway,
+		&i.NetnsPath,
+	)
+	return i, err
 }
 
 const updateVMStarted = `-- name: UpdateVMStarted :exec

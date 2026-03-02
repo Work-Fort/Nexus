@@ -68,15 +68,19 @@ FROM drives WHERE vm_id = ? ORDER BY name;
 DELETE FROM drives WHERE id = ?;
 
 -- name: InsertDevice :exec
-INSERT INTO devices (id, host_path, container_path, permissions, gid, vm_id, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT INTO devices (id, name, host_path, container_path, permissions, gid, vm_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetDevice :one
-SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
 FROM devices WHERE id = ?;
 
+-- name: GetDeviceByName :one
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices WHERE name = ?;
+
 -- name: ListDevices :many
-SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
 FROM devices ORDER BY created_at DESC;
 
 -- name: AttachDevice :exec
@@ -89,8 +93,20 @@ UPDATE devices SET vm_id = NULL WHERE id = ?;
 UPDATE devices SET vm_id = NULL WHERE vm_id = ?;
 
 -- name: GetDevicesByVM :many
-SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
 FROM devices WHERE vm_id = ? ORDER BY host_path;
 
 -- name: DeleteDevice :exec
 DELETE FROM devices WHERE id = ?;
+
+-- name: ResolveVM :one
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+FROM vms WHERE id = ? OR name = ?;
+
+-- name: ResolveDrive :one
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives WHERE id = ? OR name = ?;
+
+-- name: ResolveDevice :one
+SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices WHERE id = ? OR name = ?;
