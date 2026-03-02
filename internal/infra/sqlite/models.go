@@ -8,6 +8,16 @@ import (
 	"database/sql"
 )
 
+type Device struct {
+	ID            string         `json:"id"`
+	HostPath      string         `json:"host_path"`
+	ContainerPath string         `json:"container_path"`
+	Permissions   string         `json:"permissions"`
+	Gid           int64          `json:"gid"`
+	VmID          sql.NullString `json:"vm_id"`
+	CreatedAt     string         `json:"created_at"`
+}
+
 type Drive struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`

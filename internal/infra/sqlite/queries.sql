@@ -66,3 +66,31 @@ FROM drives WHERE vm_id = ? ORDER BY name;
 
 -- name: DeleteDrive :exec
 DELETE FROM drives WHERE id = ?;
+
+-- name: InsertDevice :exec
+INSERT INTO devices (id, host_path, container_path, permissions, gid, vm_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetDevice :one
+SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices WHERE id = ?;
+
+-- name: ListDevices :many
+SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices ORDER BY created_at DESC;
+
+-- name: AttachDevice :exec
+UPDATE devices SET vm_id = ? WHERE id = ?;
+
+-- name: DetachDevice :exec
+UPDATE devices SET vm_id = NULL WHERE id = ?;
+
+-- name: DetachAllDevices :exec
+UPDATE devices SET vm_id = NULL WHERE vm_id = ?;
+
+-- name: GetDevicesByVM :many
+SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices WHERE vm_id = ? ORDER BY host_path;
+
+-- name: DeleteDevice :exec
+DELETE FROM devices WHERE id = ?;

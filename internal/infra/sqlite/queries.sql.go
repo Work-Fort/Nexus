@@ -10,6 +10,20 @@ import (
 	"database/sql"
 )
 
+const attachDevice = `-- name: AttachDevice :exec
+UPDATE devices SET vm_id = ? WHERE id = ?
+`
+
+type AttachDeviceParams struct {
+	VmID sql.NullString `json:"vm_id"`
+	ID   string         `json:"id"`
+}
+
+func (q *Queries) AttachDevice(ctx context.Context, arg AttachDeviceParams) error {
+	_, err := q.db.ExecContext(ctx, attachDevice, arg.VmID, arg.ID)
+	return err
+}
+
 const attachDrive = `-- name: AttachDrive :exec
 UPDATE drives SET vm_id = ? WHERE id = ?
 `
@@ -35,6 +49,15 @@ func (q *Queries) CountVMs(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const deleteDevice = `-- name: DeleteDevice :exec
+DELETE FROM devices WHERE id = ?
+`
+
+func (q *Queries) DeleteDevice(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteDevice, id)
+	return err
+}
+
 const deleteDrive = `-- name: DeleteDrive :exec
 DELETE FROM drives WHERE id = ?
 `
@@ -53,12 +76,30 @@ func (q *Queries) DeleteVM(ctx context.Context, id string) error {
 	return err
 }
 
+const detachAllDevices = `-- name: DetachAllDevices :exec
+UPDATE devices SET vm_id = NULL WHERE vm_id = ?
+`
+
+func (q *Queries) DetachAllDevices(ctx context.Context, vmID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, detachAllDevices, vmID)
+	return err
+}
+
 const detachAllDrives = `-- name: DetachAllDrives :exec
 UPDATE drives SET vm_id = NULL WHERE vm_id = ?
 `
 
 func (q *Queries) DetachAllDrives(ctx context.Context, vmID sql.NullString) error {
 	_, err := q.db.ExecContext(ctx, detachAllDrives, vmID)
+	return err
+}
+
+const detachDevice = `-- name: DetachDevice :exec
+UPDATE devices SET vm_id = NULL WHERE id = ?
+`
+
+func (q *Queries) DetachDevice(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, detachDevice, id)
 	return err
 }
 
@@ -69,6 +110,62 @@ UPDATE drives SET vm_id = NULL WHERE id = ?
 func (q *Queries) DetachDrive(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, detachDrive, id)
 	return err
+}
+
+const getDevice = `-- name: GetDevice :one
+SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices WHERE id = ?
+`
+
+func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
+	row := q.db.QueryRowContext(ctx, getDevice, id)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.HostPath,
+		&i.ContainerPath,
+		&i.Permissions,
+		&i.Gid,
+		&i.VmID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getDevicesByVM = `-- name: GetDevicesByVM :many
+SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices WHERE vm_id = ? ORDER BY host_path
+`
+
+func (q *Queries) GetDevicesByVM(ctx context.Context, vmID sql.NullString) ([]Device, error) {
+	rows, err := q.db.QueryContext(ctx, getDevicesByVM, vmID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Device{}
+	for rows.Next() {
+		var i Device
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostPath,
+			&i.ContainerPath,
+			&i.Permissions,
+			&i.Gid,
+			&i.VmID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getDrive = `-- name: GetDrive :one
@@ -194,6 +291,34 @@ func (q *Queries) GetVMByName(ctx context.Context, name string) (Vm, error) {
 	return i, err
 }
 
+const insertDevice = `-- name: InsertDevice :exec
+INSERT INTO devices (id, host_path, container_path, permissions, gid, vm_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertDeviceParams struct {
+	ID            string         `json:"id"`
+	HostPath      string         `json:"host_path"`
+	ContainerPath string         `json:"container_path"`
+	Permissions   string         `json:"permissions"`
+	Gid           int64          `json:"gid"`
+	VmID          sql.NullString `json:"vm_id"`
+	CreatedAt     string         `json:"created_at"`
+}
+
+func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) error {
+	_, err := q.db.ExecContext(ctx, insertDevice,
+		arg.ID,
+		arg.HostPath,
+		arg.ContainerPath,
+		arg.Permissions,
+		arg.Gid,
+		arg.VmID,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const insertDrive = `-- name: InsertDrive :exec
 INSERT INTO drives (id, name, size_bytes, mount_path, vm_id, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -254,6 +379,42 @@ func (q *Queries) InsertVM(ctx context.Context, arg InsertVMParams) error {
 		arg.NetnsPath,
 	)
 	return err
+}
+
+const listDevices = `-- name: ListDevices :many
+SELECT id, host_path, container_path, permissions, gid, vm_id, created_at
+FROM devices ORDER BY created_at DESC
+`
+
+func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
+	rows, err := q.db.QueryContext(ctx, listDevices)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Device{}
+	for rows.Next() {
+		var i Device
+		if err := rows.Scan(
+			&i.ID,
+			&i.HostPath,
+			&i.ContainerPath,
+			&i.Permissions,
+			&i.Gid,
+			&i.VmID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listDrives = `-- name: ListDrives :many
