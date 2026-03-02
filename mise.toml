@@ -7,6 +7,7 @@ run = [
     "go build -o build/nexusd .",
     "go build -o build/nexus-netns ./cmd/nexus-netns/",
     "go build -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
+    "go build -o build/nexus-quota ./cmd/nexus-quota/",
 ]
 
 [tasks."build:release"]
@@ -15,6 +16,7 @@ run = [
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexusd .",
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-netns ./cmd/nexus-netns/",
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
+    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-quota ./cmd/nexus-quota/",
 ]
 
 [tasks.test]
@@ -44,7 +46,7 @@ run = "sqlc generate"
 
 [tasks.clean]
 description = "Remove build artifacts"
-run = "rm -f build/nexusd build/nexus-netns build/nexus-cni-exec"
+run = "rm -f build/nexusd build/nexus-netns build/nexus-cni-exec build/nexus-quota"
 
 [tasks."install:local"]
 description = "Install nexusd to ~/.local/bin + systemd unit"

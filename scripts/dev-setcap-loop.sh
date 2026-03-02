@@ -20,11 +20,13 @@ trap 'echo -e "\nStopping capability auto-setter..."; exit 0' SIGINT SIGTERM
 
 NETNS_HELPER="$BUILD_DIR/nexus-netns"
 CNI_EXEC="$BUILD_DIR/nexus-cni-exec"
+QUOTA_HELPER="$BUILD_DIR/nexus-quota"
 
 echo "Starting capability auto-setter (Ctrl+C to stop)"
 echo "Watching:"
 echo "  $NETNS_HELPER  → CAP_SYS_ADMIN"
 echo "  $CNI_EXEC      → CAP_NET_ADMIN,CAP_SYS_ADMIN"
+echo "  $QUOTA_HELPER   → CAP_SYS_ADMIN"
 
 while true; do
     if [ -f "$NETNS_HELPER" ]; then
@@ -35,6 +37,9 @@ while true; do
         # The binary programmatically adds caps to the inheritable set
         # and raises them as ambient before exec-ing the real CNI plugin.
         setcap cap_net_admin,cap_sys_admin+ep "$CNI_EXEC" 2>/dev/null || true
+    fi
+    if [ -f "$QUOTA_HELPER" ]; then
+        setcap cap_sys_admin+ep "$QUOTA_HELPER" 2>/dev/null || true
     fi
     echo "[$(date +%H:%M:%S)] Capabilities set"
     sleep 2
