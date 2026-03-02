@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -471,6 +472,14 @@ func (s *VMService) CreateDevice(ctx context.Context, params domain.CreateDevice
 		return nil, fmt.Errorf("permissions must be a combination of r, w, m: %w", domain.ErrValidation)
 	}
 
+	fi, err := os.Stat(params.HostPath)
+	if err != nil {
+		return nil, fmt.Errorf("host_path %q: %v: %w", params.HostPath, err, domain.ErrValidation)
+	}
+	if fi.Mode()&os.ModeDevice == 0 {
+		return nil, fmt.Errorf("host_path %q is not a device file: %w", params.HostPath, domain.ErrValidation)
+	}
+
 	d := &domain.Device{
 		ID:            uuid.New().String(),
 		HostPath:      params.HostPath,
@@ -490,16 +499,25 @@ func (s *VMService) CreateDevice(ctx context.Context, params domain.CreateDevice
 
 // GetDevice retrieves a device by ID.
 func (s *VMService) GetDevice(ctx context.Context, id string) (*domain.Device, error) {
+	if s.deviceStore == nil {
+		return nil, fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
+	}
 	return s.deviceStore.GetDevice(ctx, id)
 }
 
 // ListDevices returns all devices.
 func (s *VMService) ListDevices(ctx context.Context) ([]*domain.Device, error) {
+	if s.deviceStore == nil {
+		return nil, fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
+	}
 	return s.deviceStore.ListDevices(ctx)
 }
 
 // DeleteDevice removes a device. Fails if the device is attached to a VM.
 func (s *VMService) DeleteDevice(ctx context.Context, id string) error {
+	if s.deviceStore == nil {
+		return fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
+	}
 	d, err := s.deviceStore.GetDevice(ctx, id)
 	if err != nil {
 		return err
@@ -519,6 +537,9 @@ func (s *VMService) DeleteDevice(ctx context.Context, id string) error {
 // AttachDevice attaches a device to a stopped VM, recreating the container
 // with the new device mapping.
 func (s *VMService) AttachDevice(ctx context.Context, deviceID, vmID string) error {
+	if s.deviceStore == nil {
+		return fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
+	}
 	vm, err := s.store.Get(ctx, vmID)
 	if err != nil {
 		return err
@@ -551,6 +572,9 @@ func (s *VMService) AttachDevice(ctx context.Context, deviceID, vmID string) err
 // DetachDevice detaches a device from its VM, recreating the container
 // without the device mapping.
 func (s *VMService) DetachDevice(ctx context.Context, deviceID string) error {
+	if s.deviceStore == nil {
+		return fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
+	}
 	d, err := s.deviceStore.GetDevice(ctx, deviceID)
 	if err != nil {
 		return err

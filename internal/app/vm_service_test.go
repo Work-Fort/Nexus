@@ -798,18 +798,18 @@ func TestCreateDevice(t *testing.T) {
 	svc, _, _, devStore := newSvcWithDevices()
 
 	d, err := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath:      "/dev/dri/renderD128",
-		ContainerPath: "/dev/dri/renderD128",
+		HostPath:      "/dev/null",
+		ContainerPath: "/dev/null",
 		Permissions:   "rw",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if d.HostPath != "/dev/dri/renderD128" {
-		t.Errorf("host_path = %q, want /dev/dri/renderD128", d.HostPath)
+	if d.HostPath != "/dev/null" {
+		t.Errorf("host_path = %q, want /dev/null", d.HostPath)
 	}
-	if d.ContainerPath != "/dev/dri/renderD128" {
-		t.Errorf("container_path = %q, want /dev/dri/renderD128", d.ContainerPath)
+	if d.ContainerPath != "/dev/null" {
+		t.Errorf("container_path = %q, want /dev/null", d.ContainerPath)
 	}
 	if d.Permissions != "rw" {
 		t.Errorf("permissions = %q, want rw", d.Permissions)
@@ -829,12 +829,14 @@ func TestCreateDeviceValidation(t *testing.T) {
 		name   string
 		params domain.CreateDeviceParams
 	}{
-		{"empty host_path", domain.CreateDeviceParams{ContainerPath: "/dev/null", Permissions: "rw"}},
+		{"empty host_path", domain.CreateDeviceParams{ContainerPath: "/dev/x", Permissions: "rw"}},
+		{"nonexistent host_path", domain.CreateDeviceParams{HostPath: "/dev/nonexistent-device-xyz", ContainerPath: "/dev/x", Permissions: "rw"}},
+		{"host_path not a device", domain.CreateDeviceParams{HostPath: "/tmp", ContainerPath: "/dev/x", Permissions: "rw"}},
 		{"empty container_path", domain.CreateDeviceParams{HostPath: "/dev/null", Permissions: "rw"}},
-		{"non-absolute container_path", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "dev/null", Permissions: "rw"}},
-		{"empty permissions", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/null"}},
-		{"invalid permissions char", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rwx"}},
-		{"duplicate permissions", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rrw"}},
+		{"non-absolute container_path", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "dev/x", Permissions: "rw"}},
+		{"empty permissions", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/x"}},
+		{"invalid permissions char", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/x", Permissions: "rwx"}},
+		{"duplicate permissions", domain.CreateDeviceParams{HostPath: "/dev/null", ContainerPath: "/dev/x", Permissions: "rrw"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1049,8 +1051,8 @@ func TestCreateDeviceWithGID(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
 	d, err := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
-		HostPath:      "/dev/dri/renderD128",
-		ContainerPath: "/dev/dri/renderD128",
+		HostPath:      "/dev/null",
+		ContainerPath: "/dev/null",
 		Permissions:   "rw",
 		GID:           44,
 	})
