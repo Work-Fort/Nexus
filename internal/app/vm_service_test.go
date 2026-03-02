@@ -580,58 +580,6 @@ func TestExecVMEmptyCmd(t *testing.T) {
 	}
 }
 
-func TestHandleWebhookCreatesAgent(t *testing.T) {
-	store := newMockStore()
-	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
-
-	webhook := app.SharkfinWebhook{
-		Event:     "message.new",
-		Recipient: "deploy-bot",
-		Channel:   "ops",
-		From:      "dev-agent",
-		MessageID: 42,
-	}
-
-	if err := svc.HandleWebhook(context.Background(), webhook); err != nil {
-		t.Fatalf("webhook: %v", err)
-	}
-
-	vm, err := store.GetByName(context.Background(), "deploy-bot")
-	if err != nil {
-		t.Fatalf("get by name: %v", err)
-	}
-	if vm.Role != domain.VMRoleAgent {
-		t.Errorf("role = %q, want agent", vm.Role)
-	}
-	if vm.State != domain.VMStateRunning {
-		t.Errorf("state = %q, want running", vm.State)
-	}
-}
-
-func TestHandleWebhookStartsExistingStopped(t *testing.T) {
-	store := newMockStore()
-	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
-
-	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "existing-bot", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
-	})
-	svc.StartVM(context.Background(), vm.ID)
-	svc.StopVM(context.Background(), vm.ID)
-
-	webhook := app.SharkfinWebhook{Event: "message.new", Recipient: "existing-bot"}
-
-	if err := svc.HandleWebhook(context.Background(), webhook); err != nil {
-		t.Fatalf("webhook: %v", err)
-	}
-
-	got, _ := store.Get(context.Background(), vm.ID)
-	if got.State != domain.VMStateRunning {
-		t.Errorf("state = %q, want running", got.State)
-	}
-}
-
 func TestResetNetworkNoVMs(t *testing.T) {
 	svc := app.NewVMService(newMockStore(), newMockRuntime(), &cni.NoopNetwork{})
 
@@ -654,28 +602,6 @@ func TestResetNetworkWithVMs(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrNetworkInUse) {
 		t.Errorf("err = %v, want ErrNetworkInUse", err)
-	}
-}
-
-func TestHandleWebhookNoopIfRunning(t *testing.T) {
-	store := newMockStore()
-	rt := newMockRuntime()
-	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
-
-	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "active-bot", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
-	})
-	svc.StartVM(context.Background(), vm.ID)
-
-	webhook := app.SharkfinWebhook{Event: "message.new", Recipient: "active-bot"}
-
-	if err := svc.HandleWebhook(context.Background(), webhook); err != nil {
-		t.Fatalf("webhook: %v", err)
-	}
-
-	got, _ := store.Get(context.Background(), vm.ID)
-	if got.State != domain.VMStateRunning {
-		t.Errorf("state = %q, want running", got.State)
 	}
 }
 

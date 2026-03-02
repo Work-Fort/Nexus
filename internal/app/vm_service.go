@@ -5,7 +5,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -17,17 +16,6 @@ import (
 	"github.com/Work-Fort/Nexus/pkg/bytesize"
 	"github.com/Work-Fort/Nexus/pkg/nxid"
 )
-
-// SharkfinWebhook is the payload Sharkfin POSTs on mentions and DMs.
-type SharkfinWebhook struct {
-	Event       string `json:"event"`
-	Recipient   string `json:"recipient"`
-	Channel     string `json:"channel"`
-	ChannelType string `json:"channel_type"`
-	From        string `json:"from"`
-	MessageID   int64  `json:"message_id"`
-	SentAt      string `json:"sent_at"`
-}
 
 // VMServiceConfig holds configurable defaults for the VM service.
 type VMServiceConfig struct {
@@ -299,42 +287,6 @@ func (s *VMService) ResetNetwork(ctx context.Context) error {
 		return fmt.Errorf("%d VM(s) exist, delete them first: %w", len(vms), domain.ErrNetworkInUse)
 	}
 	return s.network.ResetNetwork(ctx)
-}
-
-// HandleWebhook processes a Sharkfin webhook. It finds or creates an agent
-// VM for the recipient, and ensures it's running.
-func (s *VMService) HandleWebhook(ctx context.Context, wh SharkfinWebhook) error {
-	log.Info("webhook received", "event", wh.Event, "recipient", wh.Recipient, "from", wh.From, "channel", wh.Channel)
-
-	vm, err := s.store.Resolve(ctx, wh.Recipient)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
-		return fmt.Errorf("lookup recipient: %w", err)
-	}
-
-	if vm == nil {
-		vm, err = s.CreateVM(ctx, domain.CreateVMParams{
-			Name:  wh.Recipient,
-			Role:  domain.VMRoleAgent,
-			Image: s.config.DefaultImage,
-		})
-		if err != nil {
-			return fmt.Errorf("create agent: %w", err)
-		}
-	}
-
-	switch vm.State {
-	case domain.VMStateRunning:
-		log.Info("agent already running", "name", wh.Recipient)
-		return nil
-	case domain.VMStateCreated, domain.VMStateStopped:
-		if err := s.StartVM(ctx, vm.ID); err != nil {
-			return fmt.Errorf("start agent: %w", err)
-		}
-		log.Info("agent started", "name", wh.Recipient)
-		return nil
-	default:
-		return fmt.Errorf("unexpected state %q for %s", vm.State, wh.Recipient)
-	}
 }
 
 // --- Drive operations ---

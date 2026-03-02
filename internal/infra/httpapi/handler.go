@@ -43,8 +43,6 @@ func NewHandler(svc *app.VMService) http.Handler {
 	mux.HandleFunc("POST /v1/devices/{id}/attach", handleAttachDevice(svc))
 	mux.HandleFunc("POST /v1/devices/{id}/detach", handleDetachDevice(svc))
 
-	mux.HandleFunc("POST /webhooks/sharkfin", handleSharkfinWebhook(svc))
-
 	return mux
 }
 
