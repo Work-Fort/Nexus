@@ -265,7 +265,7 @@ func (q *Queries) GetDrivesByVM(ctx context.Context, vmID sql.NullString) ([]Dri
 }
 
 const getVM = `-- name: GetVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms WHERE id = ?
 `
 
@@ -285,12 +285,14 @@ func (q *Queries) GetVM(ctx context.Context, id string) (Vm, error) {
 		&i.Ip,
 		&i.Gateway,
 		&i.NetnsPath,
+		&i.DnsServers,
+		&i.DnsSearch,
 	)
 	return i, err
 }
 
 const getVMByName = `-- name: GetVMByName :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms WHERE name = ?
 `
 
@@ -310,6 +312,8 @@ func (q *Queries) GetVMByName(ctx context.Context, name string) (Vm, error) {
 		&i.Ip,
 		&i.Gateway,
 		&i.NetnsPath,
+		&i.DnsServers,
+		&i.DnsSearch,
 	)
 	return i, err
 }
@@ -372,21 +376,23 @@ func (q *Queries) InsertDrive(ctx context.Context, arg InsertDriveParams) error 
 
 const insertVM = `-- name: InsertVM :exec
 
-INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertVMParams struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Role      string `json:"role"`
-	Image     string `json:"image"`
-	Runtime   string `json:"runtime"`
-	State     string `json:"state"`
-	CreatedAt string `json:"created_at"`
-	Ip        string `json:"ip"`
-	Gateway   string `json:"gateway"`
-	NetnsPath string `json:"netns_path"`
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Role       string         `json:"role"`
+	Image      string         `json:"image"`
+	Runtime    string         `json:"runtime"`
+	State      string         `json:"state"`
+	CreatedAt  string         `json:"created_at"`
+	Ip         string         `json:"ip"`
+	Gateway    string         `json:"gateway"`
+	NetnsPath  string         `json:"netns_path"`
+	DnsServers sql.NullString `json:"dns_servers"`
+	DnsSearch  sql.NullString `json:"dns_search"`
 }
 
 // SPDX-License-Identifier: Apache-2.0
@@ -402,6 +408,8 @@ func (q *Queries) InsertVM(ctx context.Context, arg InsertVMParams) error {
 		arg.Ip,
 		arg.Gateway,
 		arg.NetnsPath,
+		arg.DnsServers,
+		arg.DnsSearch,
 	)
 	return err
 }
@@ -479,7 +487,7 @@ func (q *Queries) ListDrives(ctx context.Context) ([]Drive, error) {
 }
 
 const listVMs = `-- name: ListVMs :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms ORDER BY created_at DESC
 `
 
@@ -505,6 +513,8 @@ func (q *Queries) ListVMs(ctx context.Context) ([]Vm, error) {
 			&i.Ip,
 			&i.Gateway,
 			&i.NetnsPath,
+			&i.DnsServers,
+			&i.DnsSearch,
 		); err != nil {
 			return nil, err
 		}
@@ -520,7 +530,7 @@ func (q *Queries) ListVMs(ctx context.Context) ([]Vm, error) {
 }
 
 const listVMsByRole = `-- name: ListVMsByRole :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms WHERE role = ? ORDER BY created_at DESC
 `
 
@@ -546,6 +556,8 @@ func (q *Queries) ListVMsByRole(ctx context.Context, role string) ([]Vm, error) 
 			&i.Ip,
 			&i.Gateway,
 			&i.NetnsPath,
+			&i.DnsServers,
+			&i.DnsSearch,
 		); err != nil {
 			return nil, err
 		}
@@ -611,7 +623,7 @@ func (q *Queries) ResolveDrive(ctx context.Context, arg ResolveDriveParams) (Dri
 }
 
 const resolveVM = `-- name: ResolveVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms WHERE id = ? OR name = ?
 `
 
@@ -636,6 +648,8 @@ func (q *Queries) ResolveVM(ctx context.Context, arg ResolveVMParams) (Vm, error
 		&i.Ip,
 		&i.Gateway,
 		&i.NetnsPath,
+		&i.DnsServers,
+		&i.DnsSearch,
 	)
 	return i, err
 }

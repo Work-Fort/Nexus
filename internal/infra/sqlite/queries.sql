@@ -1,23 +1,23 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- name: InsertVM :exec
-INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms WHERE id = ?;
 
 -- name: GetVMByName :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms WHERE name = ?;
 
 -- name: ListVMs :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms ORDER BY created_at DESC;
 
 -- name: ListVMsByRole :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms WHERE role = ? ORDER BY created_at DESC;
 
 -- name: UpdateVMStateCreated :exec
@@ -100,7 +100,7 @@ FROM devices WHERE vm_id = ? ORDER BY host_path;
 DELETE FROM devices WHERE id = ?;
 
 -- name: ResolveVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
 FROM vms WHERE id = ? OR name = ?;
 
 -- name: ResolveDrive :one

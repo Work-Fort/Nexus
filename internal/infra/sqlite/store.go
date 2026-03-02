@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"time"
@@ -87,17 +88,30 @@ func runMigrations(db *sql.DB) error {
 // --- domain.VMStore implementation ---
 
 func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
+	var dnsServers, dnsSearch sql.NullString
+	if vm.DNSConfig != nil {
+		if len(vm.DNSConfig.Servers) > 0 {
+			b, _ := json.Marshal(vm.DNSConfig.Servers)
+			dnsServers = sql.NullString{String: string(b), Valid: true}
+		}
+		if len(vm.DNSConfig.Search) > 0 {
+			b, _ := json.Marshal(vm.DNSConfig.Search)
+			dnsSearch = sql.NullString{String: string(b), Valid: true}
+		}
+	}
 	return s.q.InsertVM(ctx, InsertVMParams{
-		ID:        vm.ID,
-		Name:      vm.Name,
-		Role:      string(vm.Role),
-		Image:     vm.Image,
-		Runtime:   vm.Runtime,
-		State:     string(vm.State),
-		CreatedAt: vm.CreatedAt.UTC().Format(timeFormat),
-		Ip:        vm.IP,
-		Gateway:   vm.Gateway,
-		NetnsPath: vm.NetNSPath,
+		ID:         vm.ID,
+		Name:       vm.Name,
+		Role:       string(vm.Role),
+		Image:      vm.Image,
+		Runtime:    vm.Runtime,
+		State:      string(vm.State),
+		CreatedAt:  vm.CreatedAt.UTC().Format(timeFormat),
+		Ip:         vm.IP,
+		Gateway:    vm.Gateway,
+		NetnsPath:  vm.NetNSPath,
+		DnsServers: dnsServers,
+		DnsSearch:  dnsSearch,
 	})
 }
 
@@ -468,6 +482,15 @@ func vmFromRow(row Vm) (*domain.VM, error) {
 			return nil, fmt.Errorf("parse stopped_at for %s: %w", row.ID, err)
 		}
 		vm.StoppedAt = &t
+	}
+	if row.DnsServers.Valid || row.DnsSearch.Valid {
+		vm.DNSConfig = &domain.DNSConfig{}
+		if row.DnsServers.Valid {
+			json.Unmarshal([]byte(row.DnsServers.String), &vm.DNSConfig.Servers)
+		}
+		if row.DnsSearch.Valid {
+			json.Unmarshal([]byte(row.DnsSearch.String), &vm.DNSConfig.Search)
+		}
 	}
 	return vm, nil
 }
