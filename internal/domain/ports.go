@@ -31,6 +31,7 @@ type Runtime interface {
 type CreateConfig struct {
 	NetNSPath string
 	Mounts    []Mount
+	Devices   []DeviceInfo
 }
 
 // CreateOpt is a functional option for Runtime.Create.
@@ -63,6 +64,9 @@ var ErrNetworkInUse = errors.New("network in use")
 // ErrDriveAttached is returned when deleting a drive that is attached to a VM.
 var ErrDriveAttached = errors.New("drive is attached to a VM")
 
+// ErrDeviceAttached is returned when deleting a device that is attached to a VM.
+var ErrDeviceAttached = errors.New("device is attached to a VM")
+
 // Mount describes a bind mount from host into the container.
 type Mount struct {
 	HostPath      string
@@ -73,6 +77,21 @@ type Mount struct {
 func WithMounts(mounts []Mount) CreateOpt {
 	return func(c *CreateConfig) {
 		c.Mounts = mounts
+	}
+}
+
+// DeviceInfo describes a device to include in the OCI spec.
+type DeviceInfo struct {
+	HostPath      string
+	ContainerPath string
+	Permissions   string // "rwm", "rw", "r"
+	GID           uint32
+}
+
+// WithDevices adds device mappings to the container spec.
+func WithDevices(devices []DeviceInfo) CreateOpt {
+	return func(c *CreateConfig) {
+		c.Devices = devices
 	}
 }
 
@@ -87,6 +106,18 @@ type DriveStore interface {
 	DetachAllDrives(ctx context.Context, vmID string) error
 	GetDrivesByVM(ctx context.Context, vmID string) ([]*Drive, error)
 	DeleteDrive(ctx context.Context, id string) error
+}
+
+// DeviceStore persists device metadata.
+type DeviceStore interface {
+	CreateDevice(ctx context.Context, d *Device) error
+	GetDevice(ctx context.Context, id string) (*Device, error)
+	ListDevices(ctx context.Context) ([]*Device, error)
+	AttachDevice(ctx context.Context, deviceID, vmID string) error
+	DetachDevice(ctx context.Context, deviceID string) error
+	DetachAllDevices(ctx context.Context, vmID string) error
+	GetDevicesByVM(ctx context.Context, vmID string) ([]*Device, error)
+	DeleteDevice(ctx context.Context, id string) error
 }
 
 // Storage manages the underlying volume backend (e.g. btrfs subvolumes).
