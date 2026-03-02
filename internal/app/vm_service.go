@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -35,12 +36,13 @@ type VMServiceConfig struct {
 
 // VMService orchestrates VM lifecycle operations.
 type VMService struct {
-	store      domain.VMStore
-	runtime    domain.Runtime
-	network    domain.Network
-	driveStore domain.DriveStore
-	storage    domain.Storage
-	config     VMServiceConfig
+	store       domain.VMStore
+	runtime     domain.Runtime
+	network     domain.Network
+	driveStore  domain.DriveStore
+	storage     domain.Storage
+	deviceStore domain.DeviceStore
+	config      VMServiceConfig
 }
 
 // NewVMService creates a VMService with the given ports and config.
@@ -72,6 +74,13 @@ func WithStorage(driveStore domain.DriveStore, storage domain.Storage) func(*VMS
 	return func(s *VMService) {
 		s.driveStore = driveStore
 		s.storage = storage
+	}
+}
+
+// WithDeviceStore enables device management.
+func WithDeviceStore(deviceStore domain.DeviceStore) func(*VMService) {
+	return func(s *VMService) {
+		s.deviceStore = deviceStore
 	}
 }
 
@@ -205,6 +214,12 @@ func (s *VMService) DeleteVM(ctx context.Context, id string) error {
 	if s.driveStore != nil {
 		if err := s.driveStore.DetachAllDrives(ctx, id); err != nil {
 			log.Warn("detach drives failed", "id", id, "err", err)
+		}
+	}
+
+	if s.deviceStore != nil {
+		if err := s.deviceStore.DetachAllDevices(ctx, id); err != nil {
+			log.Warn("detach devices failed", "id", id, "err", err)
 		}
 	}
 
@@ -418,20 +433,180 @@ func (s *VMService) DetachDrive(ctx context.Context, driveID string) error {
 	return nil
 }
 
-// recreateContainer deletes and recreates the containerd container for a VM,
-// applying the current set of attached drives as mounts.
-func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error {
-	drives, err := s.driveStore.GetDrivesByVM(ctx, vm.ID)
-	if err != nil {
-		return fmt.Errorf("get drives: %w", err)
+// --- Device operations ---
+
+// validatePermissions checks that s contains only 'r', 'w', 'm' with no duplicates.
+func validatePermissions(s string) bool {
+	if len(s) == 0 || len(s) > 3 {
+		return false
+	}
+	seen := make(map[rune]bool, 3)
+	for _, c := range s {
+		if c != 'r' && c != 'w' && c != 'm' {
+			return false
+		}
+		if seen[c] {
+			return false
+		}
+		seen[c] = true
+	}
+	return true
+}
+
+// CreateDevice registers a new host device mapping.
+func (s *VMService) CreateDevice(ctx context.Context, params domain.CreateDeviceParams) (*domain.Device, error) {
+	if params.HostPath == "" {
+		return nil, fmt.Errorf("host_path is required: %w", domain.ErrValidation)
+	}
+	if params.ContainerPath == "" {
+		return nil, fmt.Errorf("container_path is required: %w", domain.ErrValidation)
+	}
+	if !strings.HasPrefix(params.ContainerPath, "/") {
+		return nil, fmt.Errorf("container_path must be absolute: %w", domain.ErrValidation)
+	}
+	if !validatePermissions(params.Permissions) {
+		return nil, fmt.Errorf("permissions must be a combination of r, w, m: %w", domain.ErrValidation)
 	}
 
+	d := &domain.Device{
+		ID:            uuid.New().String(),
+		HostPath:      params.HostPath,
+		ContainerPath: params.ContainerPath,
+		Permissions:   params.Permissions,
+		GID:           params.GID,
+		CreatedAt:     time.Now().UTC(),
+	}
+
+	if err := s.deviceStore.CreateDevice(ctx, d); err != nil {
+		return nil, fmt.Errorf("store create device: %w", err)
+	}
+
+	log.Info("device created", "id", d.ID, "host_path", d.HostPath)
+	return d, nil
+}
+
+// GetDevice retrieves a device by ID.
+func (s *VMService) GetDevice(ctx context.Context, id string) (*domain.Device, error) {
+	return s.deviceStore.GetDevice(ctx, id)
+}
+
+// ListDevices returns all devices.
+func (s *VMService) ListDevices(ctx context.Context) ([]*domain.Device, error) {
+	return s.deviceStore.ListDevices(ctx)
+}
+
+// DeleteDevice removes a device. Fails if the device is attached to a VM.
+func (s *VMService) DeleteDevice(ctx context.Context, id string) error {
+	d, err := s.deviceStore.GetDevice(ctx, id)
+	if err != nil {
+		return err
+	}
+	if d.VMID != "" {
+		return fmt.Errorf("device %q attached to VM %s: %w", d.HostPath, d.VMID, domain.ErrDeviceAttached)
+	}
+
+	if err := s.deviceStore.DeleteDevice(ctx, id); err != nil {
+		return fmt.Errorf("store delete device: %w", err)
+	}
+
+	log.Info("device deleted", "id", id, "host_path", d.HostPath)
+	return nil
+}
+
+// AttachDevice attaches a device to a stopped VM, recreating the container
+// with the new device mapping.
+func (s *VMService) AttachDevice(ctx context.Context, deviceID, vmID string) error {
+	vm, err := s.store.Get(ctx, vmID)
+	if err != nil {
+		return err
+	}
+	if vm.State == domain.VMStateRunning {
+		return fmt.Errorf("VM must be stopped to attach devices: %w", domain.ErrInvalidState)
+	}
+
+	d, err := s.deviceStore.GetDevice(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	if d.VMID != "" {
+		return fmt.Errorf("device already attached to VM %s: %w", d.VMID, domain.ErrDeviceAttached)
+	}
+
+	if err := s.deviceStore.AttachDevice(ctx, deviceID, vmID); err != nil {
+		return fmt.Errorf("store attach: %w", err)
+	}
+
+	if err := s.recreateContainer(ctx, vm); err != nil {
+		s.deviceStore.DetachDevice(ctx, deviceID) //nolint:errcheck // best-effort rollback
+		return fmt.Errorf("recreate container: %w", err)
+	}
+
+	log.Info("device attached", "device", d.HostPath, "vm", vm.Name)
+	return nil
+}
+
+// DetachDevice detaches a device from its VM, recreating the container
+// without the device mapping.
+func (s *VMService) DetachDevice(ctx context.Context, deviceID string) error {
+	d, err := s.deviceStore.GetDevice(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	if d.VMID == "" {
+		return nil // already detached, idempotent
+	}
+
+	vm, err := s.store.Get(ctx, d.VMID)
+	if err != nil {
+		return err
+	}
+	if vm.State == domain.VMStateRunning {
+		return fmt.Errorf("VM must be stopped to detach devices: %w", domain.ErrInvalidState)
+	}
+
+	if err := s.deviceStore.DetachDevice(ctx, deviceID); err != nil {
+		return fmt.Errorf("store detach: %w", err)
+	}
+
+	if err := s.recreateContainer(ctx, vm); err != nil {
+		return fmt.Errorf("recreate container: %w", err)
+	}
+
+	log.Info("device detached", "device", d.HostPath, "vm", vm.Name)
+	return nil
+}
+
+// recreateContainer deletes and recreates the containerd container for a VM,
+// applying the current set of attached drives as mounts and devices.
+func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error {
 	var mounts []domain.Mount
-	for _, d := range drives {
-		mounts = append(mounts, domain.Mount{
-			HostPath:      s.storage.VolumePath(d.Name),
-			ContainerPath: d.MountPath,
-		})
+	if s.driveStore != nil && s.storage != nil {
+		drives, err := s.driveStore.GetDrivesByVM(ctx, vm.ID)
+		if err != nil {
+			return fmt.Errorf("get drives: %w", err)
+		}
+		for _, d := range drives {
+			mounts = append(mounts, domain.Mount{
+				HostPath:      s.storage.VolumePath(d.Name),
+				ContainerPath: d.MountPath,
+			})
+		}
+	}
+
+	var deviceInfos []domain.DeviceInfo
+	if s.deviceStore != nil {
+		devices, err := s.deviceStore.GetDevicesByVM(ctx, vm.ID)
+		if err != nil {
+			return fmt.Errorf("get devices: %w", err)
+		}
+		for _, dev := range devices {
+			deviceInfos = append(deviceInfos, domain.DeviceInfo{
+				HostPath:      dev.HostPath,
+				ContainerPath: dev.ContainerPath,
+				Permissions:   dev.Permissions,
+				GID:           dev.GID,
+			})
+		}
 	}
 
 	if err := s.runtime.Delete(ctx, vm.ID); err != nil {
@@ -444,6 +619,9 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 	}
 	if len(mounts) > 0 {
 		createOpts = append(createOpts, domain.WithMounts(mounts))
+	}
+	if len(deviceInfos) > 0 {
+		createOpts = append(createOpts, domain.WithDevices(deviceInfos))
 	}
 
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
