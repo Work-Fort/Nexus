@@ -129,6 +129,15 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 		specOpts = append(specOpts, withDevices(createCfg.Devices))
 	}
 
+	if createCfg.ResolvConfPath != "" {
+		specOpts = append(specOpts, oci.WithMounts([]specs.Mount{{
+			Destination: "/etc/resolv.conf",
+			Type:        "bind",
+			Source:      createCfg.ResolvConfPath,
+			Options:     []string{"rbind", "ro"},
+		}}))
+	}
+
 	_, err = r.client.NewContainer(ctx, id,
 		client.WithImage(img),
 		client.WithNewSnapshot(id+"-snap", img),
