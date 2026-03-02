@@ -1,97 +1,191 @@
-# Networking Setup
+# Networking
 
 ## Architecture
 
-Nexus uses native Linux APIs for network configuration:
+Nexus uses CNI (Container Network Interface) plugins for VM networking. Each
+VM gets its own network namespace with a veth pair connecting it to a shared
+bridge on the host.
 
-- **Bridge management**: rtnetlink crate (RTM_NEWLINK/RTM_DELLINK messages, IP address assignment)
-- **Tap device creation**: tun-tap crate (ioctl on `/dev/net/tun`)
-- **Tap device configuration**: rtnetlink crate (bridge attachment, link state management)
-- **Firewall rules**: nftnl crate (netlink to kernel nf_tables subsystem, in-process)
+```
+ Host                          VM netns
+┌─────────────────────┐      ┌──────────────┐
+│  nexus0 (bridge)    │      │              │
+│  172.16.0.1/12      │      │  eth0        │
+│       │             │      │  172.16.0.x  │
+│    veth-host-side ──┼──────┼─ veth-vm     │
+│       │             │      │              │
+│  iptables MASQ      │      └──────────────┘
+│  (ipMasq: true)     │
+└─────────────────────┘
+```
 
-All operations are performed in-process via netlink and ioctl without child processes,
-ensuring that `CAP_NET_ADMIN` capability is inherited directly.
+### Components
 
-**Why tun-tap crate instead of rtnetlink for tap creation?**
+| Binary | Capabilities | Purpose |
+|--------|-------------|---------|
+| `nexusd` | None | Daemon — orchestrates networking via helper binaries |
+| `nexus-netns` | `CAP_SYS_ADMIN` | Creates/deletes persistent network namespaces (unshare + bind mount) |
+| `nexus-cni-exec` | `CAP_NET_ADMIN`, `CAP_SYS_ADMIN` | Multi-call wrapper that execs CNI plugins with elevated caps |
 
-Linux tap devices MUST be created via `/dev/net/tun` ioctl, not rtnetlink. This is a
-kernel requirement documented in the [Linux tuntap documentation](https://docs.kernel.org/networking/tuntap.html).
-The tun-tap crate provides a safe Rust wrapper around this ioctl interface. After tap
-creation, rtnetlink is used for all configuration operations (bridge attachment, bringing
-link up/down, deletion).
+`nexusd` itself runs unprivileged. All privileged operations are delegated to
+minimal helper binaries with only the capabilities they need.
+
+### How CNI plugin execution works
+
+CNI plugins in `/opt/cni/bin` (e.g., `bridge`, `host-local`) require
+capabilities to configure network interfaces. Nexus solves this without
+running as root:
+
+1. At startup, Nexus creates a temp directory with symlinks for each plugin
+   (e.g., `bridge` → `nexus-cni-exec`)
+2. When libcni invokes a plugin, it follows the symlink to `nexus-cni-exec`
+3. `nexus-cni-exec` reads `argv[0]` to determine the real plugin name
+4. It raises `CAP_NET_ADMIN` + `CAP_SYS_ADMIN` as ambient capabilities
+5. It execs the real plugin from `/opt/cni/bin` (configurable via
+   `NEXUS_CNI_REAL_BIN_DIR`)
+
+### Why libcni instead of go-cni
+
+The `go-cni` library hardcodes its result cache to `/var/lib/cni`, which
+requires root. Using `containernetworking/cni/libcni` directly with
+`NewCNIConfigWithCacheDir` lets us use a user-writable cache location under
+`$XDG_RUNTIME_DIR`.
+
+## CNI Configuration
+
+Nexus generates its own CNI conflist at startup (not read from
+`/etc/cni/net.d`). The generated config uses:
+
+- **bridge** plugin — creates `nexus0`, acts as gateway, enables IP masquerading
+- **host-local** IPAM — assigns IPs from the configured subnet
+
+```json
+{
+  "cniVersion": "1.0.0",
+  "name": "nexus",
+  "plugins": [
+    {
+      "type": "bridge",
+      "bridge": "nexus0",
+      "isGateway": true,
+      "ipMasq": true,
+      "ipam": {
+        "type": "host-local",
+        "subnet": "172.16.0.0/12",
+        "dataDir": "$XDG_RUNTIME_DIR/nexus/netns/.ipam"
+      }
+    }
+  ]
+}
+```
+
+## VM Lifecycle
+
+### Setup (on VM create)
+
+1. `nexus-netns create <path>` — creates a new network namespace via
+   `unshare(CLONE_NEWNET)` and bind-mounts it for persistence
+2. `libcni.AddNetworkList` — invokes the bridge plugin chain to create a
+   veth pair, attach it to `nexus0`, and assign an IP via host-local IPAM
+3. The assigned IP and gateway are stored in the VM record
+
+### Teardown (on VM delete)
+
+1. `libcni.DelNetworkList` — removes veth pair and releases the IP allocation
+2. `nexus-netns delete <path>` — unmounts and removes the namespace file
+
+### Reset (on subnet config change)
+
+When the subnet changes (e.g., `10.88.0.0/16` → `172.16.0.0/12`), the
+existing bridge retains its old IP and the bridge plugin refuses to
+reconfigure it.
+
+```bash
+curl -X POST http://127.0.0.1:9600/v1/network/reset
+```
+
+This endpoint:
+- Refuses if VMs exist (409 Conflict — delete VMs first)
+- Deletes the `nexus0` bridge via `nexus-cni-exec delete-bridge nexus0`
+- Clears IPAM allocation and CNI cache directories
+- Is idempotent (succeeds if bridge already gone)
+
+The next VM creation rebuilds the bridge with the new subnet.
 
 ## Requirements
 
-Nexus requires `CAP_NET_ADMIN` capability for network bridge, tap device, and firewall management.
+### System dependencies
 
-### System Dependencies
+- CNI plugins installed at `/opt/cni/bin` (bridge, host-local at minimum)
+- `ip` command available in PATH (used by `delete-bridge` subcommand)
+- IP forwarding enabled: `sysctl net.ipv4.ip_forward=1`
 
-- `libnftnl` and `libmnl` system libraries (standard Linux netfilter packages)
-- Linux kernel with nf_tables subsystem and netlink support (all modern kernels)
-- Linux kernel with tun module loaded (`modprobe tun` if not built-in)
-- No `ip` or `nft` commands required (all operations use in-process netlink/ioctl)
-
-### Option 1: setcap (recommended for development)
-
-Grant the capability to the nexusd binary:
+### Capabilities (set via `setcap` or systemd)
 
 ```bash
-sudo setcap cap_net_admin=+eip ~/.local/bin/nexusd
+# Run by the dev-setcap-loop.sh script during development:
+sudo setcap cap_sys_admin+ep build/nexus-netns
+sudo setcap cap_net_admin,cap_sys_admin+ep build/nexus-cni-exec
 ```
 
-Verify:
+Capabilities must be re-applied after every rebuild. The `scripts/dev-setcap-loop.sh`
+script automates this during development:
 
 ```bash
-getcap ~/.local/bin/nexusd
-# Should output: /home/user/.local/bin/nexusd cap_net_admin=ep
+sudo scripts/dev-setcap-loop.sh
 ```
 
-**Note:** You must re-run `setcap` after every rebuild of nexusd.
+### User-writable directories
 
-### Option 2: Systemd AmbientCapabilities (recommended for production)
+Nexus stores networking state under `$XDG_RUNTIME_DIR/nexus/netns/`:
 
-For systemd user services, add `AmbientCapabilities=CAP_NET_ADMIN` to the unit file:
+| Directory | Purpose |
+|-----------|---------|
+| `$XDG_RUNTIME_DIR/nexus/netns/` | Network namespace bind-mount files |
+| `$XDG_RUNTIME_DIR/nexus/netns/.ipam/` | host-local IPAM allocation data |
+| `$XDG_RUNTIME_DIR/nexus/netns/.cache/` | CNI result cache |
 
-```ini
-[Service]
-ExecStart=/home/user/.local/bin/nexusd
-AmbientCapabilities=CAP_NET_ADMIN
-```
+## Configuration
 
-Reload systemd and restart the service:
+All options can be set via CLI flags, config file (`~/.config/nexus/config.yaml`),
+or environment variables (`NEXUS_` prefix).
 
-```bash
-systemctl --user daemon-reload
-systemctl --user restart nexusd
-```
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--network-enabled` | `true` | Enable CNI networking |
+| `--network-subnet` | `172.16.0.0/12` | CIDR subnet for the bridge |
+| `--cni-bin-dir` | `/opt/cni/bin` | Directory containing CNI plugins |
+| `--netns-helper` | `nexus-netns` | Path to netns helper binary |
+| `--cni-exec-bin` | `nexus-cni-exec` | Path to CNI exec wrapper binary |
 
-## Network Configuration
-
-Default configuration (`~/.config/nexus/nexus.yaml`):
+Config file example:
 
 ```yaml
-network:
-  bridge_name: "nexbr0"
-  subnet: "172.16.0.0/12"
-  dns_servers:
-    - "8.8.8.8"
-    - "1.1.1.1"
+network-enabled: true
+network-subnet: "172.16.0.0/12"
+cni-bin-dir: "/opt/cni/bin"
+netns-helper: "nexus-netns"
+cni-exec-bin: "nexus-cni-exec"
 ```
 
 ## Troubleshooting
 
 ### Bridge creation fails
 
-- Verify `CAP_NET_ADMIN` is granted (see above)
-- Check dmesg for kernel errors: `sudo dmesg | grep nexbr`
+- Verify capabilities are set: `getcap build/nexus-cni-exec build/nexus-netns`
+- Check that CNI plugins exist: `ls /opt/cni/bin/bridge /opt/cni/bin/host-local`
 
-### VMs can't access internet
+### VMs can't reach the internet
 
-- Verify nftables rules are applied: `sudo nft list ruleset | grep nexus`
-- Check IP forwarding is enabled: `sysctl net.ipv4.ip_forward`
-- If forwarding is disabled, enable it: `sudo sysctl -w net.ipv4.ip_forward=1`
+- Check IP forwarding: `sysctl net.ipv4.ip_forward` (must be `1`)
+- Verify the bridge has IP masquerading: `sudo iptables -t nat -L POSTROUTING`
 
-### DNS not working in VMs
+### Stale bridge after subnet change
 
-- Check `/etc/resolv.conf` inside the VM: `nexusctl mcp file_read --vm <name> --path /etc/resolv.conf`
-- Verify DNS servers are reachable from the VM
+- Delete all VMs, then `POST /v1/network/reset`
+- Or manually: `sudo ip link delete nexus0`
+
+### "netns helper not found" at startup
+
+- Ensure `nexus-netns` is in PATH, or set `--netns-helper` to its absolute path
+- When using `mise run`, the `build/` directory is added to PATH automatically
