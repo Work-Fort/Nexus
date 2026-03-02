@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add generic device passthrough (GPUs, FPGAs, render nodes) to nexusd so host devices can be attached to stopped VMs and included in the OCI spec.
+**Goal:** Add generic device passthrough (GPUs, FPGAs, render nodes) to nexus so host devices can be attached to stopped VMs and included in the OCI spec.
 
 **Architecture:** Devices are independent resources (like drives) stored in a `devices` table, with attach/detach lifecycle. When a VM's container is recreated, attached devices produce `specs.LinuxDevice` + `specs.LinuxDeviceCgroup` entries. No host-level VFIO/IOMMU management — those are prerequisites.
 

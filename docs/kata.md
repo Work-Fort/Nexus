@@ -57,7 +57,7 @@ kata-runtime check
 
 ## KVM Access
 
-The nexusd user must have access to `/dev/kvm`. On Arch Linux this is
+The nexus user must have access to `/dev/kvm`. On Arch Linux this is
 typically handled by adding the user to the `kvm` group:
 
 ```bash
@@ -79,7 +79,7 @@ Nexus runs without root. Kata/Firecracker needs:
 - vhost modules loaded (one-time setup by root)
 - containerd socket access (via `containerd` group)
 
-No `CAP_SYS_ADMIN` is needed on the nexusd binary for Kata operations —
+No `CAP_SYS_ADMIN` is needed on the nexus binary for Kata operations —
 containerd and the Kata shim handle VM creation via their own privileges.
 
 ## Verification

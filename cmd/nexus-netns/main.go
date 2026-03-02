@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // nexus-netns is a minimal helper that creates or deletes persistent network
-// namespaces. It requires CAP_SYS_ADMIN (via setcap) so that the main nexusd
+// namespaces. It requires CAP_SYS_ADMIN (via setcap) so that the main nexus
 // daemon can remain unprivileged.
 //
 // Usage:

@@ -6,11 +6,11 @@ as an unprivileged systemd user service.
 ## Quick Start
 
 ```bash
-go build -o nexusd .
-./nexusd daemon
+go build -o nexus .
+./nexus daemon
 ```
 
-The daemon listens on `127.0.0.1:9600` by default. See `nexusd daemon --help`
+The daemon listens on `127.0.0.1:9600` by default. See `nexus daemon --help`
 for all flags.
 
 ## Prerequisites
@@ -72,7 +72,7 @@ cmd/             CLI wiring (Cobra + Viper)
 ### Named USER directives in container images
 
 Nexus reads the OCI image config from containerd's content store without
-performing client-side overlay mounts. This allows nexusd to run as an
+performing client-side overlay mounts. This allows nexus to run as an
 unprivileged user (no `CAP_SYS_ADMIN` required).
 
 The trade-off: containerd's `oci.WithImageConfig()` mounts the container's

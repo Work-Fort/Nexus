@@ -23,11 +23,11 @@ bridge on the host.
 
 | Binary | Capabilities | Purpose |
 |--------|-------------|---------|
-| `nexusd` | None | Daemon — orchestrates networking via helper binaries |
+| `nexus` | None | Daemon — orchestrates networking via helper binaries |
 | `nexus-netns` | `CAP_SYS_ADMIN` | Creates/deletes persistent network namespaces (unshare + bind mount) |
 | `nexus-cni-exec` | `CAP_NET_ADMIN`, `CAP_SYS_ADMIN` | Multi-call wrapper that execs CNI plugins with elevated caps |
 
-`nexusd` itself runs unprivileged. All privileged operations are delegated to
+`nexus` itself runs unprivileged. All privileged operations are delegated to
 minimal helper binaries with only the capabilities they need.
 
 ### How CNI plugin execution works

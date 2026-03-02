@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // nexus-quota is a minimal helper that sets btrfs quota limits on subvolumes.
-// It requires CAP_SYS_ADMIN (via setcap) so that the main nexusd daemon can
+// It requires CAP_SYS_ADMIN (via setcap) so that the main nexus daemon can
 // remain unprivileged.
 //
 // Usage:
@@ -64,7 +64,7 @@ func setLimit() {
 
 	// Enable quotas idempotently — on first call this turns on qgroup
 	// accounting for the filesystem; subsequent calls are a no-op (EEXIST).
-	// This eliminates the need for a separate "sudo nexusd setup btrfs-quotas" step.
+	// This eliminates the need for a separate "sudo nexus setup btrfs-quotas" step.
 	if err := btrfs.EnableQuota(path); err != nil {
 		fmt.Fprintf(os.Stderr, "nexus-quota: enable quota: %v\n", err)
 		os.Exit(1)

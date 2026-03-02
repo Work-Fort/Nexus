@@ -21,7 +21,7 @@ var Version string
 var logFile *os.File
 
 var rootCmd = &cobra.Command{
-	Use:   "nexusd",
+	Use:   "nexus",
 	Short: "Nexus VM lifecycle daemon",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if err := config.InitDirs(); err != nil {

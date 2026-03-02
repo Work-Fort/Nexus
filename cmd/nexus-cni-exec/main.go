@@ -4,7 +4,7 @@
 // It is installed as symlinks named after each CNI plugin (e.g., "bridge",
 // "host-local"). When invoked, it raises CAP_NET_ADMIN and CAP_SYS_ADMIN
 // as ambient capabilities and execs the real plugin from the system CNI
-// bin directory. This keeps the main nexusd daemon unprivileged while
+// bin directory. This keeps the main nexus daemon unprivileged while
 // giving CNI plugins the capabilities they need.
 //
 // Usage (via symlink):

@@ -5,13 +5,13 @@
 
 ## Goal
 
-Add generic device passthrough to nexusd so that host devices (GPUs via VFIO, render nodes, FPGAs, etc.) can be attached to VMs. Devices are independent resources with attach/detach lifecycle, matching the drives pattern.
+Add generic device passthrough to nexus so that host devices (GPUs via VFIO, render nodes, FPGAs, etc.) can be attached to VMs. Devices are independent resources with attach/detach lifecycle, matching the drives pattern.
 
 ## Architecture
 
 Devices follow the same pattern as drives: independent resources stored in a `devices` table, attached/detached from stopped VMs. When a VM's container is created (or recreated), all attached devices are included in the OCI spec as `linux.devices` entries with corresponding cgroup allow rules.
 
-nexusd does NOT manage IOMMU setup, VFIO binding, or capability grants. Those are host-level prerequisites done before registering a device in the API.
+nexus does NOT manage IOMMU setup, VFIO binding, or capability grants. Those are host-level prerequisites done before registering a device in the API.
 
 ## Domain Model
 

@@ -58,7 +58,7 @@ func (r *Runtime) nsCtx(ctx context.Context) context.Context {
 // We read the image config from the content store and build the OCI spec
 // manually instead of using oci.WithImageConfig, which performs a client-side
 // overlay mount to resolve supplemental groups from /etc/group inside the
-// image. That mount requires CAP_SYS_ADMIN, preventing nexusd from running
+// image. That mount requires CAP_SYS_ADMIN, preventing nexus from running
 // as an unprivileged systemd user service.
 //
 // Trade-off: named USER directives (e.g. "USER nginx") cannot be resolved

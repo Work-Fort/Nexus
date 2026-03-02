@@ -4,7 +4,7 @@ go = "1.26.0"
 [tasks.build]
 description = "Build all binaries (debug)"
 run = [
-    "go build -o build/nexusd .",
+    "go build -o build/nexus .",
     "go build -o build/nexus-netns ./cmd/nexus-netns/",
     "go build -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
     "go build -o build/nexus-quota ./cmd/nexus-quota/",
@@ -13,7 +13,7 @@ run = [
 [tasks."build:release"]
 description = "Build all binaries (static release)"
 run = [
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexusd .",
+    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus .",
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-netns ./cmd/nexus-netns/",
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-quota ./cmd/nexus-quota/",
@@ -32,9 +32,9 @@ description = "Run btrfs package tests"
 run = "go test -v ./pkg/btrfs/"
 
 [tasks.run]
-description = "Run nexusd daemon"
+description = "Run nexus daemon"
 env = { PATH = "{{cwd}}/build:{{env.PATH}}" }
-run = "build/nexusd daemon"
+run = "build/nexus daemon"
 
 [tasks.check]
 description = "Vet and lint"
@@ -46,18 +46,18 @@ run = "sqlc generate"
 
 [tasks.clean]
 description = "Remove build artifacts"
-run = "rm -f build/nexusd build/nexus-netns build/nexus-cni-exec build/nexus-quota"
+run = "rm -f build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota"
 
 [tasks."install:local"]
-description = "Install nexusd to ~/.local/bin + systemd unit"
+description = "Install nexus to ~/.local/bin + systemd unit"
 depends = ["build:release"]
 run = """
 mkdir -p ~/.local/bin
-cp build/nexusd ~/.local/bin/
+cp build/nexus ~/.local/bin/
 mkdir -p ~/.config/systemd/user
 cp dist/nexus.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-echo "Installed nexusd to ~/.local/bin/ and nexus.service"
+echo "Installed nexus to ~/.local/bin/ and nexus.service"
 """
 
 [tasks.wipe]
@@ -70,9 +70,9 @@ echo "Cleaning Nexus state..."
 
 # Stop systemd service if running
 if command -v systemctl >/dev/null 2>&1; then
-    if systemctl --user is-active --quiet nexusd 2>/dev/null; then
+    if systemctl --user is-active --quiet nexus 2>/dev/null; then
         echo "  Stopping systemd service"
-        systemctl --user stop nexusd
+        systemctl --user stop nexus
     fi
 fi
 

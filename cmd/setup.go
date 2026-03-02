@@ -83,7 +83,7 @@ Quotas are idempotent — safe to run multiple times.`,
 			}
 
 			if os.Getuid() != 0 {
-				return fmt.Errorf("must be run as root (sudo nexusd setup btrfs-quotas)")
+				return fmt.Errorf("must be run as root (sudo nexus setup btrfs-quotas)")
 			}
 
 			if err := btrfs.EnableQuota(target); err != nil {

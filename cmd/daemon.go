@@ -132,7 +132,7 @@ func newDaemonCmd() *cobra.Command {
 					errCh <- fmt.Errorf("listen: %w", err)
 					return
 				}
-				fmt.Fprintf(os.Stderr, "nexusd listening on %s\n", ln.Addr())
+				fmt.Fprintf(os.Stderr, "nexus listening on %s\n", ln.Addr())
 				if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 					errCh <- err
 				}

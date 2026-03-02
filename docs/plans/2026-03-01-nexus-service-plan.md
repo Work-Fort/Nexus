@@ -10,7 +10,7 @@
 
 **Directory Layout:**
 ```
-cmd/nexusd/
+cmd/nexus/
   main.go               — entry point
   root.go               — Cobra root command, Viper config, logging
   daemon.go             — daemon subcommand, wiring
@@ -52,8 +52,8 @@ sqlc.yaml               — sqlc configuration
 
 **Files:**
 - Modify: `go.mod`
-- Create: `cmd/nexusd/main.go`
-- Create: `cmd/nexusd/root.go`
+- Create: `cmd/nexus/main.go`
+- Create: `cmd/nexus/root.go`
 - Create: `internal/config/config.go`
 
 ### Step 1: Add dependencies to go.mod
@@ -80,21 +80,21 @@ Note: The containerd dependency pulls in gRPC, protobuf, OCI specs. This is expe
 package main
 
 import (
-	"github.com/Work-Fort/Nexus/cmd/nexusd"
+	"github.com/Work-Fort/Nexus/cmd/nexus"
 )
 
 func main() {
-	nexusd.Execute()
+	nexus.Execute()
 }
 ```
 
-File: `cmd/nexusd/main.go`
+File: `cmd/nexus/main.go`
 
 ### Step 3: Create root.go
 
 ```go
 // SPDX-License-Identifier: Apache-2.0
-package nexusd
+package nexus
 
 import (
 	"fmt"
@@ -113,7 +113,7 @@ import (
 var Version string
 
 var rootCmd = &cobra.Command{
-	Use:   "nexusd",
+	Use:   "nexus",
 	Short: "Nexus VM lifecycle daemon",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if err := config.InitDirs(); err != nil {
@@ -185,7 +185,7 @@ func init() {
 }
 ```
 
-File: `cmd/nexusd/root.go`
+File: `cmd/nexus/root.go`
 
 ### Step 4: Create config.go
 
@@ -314,14 +314,14 @@ File: `internal/config/config.go`
 
 ### Step 5: Verify compilation
 
-Run: `go build ./cmd/nexusd`
-Expected: Builds successfully, produces `nexusd` binary.
+Run: `go build ./cmd/nexus`
+Expected: Builds successfully, produces `nexus` binary.
 
 ### Step 6: Commit
 
 ```bash
-git add cmd/nexusd/ internal/config/ go.mod go.sum
-git commit -m "feat(nexusd): scaffold project with Cobra/Viper and XDG config"
+git add cmd/nexus/ internal/config/ go.mod go.sum
+git commit -m "feat(nexus): scaffold project with Cobra/Viper and XDG config"
 ```
 
 ---
@@ -2440,14 +2440,14 @@ git commit -m "feat(httpapi): implement REST API and webhook handlers"
 ## Task 8: Server Wiring and Daemon Command
 
 **Files:**
-- Create: `cmd/nexusd/daemon.go`
-- Modify: `cmd/nexusd/root.go` (add daemon subcommand)
+- Create: `cmd/nexus/daemon.go`
+- Modify: `cmd/nexus/root.go` (add daemon subcommand)
 
 ### Step 1: Write daemon.go
 
 ```go
 // SPDX-License-Identifier: Apache-2.0
-package nexusd
+package nexus
 
 import (
 	"context"
@@ -2519,7 +2519,7 @@ func newDaemonCmd() *cobra.Command {
 					errCh <- fmt.Errorf("listen: %w", err)
 					return
 				}
-				fmt.Fprintf(os.Stderr, "nexusd listening on %s\n", ln.Addr())
+				fmt.Fprintf(os.Stderr, "nexus listening on %s\n", ln.Addr())
 				if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 					errCh <- err
 				}
@@ -2560,11 +2560,11 @@ func newDaemonCmd() *cobra.Command {
 }
 ```
 
-File: `cmd/nexusd/daemon.go`
+File: `cmd/nexus/daemon.go`
 
 ### Step 2: Add daemon subcommand to root.go
 
-Add this line to the `init()` function in `cmd/nexusd/root.go`, after the `BindFlags` call:
+Add this line to the `init()` function in `cmd/nexus/root.go`, after the `BindFlags` call:
 
 ```go
 rootCmd.AddCommand(newDaemonCmd())
@@ -2572,14 +2572,14 @@ rootCmd.AddCommand(newDaemonCmd())
 
 ### Step 3: Verify compilation
 
-Run: `go build ./cmd/nexusd`
+Run: `go build ./cmd/nexus`
 Expected: Builds successfully.
 
 ### Step 4: Commit
 
 ```bash
-git add cmd/nexusd/
-git commit -m "feat(nexusd): wire daemon command with containerd, SQLite, and HTTP"
+git add cmd/nexus/
+git commit -m "feat(nexus): wire daemon command with containerd, SQLite, and HTTP"
 ```
 
 ---
@@ -2592,17 +2592,17 @@ This step requires a running containerd daemon and appropriate permissions.
 
 Run:
 ```bash
-CGO_ENABLED=0 go build -o nexusd ./cmd/nexusd
+CGO_ENABLED=0 go build -o nexus ./cmd/nexus
 ```
 
 ### Step 2: Start the daemon
 
 Run:
 ```bash
-./nexusd daemon --listen 127.0.0.1:9600
+./nexus daemon --listen 127.0.0.1:9600
 ```
 
-Expected: `nexusd listening on 127.0.0.1:9600`
+Expected: `nexus listening on 127.0.0.1:9600`
 
 If it fails to connect to containerd, check:
 - Socket path: `ls -la /run/containerd/containerd.sock`
@@ -2651,5 +2651,5 @@ sudo ctr -n nexus containers delete test-1
 
 ```bash
 git add -A
-git commit -m "fix(nexusd): fixes from smoke testing"
+git commit -m "fix(nexus): fixes from smoke testing"
 ```

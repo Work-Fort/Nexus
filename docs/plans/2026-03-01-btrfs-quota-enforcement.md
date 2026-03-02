@@ -303,7 +303,7 @@ Minimal privileged binary following the `nexus-netns` pattern. Gets `cap_sys_adm
 // SPDX-License-Identifier: Apache-2.0
 
 // nexus-quota is a minimal helper that sets btrfs quota limits on subvolumes.
-// It requires CAP_SYS_ADMIN (via setcap) so that the main nexusd daemon can
+// It requires CAP_SYS_ADMIN (via setcap) so that the main nexus daemon can
 // remain unprivileged.
 //
 // Usage:
@@ -366,7 +366,7 @@ func setLimit() {
 
 	// Enable quotas idempotently — on first call this turns on qgroup
 	// accounting for the filesystem; subsequent calls are a no-op (EEXIST).
-	// This eliminates the need for a separate "sudo nexusd setup btrfs-quotas" step.
+	// This eliminates the need for a separate "sudo nexus setup btrfs-quotas" step.
 	if err := btrfs.EnableQuota(path); err != nil {
 		fmt.Fprintf(os.Stderr, "nexus-quota: enable quota: %v\n", err)
 		os.Exit(1)
@@ -406,7 +406,7 @@ Add to `[tasks."build:release"]` run array:
 
 Update `[tasks.clean]`:
 ```
-run = "rm -f build/nexusd build/nexus-netns build/nexus-cni-exec build/nexus-quota"
+run = "rm -f build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota"
 ```
 
 **Step 3: Add setcap entry to `scripts/dev-setcap-loop.sh`**
@@ -443,7 +443,7 @@ viper.SetDefault("quota-helper", DefaultQuotaHelper)
 **Step 5: Build and verify**
 
 Run: `mise run build`
-Expected: Four binaries in `build/`: `nexusd`, `nexus-netns`, `nexus-cni-exec`, `nexus-quota`.
+Expected: Four binaries in `build/`: `nexus`, `nexus-netns`, `nexus-cni-exec`, `nexus-quota`.
 
 Run: `./build/nexus-quota`
 Expected: prints usage and exits 1.
