@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -83,12 +84,21 @@ func newDaemonCmd() *cobra.Command {
 			var storageBackend domain.Storage
 			isBtrfs, _ := btrfs.IsBtrfs(filepath.Dir(drivesDir))
 			if isBtrfs {
-				bs, err := storage.NewBtrfs(drivesDir)
+				quotaHelper := viper.GetString("quota-helper")
+				if quotaHelper != "" {
+					if resolved, err := exec.LookPath(quotaHelper); err != nil {
+						log.Warn("quota helper not found, quota enforcement disabled", "helper", quotaHelper)
+						quotaHelper = ""
+					} else {
+						quotaHelper = resolved
+					}
+				}
+				bs, err := storage.NewBtrfsWithQuota(drivesDir, quotaHelper)
 				if err != nil {
 					return fmt.Errorf("init btrfs storage: %w", err)
 				}
 				storageBackend = bs
-				log.Info("drives enabled", "backend", "btrfs", "dir", drivesDir)
+				log.Info("drives enabled", "backend", "btrfs", "dir", drivesDir, "quota", quotaHelper != "")
 			} else {
 				ns, err := storage.NewNoop(drivesDir)
 				if err != nil {
@@ -155,8 +165,9 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("netns-helper", config.DefaultNetNSHelper, "Path to nexus-netns helper binary")
 	cmd.Flags().String("cni-exec-bin", config.DefaultCNIExecBin, "Path to nexus-cni-exec wrapper binary")
 	cmd.Flags().String("drives-dir", config.DefaultDrivesDir, "Directory for drive volumes (default: $XDG_STATE_HOME/nexus/drives)")
+	cmd.Flags().String("quota-helper", config.DefaultQuotaHelper, "Path to nexus-quota helper binary (empty to disable)")
 
-	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "drives-dir"} {
+	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "drives-dir", "quota-helper"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}
