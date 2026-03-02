@@ -455,6 +455,9 @@ func validatePermissions(s string) bool {
 
 // CreateDevice registers a new host device mapping.
 func (s *VMService) CreateDevice(ctx context.Context, params domain.CreateDeviceParams) (*domain.Device, error) {
+	if s.deviceStore == nil {
+		return nil, fmt.Errorf("devices not enabled: %w", domain.ErrValidation)
+	}
 	if params.HostPath == "" {
 		return nil, fmt.Errorf("host_path is required: %w", domain.ErrValidation)
 	}

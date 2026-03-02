@@ -165,6 +165,12 @@ func parseNumericUser(user string) (uint32, uint32, error) {
 // withDevices returns an OCI spec option that adds device nodes and cgroup allow rules.
 func withDevices(devices []domain.DeviceInfo) oci.SpecOpts {
 	return func(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
+		if s.Linux == nil {
+			s.Linux = &specs.Linux{}
+		}
+		if s.Linux.Resources == nil {
+			s.Linux.Resources = &specs.LinuxResources{}
+		}
 		for _, dev := range devices {
 			fi, err := os.Stat(dev.HostPath)
 			if err != nil {
