@@ -1137,6 +1137,53 @@ func TestCreateVMInvalidName(t *testing.T) {
 	}
 }
 
+func TestCreateDriveInvalidName(t *testing.T) {
+	svc, _, _, _, _ := newSvcWithDrives()
+	tests := []struct {
+		name      string
+		driveName string
+	}{
+		{"starts with dash", "-bad"},
+		{"ends with dash", "bad-"},
+		{"uppercase", "Bad"},
+		{"too long", "abcdefghijklmnopqrstuvwxy"}, // 25 chars
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+				Name: tt.driveName, Size: "1G", MountPath: "/data",
+			})
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+		})
+	}
+}
+
+func TestCreateDeviceInvalidName(t *testing.T) {
+	svc, _, _, _ := newSvcWithDevices()
+	tests := []struct {
+		name       string
+		deviceName string
+	}{
+		{"starts with dash", "-bad"},
+		{"ends with dash", "bad-"},
+		{"uppercase", "Bad"},
+		{"too long", "abcdefghijklmnopqrstuvwxy"}, // 25 chars
+		{"missing name", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
+				Name: tt.deviceName, HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+			})
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+		})
+	}
+}
+
 func TestGetVMByName(t *testing.T) {
 	store := newMockStore()
 	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
