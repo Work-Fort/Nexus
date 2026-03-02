@@ -325,6 +325,44 @@ func (m *mockDeviceStore) DeleteDevice(_ context.Context, id string) error {
 	return nil
 }
 
+// --- mock DNSManager ---
+
+type mockDNS struct {
+	records     map[string]string // name → IP
+	resolvConfs map[string]string // vmID → path
+}
+
+func newMockDNS() *mockDNS {
+	return &mockDNS{
+		records:     make(map[string]string),
+		resolvConfs: make(map[string]string),
+	}
+}
+
+func (m *mockDNS) Start(context.Context) error { return nil }
+func (m *mockDNS) Stop() error                 { return nil }
+
+func (m *mockDNS) AddRecord(_ context.Context, name, ip string) error {
+	m.records[name] = ip
+	return nil
+}
+
+func (m *mockDNS) RemoveRecord(_ context.Context, name string) error {
+	delete(m.records, name)
+	return nil
+}
+
+func (m *mockDNS) GenerateResolvConf(vmID string, _ *domain.DNSConfig) (string, error) {
+	path := "/mock/dns/" + vmID + ".resolv.conf"
+	m.resolvConfs[vmID] = path
+	return path, nil
+}
+
+func (m *mockDNS) CleanupResolvConf(vmID string) error {
+	delete(m.resolvConfs, vmID)
+	return nil
+}
+
 // --- mock Storage ---
 
 type mockStorage struct {
@@ -1215,5 +1253,76 @@ func TestDeleteVMByName(t *testing.T) {
 	_, err := store.Get(context.Background(), vm.ID)
 	if err != domain.ErrNotFound {
 		t.Errorf("after delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+// --- DNS lifecycle tests ---
+
+func newSvcWithDNS() (*app.VMService, *mockStore, *mockRuntime, *mockDNS) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	d := newMockDNS()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{}, app.WithDNS(d))
+	return svc, store, rt, d
+}
+
+func TestCreateVMAddsDNSRecord(t *testing.T) {
+	svc, _, _, dns := newSvcWithDNS()
+
+	vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "web-server", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// DNS record should be added (IP may be empty with NoopNetwork, that's ok)
+	if _, ok := dns.records["web-server"]; !ok {
+		t.Error("DNS record not added for web-server")
+	}
+
+	// resolv.conf should be generated
+	if _, ok := dns.resolvConfs[vm.ID]; !ok {
+		t.Error("resolv.conf not generated")
+	}
+}
+
+func TestDeleteVMRemovesDNSRecord(t *testing.T) {
+	svc, _, _, dns := newSvcWithDNS()
+
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "cleanup-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+
+	if err := svc.DeleteVM(context.Background(), vm.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if _, ok := dns.records["cleanup-vm"]; ok {
+		t.Error("DNS record not removed after delete")
+	}
+	if _, ok := dns.resolvConfs[vm.ID]; ok {
+		t.Error("resolv.conf not cleaned up after delete")
+	}
+}
+
+func TestCreateVMWithDNSConfig(t *testing.T) {
+	svc, _, _, _ := newSvcWithDNS()
+
+	vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "custom-dns", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		DNSConfig: &domain.DNSConfig{
+			Servers: []string{"8.8.8.8"},
+			Search:  []string{"example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if vm.DNSConfig == nil {
+		t.Fatal("DNSConfig should be set on returned VM")
+	}
+	if vm.DNSConfig.Servers[0] != "8.8.8.8" {
+		t.Errorf("dns server = %q, want 8.8.8.8", vm.DNSConfig.Servers[0])
 	}
 }

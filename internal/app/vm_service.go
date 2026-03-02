@@ -130,12 +130,36 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	vm.Gateway = netInfo.Gateway
 	vm.NetNSPath = netInfo.NetNSPath
 
+	vm.DNSConfig = params.DNSConfig
+
+	var resolvConfPath string
+	if s.dns != nil {
+		if err := s.dns.AddRecord(ctx, vm.Name, vm.IP); err != nil {
+			s.network.Teardown(ctx, vm.ID) //nolint:errcheck
+			return nil, fmt.Errorf("dns add record: %w", err)
+		}
+		path, err := s.dns.GenerateResolvConf(vm.ID, vm.DNSConfig)
+		if err != nil {
+			s.dns.RemoveRecord(ctx, vm.Name) //nolint:errcheck
+			s.network.Teardown(ctx, vm.ID)   //nolint:errcheck
+			return nil, fmt.Errorf("dns resolv.conf: %w", err)
+		}
+		resolvConfPath = path
+	}
+
 	var createOpts []domain.CreateOpt
 	if netInfo.NetNSPath != "" {
 		createOpts = append(createOpts, domain.WithNetNS(netInfo.NetNSPath))
 	}
+	if resolvConfPath != "" {
+		createOpts = append(createOpts, domain.WithResolvConf(resolvConfPath))
+	}
 
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
+		if s.dns != nil {
+			s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
+			s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
+		}
 		s.network.Teardown(ctx, vm.ID) //nolint:errcheck // best-effort rollback
 		return nil, fmt.Errorf("runtime create: %w", err)
 	}
@@ -221,6 +245,11 @@ func (s *VMService) DeleteVM(ctx context.Context, ref string) error {
 
 	if err := s.network.Teardown(ctx, vm.ID); err != nil {
 		log.Warn("network teardown failed", "id", vm.ID, "err", err)
+	}
+
+	if s.dns != nil {
+		s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
+		s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
 	}
 
 	if s.driveStore != nil {
@@ -657,6 +686,15 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 		}
 	}
 
+	var resolvConfPath string
+	if s.dns != nil {
+		path, err := s.dns.GenerateResolvConf(vm.ID, vm.DNSConfig)
+		if err != nil {
+			return fmt.Errorf("dns resolv.conf: %w", err)
+		}
+		resolvConfPath = path
+	}
+
 	if err := s.runtime.Delete(ctx, vm.ID); err != nil {
 		log.Warn("runtime delete before recreate", "id", vm.ID, "err", err)
 	}
@@ -670,6 +708,9 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 	}
 	if len(deviceInfos) > 0 {
 		createOpts = append(createOpts, domain.WithDevices(deviceInfos))
+	}
+	if resolvConfPath != "" {
+		createOpts = append(createOpts, domain.WithResolvConf(resolvConfPath))
 	}
 
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
