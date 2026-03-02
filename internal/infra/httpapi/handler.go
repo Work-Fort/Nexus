@@ -36,6 +36,13 @@ func NewHandler(svc *app.VMService) http.Handler {
 	mux.HandleFunc("POST /v1/drives/{id}/attach", handleAttachDrive(svc))
 	mux.HandleFunc("POST /v1/drives/{id}/detach", handleDetachDrive(svc))
 
+	mux.HandleFunc("POST /v1/devices", handleCreateDevice(svc))
+	mux.HandleFunc("GET /v1/devices", handleListDevices(svc))
+	mux.HandleFunc("GET /v1/devices/{id}", handleGetDevice(svc))
+	mux.HandleFunc("DELETE /v1/devices/{id}", handleDeleteDevice(svc))
+	mux.HandleFunc("POST /v1/devices/{id}/attach", handleAttachDevice(svc))
+	mux.HandleFunc("POST /v1/devices/{id}/detach", handleDetachDevice(svc))
+
 	mux.HandleFunc("POST /webhooks/sharkfin", handleSharkfinWebhook(svc))
 
 	return mux
@@ -83,6 +90,27 @@ type driveResponse struct {
 	CreatedAt string  `json:"created_at"`
 }
 
+type createDeviceRequest struct {
+	HostPath      string `json:"host_path"`
+	ContainerPath string `json:"container_path"`
+	Permissions   string `json:"permissions"`
+	GID           uint32 `json:"gid"`
+}
+
+type attachDeviceRequest struct {
+	VMID string `json:"vm_id"`
+}
+
+type deviceResponse struct {
+	ID            string  `json:"id"`
+	HostPath      string  `json:"host_path"`
+	ContainerPath string  `json:"container_path"`
+	Permissions   string  `json:"permissions"`
+	GID           uint32  `json:"gid"`
+	VMID          *string `json:"vm_id,omitempty"`
+	CreatedAt     string  `json:"created_at"`
+}
+
 type execRequest struct {
 	Cmd []string `json:"cmd"`
 }
@@ -120,6 +148,8 @@ func mapError(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrNetworkInUse):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrDriveAttached):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, domain.ErrDeviceAttached):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrValidation):
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -302,6 +332,21 @@ func driveToResponse(d *domain.Drive) driveResponse {
 	return r
 }
 
+func deviceToResponse(d *domain.Device) deviceResponse {
+	r := deviceResponse{
+		ID:            d.ID,
+		HostPath:      d.HostPath,
+		ContainerPath: d.ContainerPath,
+		Permissions:   d.Permissions,
+		GID:           d.GID,
+		CreatedAt:     d.CreatedAt.UTC().Format(timeFormatJSON),
+	}
+	if d.VMID != "" {
+		r.VMID = &d.VMID
+	}
+	return r
+}
+
 func handleCreateDrive(svc *app.VMService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
@@ -386,6 +431,100 @@ func handleDetachDrive(svc *app.VMService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if err := svc.DetachDrive(r.Context(), id); err != nil {
+			mapError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+// --- device handlers ---
+
+func handleCreateDevice(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		var req createDeviceRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+
+		d, err := svc.CreateDevice(r.Context(), domain.CreateDeviceParams{
+			HostPath:      req.HostPath,
+			ContainerPath: req.ContainerPath,
+			Permissions:   req.Permissions,
+			GID:           req.GID,
+		})
+		if err != nil {
+			mapError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, deviceToResponse(d))
+	}
+}
+
+func handleListDevices(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		devices, err := svc.ListDevices(r.Context())
+		if err != nil {
+			mapError(w, err)
+			return
+		}
+		resp := make([]deviceResponse, len(devices))
+		for i, d := range devices {
+			resp[i] = deviceToResponse(d)
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+func handleGetDevice(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		d, err := svc.GetDevice(r.Context(), id)
+		if err != nil {
+			mapError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, deviceToResponse(d))
+	}
+}
+
+func handleDeleteDevice(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := svc.DeleteDevice(r.Context(), id); err != nil {
+			mapError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleAttachDevice(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		var req attachDeviceRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+
+		if err := svc.AttachDevice(r.Context(), id, req.VMID); err != nil {
+			mapError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+func handleDetachDevice(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := svc.DetachDevice(r.Context(), id); err != nil {
 			mapError(w, err)
 			return
 		}
