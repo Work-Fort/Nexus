@@ -82,6 +82,18 @@ func (m *mockStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+func (m *mockStore) Resolve(_ context.Context, ref string) (*domain.VM, error) {
+	if vm, ok := m.vms[ref]; ok {
+		return vm, nil
+	}
+	for _, vm := range m.vms {
+		if vm.Name == ref {
+			return vm, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
 // --- mock Runtime ---
 
 type mockRuntime struct {
