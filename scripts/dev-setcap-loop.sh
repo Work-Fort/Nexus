@@ -1,10 +1,10 @@
 #!/bin/bash
-# Development script: Auto-set CAP_NET_ADMIN on the nexusd binary
+# Development script: Auto-set capabilities on Nexus binaries
 # Run with: sudo ./scripts/dev-setcap-loop.sh
 #
-# This allows nexusd to create network namespaces and configure CNI
-# without running as root. The capability is set every 2 seconds
-# if the binary exists, so it picks up rebuilds automatically.
+# Sets CAP_NET_ADMIN on nexusd (bridge/veth/iptables) and
+# CAP_SYS_ADMIN on nexus-netns (network namespace create/delete).
+# Loops every 2 seconds to pick up rebuilds automatically.
 
 set -euo pipefail
 
@@ -13,17 +13,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Handle Ctrl-C gracefully
-trap 'echo -e "\nStopping CAP_NET_ADMIN auto-setter..."; exit 0' SIGINT SIGTERM
+trap 'echo -e "\nStopping capability auto-setter..."; exit 0' SIGINT SIGTERM
 
-BINARY="$PROJECT_ROOT/nexusd"
+NEXUSD="$PROJECT_ROOT/nexusd"
+HELPER="$PROJECT_ROOT/nexus-netns"
 
-echo "Starting CAP_NET_ADMIN auto-setter (Ctrl+C to stop)"
-echo "Watching for: $BINARY"
+echo "Starting capability auto-setter (Ctrl+C to stop)"
+echo "Watching:"
+echo "  $NEXUSD    → CAP_NET_ADMIN"
+echo "  $HELPER    → CAP_SYS_ADMIN"
 
 while true; do
-    if [ -f "$BINARY" ]; then
-        setcap cap_net_admin+eip "$BINARY" 2>/dev/null || true
-        echo "[$(date +%H:%M:%S)] Set CAP_NET_ADMIN on $BINARY"
+    if [ -f "$NEXUSD" ]; then
+        setcap cap_net_admin+eip "$NEXUSD" 2>/dev/null || true
     fi
+    if [ -f "$HELPER" ]; then
+        setcap cap_sys_admin+eip "$HELPER" 2>/dev/null || true
+    fi
+    echo "[$(date +%H:%M:%S)] Capabilities set"
     sleep 2
 done

@@ -20,8 +20,9 @@ const (
 	DefaultRuntime    = "io.containerd.runc.v2"
 	DefaultNamespace  = "nexus"
 	DefaultAgentImage  = "docker.io/library/alpine:latest"
-	DefaultCNIBinDir   = "/opt/cni/bin"
-	DefaultNetSubnet   = "10.88.0.0/16"
+	DefaultCNIBinDir    = "/opt/cni/bin"
+	DefaultNetSubnet    = "10.88.0.0/16"
+	DefaultNetNSHelper  = "nexus-netns"
 )
 
 // Paths holds XDG-compliant directory paths.
@@ -90,6 +91,7 @@ func InitViper() {
 	viper.SetDefault("cni-bin-dir", DefaultCNIBinDir)
 	viper.SetDefault("network-subnet", DefaultNetSubnet)
 	viper.SetDefault("network-enabled", true)
+	viper.SetDefault("netns-helper", DefaultNetNSHelper)
 
 	viper.SetConfigName(ConfigFileName)
 	viper.SetConfigType(ConfigType)

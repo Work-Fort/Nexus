@@ -51,8 +51,9 @@ func newDaemonCmd() *cobra.Command {
 			var network domain.Network
 			if viper.GetBool("network-enabled") {
 				cniNet, err := cni.New(cni.Config{
-					BinDir: viper.GetString("cni-bin-dir"),
-					Subnet: viper.GetString("network-subnet"),
+					BinDir:    viper.GetString("cni-bin-dir"),
+					Subnet:    viper.GetString("network-subnet"),
+					HelperBin: viper.GetString("netns-helper"),
 				})
 				if err != nil {
 					return fmt.Errorf("init cni: %w", err)
@@ -123,8 +124,9 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("cni-bin-dir", config.DefaultCNIBinDir, "Directory containing CNI plugin binaries")
 	cmd.Flags().String("network-subnet", config.DefaultNetSubnet, "CIDR subnet for the VM bridge network")
 	cmd.Flags().Bool("network-enabled", true, "Enable CNI networking for VMs")
+	cmd.Flags().String("netns-helper", config.DefaultNetNSHelper, "Path to nexus-netns helper binary")
 
-	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled"} {
+	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}
