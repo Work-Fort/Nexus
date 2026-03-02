@@ -89,6 +89,7 @@ func init() {
 	}
 
 	rootCmd.AddCommand(newDaemonCmd())
+	rootCmd.AddCommand(newSetupCmd())
 
 	rootCmd.Version = Version
 	rootCmd.SilenceUsage = true
