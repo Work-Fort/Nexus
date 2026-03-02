@@ -3,17 +3,17 @@ go = "1.26.0"
 
 [tasks.build]
 description = "Build nexusd and nexus-netns (debug)"
-run = """
-go build -o nexusd .
-go build -o nexus-netns ./cmd/nexus-netns/
-"""
+run = [
+    "go build -o nexusd .",
+    "go build -o nexus-netns ./cmd/nexus-netns/",
+]
 
 [tasks."build:release"]
 description = "Build nexusd and nexus-netns (static release binaries)"
-run = """
-CGO_ENABLED=0 go build -ldflags='-s -w' -o nexusd .
-CGO_ENABLED=0 go build -ldflags='-s -w' -o nexus-netns ./cmd/nexus-netns/
-"""
+run = [
+    "CGO_ENABLED=0 go build -ldflags='-s -w' -o nexusd .",
+    "CGO_ENABLED=0 go build -ldflags='-s -w' -o nexus-netns ./cmd/nexus-netns/",
+]
 
 [tasks.test]
 description = "Run all tests"
