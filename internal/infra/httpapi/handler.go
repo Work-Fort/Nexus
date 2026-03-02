@@ -50,25 +50,32 @@ func NewHandler(svc *app.VMService) http.Handler {
 
 // --- request/response types ---
 
+type dnsConfigRequest struct {
+	Servers []string `json:"servers,omitempty"`
+	Search  []string `json:"search,omitempty"`
+}
+
 type createVMRequest struct {
-	Name    string `json:"name"`
-	Role    string `json:"role"`
-	Image   string `json:"image"`
-	Runtime string `json:"runtime"`
+	Name    string            `json:"name"`
+	Role    string            `json:"role"`
+	Image   string            `json:"image"`
+	Runtime string            `json:"runtime"`
+	DNS     *dnsConfigRequest `json:"dns,omitempty"`
 }
 
 type vmResponse struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	Role      string  `json:"role"`
-	State     string  `json:"state"`
-	Image     string  `json:"image"`
-	Runtime   string  `json:"runtime"`
-	IP        string  `json:"ip,omitempty"`
-	Gateway   string  `json:"gateway,omitempty"`
-	CreatedAt string  `json:"created_at"`
-	StartedAt *string `json:"started_at,omitempty"`
-	StoppedAt *string `json:"stopped_at,omitempty"`
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Role      string            `json:"role"`
+	State     string            `json:"state"`
+	Image     string            `json:"image"`
+	Runtime   string            `json:"runtime"`
+	IP        string            `json:"ip,omitempty"`
+	Gateway   string            `json:"gateway,omitempty"`
+	DNS       *dnsConfigRequest `json:"dns,omitempty"`
+	CreatedAt string            `json:"created_at"`
+	StartedAt *string           `json:"started_at,omitempty"`
+	StoppedAt *string           `json:"stopped_at,omitempty"`
 }
 
 type createDriveRequest struct {
@@ -175,6 +182,12 @@ func vmToResponse(vm *domain.VM) vmResponse {
 		Gateway:   vm.Gateway,
 		CreatedAt: vm.CreatedAt.UTC().Format(timeFormatJSON),
 	}
+	if vm.DNSConfig != nil {
+		r.DNS = &dnsConfigRequest{
+			Servers: vm.DNSConfig.Servers,
+			Search:  vm.DNSConfig.Search,
+		}
+	}
 	if vm.StartedAt != nil {
 		s := vm.StartedAt.UTC().Format(timeFormatJSON)
 		r.StartedAt = &s
@@ -197,11 +210,20 @@ func handleCreateVM(svc *app.VMService) http.HandlerFunc {
 			return
 		}
 
+		var dnsCfg *domain.DNSConfig
+		if req.DNS != nil {
+			dnsCfg = &domain.DNSConfig{
+				Servers: req.DNS.Servers,
+				Search:  req.DNS.Search,
+			}
+		}
+
 		vm, err := svc.CreateVM(r.Context(), domain.CreateVMParams{
-			Name:    req.Name,
-			Role:    domain.VMRole(req.Role),
-			Image:   req.Image,
-			Runtime: req.Runtime,
+			Name:      req.Name,
+			Role:      domain.VMRole(req.Role),
+			Image:     req.Image,
+			Runtime:   req.Runtime,
+			DNSConfig: dnsCfg,
 		})
 		if err != nil {
 			mapError(w, err)
