@@ -110,6 +110,19 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 		}))
 	}
 
+	if len(createCfg.Mounts) > 0 {
+		var ociMounts []specs.Mount
+		for _, m := range createCfg.Mounts {
+			ociMounts = append(ociMounts, specs.Mount{
+				Destination: m.ContainerPath,
+				Type:        "bind",
+				Source:      m.HostPath,
+				Options:     []string{"rbind", "rw"},
+			})
+		}
+		specOpts = append(specOpts, oci.WithMounts(ociMounts))
+	}
+
 	_, err = r.client.NewContainer(ctx, id,
 		client.WithImage(img),
 		client.WithNewSnapshot(id+"-snap", img),

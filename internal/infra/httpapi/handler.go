@@ -28,6 +28,14 @@ func NewHandler(svc *app.VMService) http.Handler {
 	mux.HandleFunc("POST /v1/vms/{id}/stop", handleStopVM(svc))
 	mux.HandleFunc("POST /v1/vms/{id}/exec", handleExecVM(svc))
 	mux.HandleFunc("POST /v1/network/reset", handleResetNetwork(svc))
+
+	mux.HandleFunc("POST /v1/drives", handleCreateDrive(svc))
+	mux.HandleFunc("GET /v1/drives", handleListDrives(svc))
+	mux.HandleFunc("GET /v1/drives/{id}", handleGetDrive(svc))
+	mux.HandleFunc("DELETE /v1/drives/{id}", handleDeleteDrive(svc))
+	mux.HandleFunc("POST /v1/drives/{id}/attach", handleAttachDrive(svc))
+	mux.HandleFunc("POST /v1/drives/{id}/detach", handleDetachDrive(svc))
+
 	mux.HandleFunc("POST /webhooks/sharkfin", handleSharkfinWebhook(svc))
 
 	return mux
@@ -54,6 +62,25 @@ type vmResponse struct {
 	CreatedAt string  `json:"created_at"`
 	StartedAt *string `json:"started_at,omitempty"`
 	StoppedAt *string `json:"stopped_at,omitempty"`
+}
+
+type createDriveRequest struct {
+	Name      string `json:"name"`
+	Size      string `json:"size"`
+	MountPath string `json:"mount_path"`
+}
+
+type attachDriveRequest struct {
+	VMID string `json:"vm_id"`
+}
+
+type driveResponse struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	SizeBytes uint64  `json:"size_bytes"`
+	MountPath string  `json:"mount_path"`
+	VMID      *string `json:"vm_id,omitempty"`
+	CreatedAt string  `json:"created_at"`
 }
 
 type execRequest struct {
@@ -91,6 +118,8 @@ func mapError(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrInvalidState):
 		writeError(w, http.StatusConflict, "invalid state transition")
 	case errors.Is(err, domain.ErrNetworkInUse):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, domain.ErrDriveAttached):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrValidation):
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -250,6 +279,113 @@ func handleExecVM(svc *app.VMService) http.HandlerFunc {
 func handleResetNetwork(svc *app.VMService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := svc.ResetNetwork(r.Context()); err != nil {
+			mapError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+// --- drive handlers ---
+
+func driveToResponse(d *domain.Drive) driveResponse {
+	r := driveResponse{
+		ID:        d.ID,
+		Name:      d.Name,
+		SizeBytes: d.SizeBytes,
+		MountPath: d.MountPath,
+		CreatedAt: d.CreatedAt.UTC().Format(timeFormatJSON),
+	}
+	if d.VMID != "" {
+		r.VMID = &d.VMID
+	}
+	return r
+}
+
+func handleCreateDrive(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		var req createDriveRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+
+		d, err := svc.CreateDrive(r.Context(), domain.CreateDriveParams{
+			Name:      req.Name,
+			Size:      req.Size,
+			MountPath: req.MountPath,
+		})
+		if err != nil {
+			mapError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, driveToResponse(d))
+	}
+}
+
+func handleListDrives(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		drives, err := svc.ListDrives(r.Context())
+		if err != nil {
+			mapError(w, err)
+			return
+		}
+		resp := make([]driveResponse, len(drives))
+		for i, d := range drives {
+			resp[i] = driveToResponse(d)
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+func handleGetDrive(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		d, err := svc.GetDrive(r.Context(), id)
+		if err != nil {
+			mapError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, driveToResponse(d))
+	}
+}
+
+func handleDeleteDrive(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := svc.DeleteDrive(r.Context(), id); err != nil {
+			mapError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleAttachDrive(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		var req attachDriveRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+
+		if err := svc.AttachDrive(r.Context(), id, req.VMID); err != nil {
+			mapError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+
+func handleDetachDrive(svc *app.VMService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := svc.DetachDrive(r.Context(), id); err != nil {
 			mapError(w, err)
 			return
 		}

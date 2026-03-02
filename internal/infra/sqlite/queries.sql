@@ -34,3 +34,35 @@ DELETE FROM vms WHERE id = ?;
 
 -- name: CountVMs :one
 SELECT COUNT(*) FROM vms;
+
+-- name: InsertDrive :exec
+INSERT INTO drives (id, name, size_bytes, mount_path, vm_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+-- name: GetDrive :one
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives WHERE id = ?;
+
+-- name: GetDriveByName :one
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives WHERE name = ?;
+
+-- name: ListDrives :many
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives ORDER BY created_at DESC;
+
+-- name: AttachDrive :exec
+UPDATE drives SET vm_id = ? WHERE id = ?;
+
+-- name: DetachDrive :exec
+UPDATE drives SET vm_id = NULL WHERE id = ?;
+
+-- name: DetachAllDrives :exec
+UPDATE drives SET vm_id = NULL WHERE vm_id = ?;
+
+-- name: GetDrivesByVM :many
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives WHERE vm_id = ? ORDER BY name;
+
+-- name: DeleteDrive :exec
+DELETE FROM drives WHERE id = ?;

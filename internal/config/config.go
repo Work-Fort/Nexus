@@ -24,6 +24,7 @@ const (
 	DefaultNetSubnet    = "172.16.0.0/12"
 	DefaultNetNSHelper  = "nexus-netns"
 	DefaultCNIExecBin   = "nexus-cni-exec"
+	DefaultDrivesDir    = "" // empty = auto-detect ($XDG_STATE_HOME/nexus/drives)
 )
 
 // Paths holds XDG-compliant directory paths.
@@ -94,6 +95,7 @@ func InitViper() {
 	viper.SetDefault("network-enabled", true)
 	viper.SetDefault("netns-helper", DefaultNetNSHelper)
 	viper.SetDefault("cni-exec-bin", DefaultCNIExecBin)
+	viper.SetDefault("drives-dir", DefaultDrivesDir)
 
 	viper.SetConfigName(ConfigFileName)
 	viper.SetConfigType(ConfigType)

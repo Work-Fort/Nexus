@@ -8,6 +8,15 @@ import (
 	"database/sql"
 )
 
+type Drive struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	SizeBytes int64          `json:"size_bytes"`
+	MountPath string         `json:"mount_path"`
+	VmID      sql.NullString `json:"vm_id"`
+	CreatedAt string         `json:"created_at"`
+}
+
 type Vm struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`

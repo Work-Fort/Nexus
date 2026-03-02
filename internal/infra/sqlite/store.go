@@ -178,7 +178,116 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteVM(ctx, id)
 }
 
-// --- type conversion helper ---
+// --- domain.DriveStore implementation ---
+
+func (s *Store) CreateDrive(ctx context.Context, d *domain.Drive) error {
+	var vmID sql.NullString
+	if d.VMID != "" {
+		vmID = sql.NullString{String: d.VMID, Valid: true}
+	}
+	return s.q.InsertDrive(ctx, InsertDriveParams{
+		ID:        d.ID,
+		Name:      d.Name,
+		SizeBytes: int64(d.SizeBytes),
+		MountPath: d.MountPath,
+		VmID:      vmID,
+		CreatedAt: d.CreatedAt.UTC().Format(timeFormat),
+	})
+}
+
+func (s *Store) GetDrive(ctx context.Context, id string) (*domain.Drive, error) {
+	row, err := s.q.GetDrive(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("get drive: %w", err)
+	}
+	return driveFromRow(row)
+}
+
+func (s *Store) GetDriveByName(ctx context.Context, name string) (*domain.Drive, error) {
+	row, err := s.q.GetDriveByName(ctx, name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("get drive by name: %w", err)
+	}
+	return driveFromRow(row)
+}
+
+func (s *Store) ListDrives(ctx context.Context) ([]*domain.Drive, error) {
+	rows, err := s.q.ListDrives(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list drives: %w", err)
+	}
+	drives := make([]*domain.Drive, len(rows))
+	for i, r := range rows {
+		d, err := driveFromRow(r)
+		if err != nil {
+			return nil, err
+		}
+		drives[i] = d
+	}
+	return drives, nil
+}
+
+func (s *Store) AttachDrive(ctx context.Context, driveID, vmID string) error {
+	return s.q.AttachDrive(ctx, AttachDriveParams{
+		VmID: sql.NullString{String: vmID, Valid: true},
+		ID:   driveID,
+	})
+}
+
+func (s *Store) DetachDrive(ctx context.Context, driveID string) error {
+	return s.q.DetachDrive(ctx, driveID)
+}
+
+func (s *Store) DetachAllDrives(ctx context.Context, vmID string) error {
+	return s.q.DetachAllDrives(ctx, sql.NullString{String: vmID, Valid: true})
+}
+
+func (s *Store) GetDrivesByVM(ctx context.Context, vmID string) ([]*domain.Drive, error) {
+	rows, err := s.q.GetDrivesByVM(ctx, sql.NullString{String: vmID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("get drives by vm: %w", err)
+	}
+	drives := make([]*domain.Drive, len(rows))
+	for i, r := range rows {
+		d, err := driveFromRow(r)
+		if err != nil {
+			return nil, err
+		}
+		drives[i] = d
+	}
+	return drives, nil
+}
+
+func (s *Store) DeleteDrive(ctx context.Context, id string) error {
+	return s.q.DeleteDrive(ctx, id)
+}
+
+// --- type conversion helpers ---
+
+// driveFromRow converts a sqlc-generated Drive row into a domain.Drive.
+func driveFromRow(row Drive) (*domain.Drive, error) {
+	d := &domain.Drive{
+		ID:        row.ID,
+		Name:      row.Name,
+		SizeBytes: uint64(row.SizeBytes),
+		MountPath: row.MountPath,
+	}
+	if row.VmID.Valid {
+		d.VMID = row.VmID.String
+	}
+	var err error
+	d.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse created_at for drive %s: %w", row.ID, err)
+	}
+	return d, nil
+}
 
 // vmFromRow converts a sqlc-generated Vm row into a domain.VM.
 func vmFromRow(row Vm) (*domain.VM, error) {

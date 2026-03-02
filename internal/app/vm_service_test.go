@@ -112,6 +112,131 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 	return &domain.ExecResult{ExitCode: 0, Stdout: "ok\n"}, nil
 }
 
+// --- mock DriveStore ---
+
+type mockDriveStore struct {
+	drives map[string]*domain.Drive
+}
+
+func newMockDriveStore() *mockDriveStore {
+	return &mockDriveStore{drives: make(map[string]*domain.Drive)}
+}
+
+func (m *mockDriveStore) CreateDrive(_ context.Context, d *domain.Drive) error {
+	if _, ok := m.drives[d.ID]; ok {
+		return domain.ErrAlreadyExists
+	}
+	for _, existing := range m.drives {
+		if existing.Name == d.Name {
+			return domain.ErrAlreadyExists
+		}
+	}
+	m.drives[d.ID] = d
+	return nil
+}
+
+func (m *mockDriveStore) GetDrive(_ context.Context, id string) (*domain.Drive, error) {
+	d, ok := m.drives[id]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	return d, nil
+}
+
+func (m *mockDriveStore) GetDriveByName(_ context.Context, name string) (*domain.Drive, error) {
+	for _, d := range m.drives {
+		if d.Name == name {
+			return d, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (m *mockDriveStore) ListDrives(_ context.Context) ([]*domain.Drive, error) {
+	var result []*domain.Drive
+	for _, d := range m.drives {
+		result = append(result, d)
+	}
+	return result, nil
+}
+
+func (m *mockDriveStore) AttachDrive(_ context.Context, driveID, vmID string) error {
+	d, ok := m.drives[driveID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	d.VMID = vmID
+	return nil
+}
+
+func (m *mockDriveStore) DetachDrive(_ context.Context, driveID string) error {
+	d, ok := m.drives[driveID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	d.VMID = ""
+	return nil
+}
+
+func (m *mockDriveStore) DetachAllDrives(_ context.Context, vmID string) error {
+	for _, d := range m.drives {
+		if d.VMID == vmID {
+			d.VMID = ""
+		}
+	}
+	return nil
+}
+
+func (m *mockDriveStore) GetDrivesByVM(_ context.Context, vmID string) ([]*domain.Drive, error) {
+	var result []*domain.Drive
+	for _, d := range m.drives {
+		if d.VMID == vmID {
+			result = append(result, d)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockDriveStore) DeleteDrive(_ context.Context, id string) error {
+	delete(m.drives, id)
+	return nil
+}
+
+// --- mock Storage ---
+
+type mockStorage struct {
+	volumes map[string]bool
+}
+
+func newMockStorage() *mockStorage {
+	return &mockStorage{volumes: make(map[string]bool)}
+}
+
+func (m *mockStorage) CreateVolume(_ context.Context, name string, _ uint64) (string, error) {
+	m.volumes[name] = true
+	return "/mock/drives/" + name, nil
+}
+
+func (m *mockStorage) DeleteVolume(_ context.Context, name string) error {
+	delete(m.volumes, name)
+	return nil
+}
+
+func (m *mockStorage) VolumePath(name string) string {
+	return "/mock/drives/" + name
+}
+
+// --- helper ---
+
+func newSvcWithDrives() (*app.VMService, *mockStore, *mockRuntime, *mockDriveStore, *mockStorage) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	ds := newMockDriveStore()
+	st := newMockStorage()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{}, app.WithStorage(ds, st))
+	return svc, store, rt, ds, st
+}
+
 // --- tests ---
 
 func TestCreateVM(t *testing.T) {
@@ -382,5 +507,203 @@ func TestHandleWebhookNoopIfRunning(t *testing.T) {
 	got, _ := store.Get(context.Background(), vm.ID)
 	if got.State != domain.VMStateRunning {
 		t.Errorf("state = %q, want running", got.State)
+	}
+}
+
+// --- drive tests ---
+
+func TestCreateDrive(t *testing.T) {
+	svc, _, _, ds, st := newSvcWithDrives()
+
+	d, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "test-data", Size: "1G", MountPath: "/data",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if d.Name != "test-data" {
+		t.Errorf("name = %q, want %q", d.Name, "test-data")
+	}
+	if d.SizeBytes != 1_000_000_000 {
+		t.Errorf("size = %d, want 1000000000", d.SizeBytes)
+	}
+	if d.MountPath != "/data" {
+		t.Errorf("mount_path = %q, want /data", d.MountPath)
+	}
+	if _, ok := ds.drives[d.ID]; !ok {
+		t.Error("drive not in store")
+	}
+	if !st.volumes[d.Name] {
+		t.Error("volume not created in storage")
+	}
+}
+
+func TestCreateDriveValidation(t *testing.T) {
+	svc, _, _, _, _ := newSvcWithDrives()
+
+	tests := []struct {
+		name   string
+		params domain.CreateDriveParams
+	}{
+		{"empty name", domain.CreateDriveParams{Size: "1G", MountPath: "/data"}},
+		{"empty size", domain.CreateDriveParams{Name: "d", MountPath: "/data"}},
+		{"empty mount_path", domain.CreateDriveParams{Name: "d", Size: "1G"}},
+		{"invalid size", domain.CreateDriveParams{Name: "d", Size: "abc", MountPath: "/data"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.CreateDrive(context.Background(), tt.params)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+func TestDeleteDrive(t *testing.T) {
+	svc, _, _, ds, st := newSvcWithDrives()
+
+	d, _ := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "delete-me", Size: "500M", MountPath: "/data",
+	})
+
+	if err := svc.DeleteDrive(context.Background(), d.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, ok := ds.drives[d.ID]; ok {
+		t.Error("drive still in store")
+	}
+	if st.volumes[d.Name] {
+		t.Error("volume still in storage")
+	}
+}
+
+func TestDeleteDriveAttached(t *testing.T) {
+	svc, _, _, _, _ := newSvcWithDrives()
+
+	d, _ := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "attached", Size: "1G", MountPath: "/data",
+	})
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "vm1", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	svc.AttachDrive(context.Background(), d.ID, vm.ID)
+
+	err := svc.DeleteDrive(context.Background(), d.ID)
+	if !errors.Is(err, domain.ErrDriveAttached) {
+		t.Errorf("err = %v, want ErrDriveAttached", err)
+	}
+}
+
+func TestAttachDetachDrive(t *testing.T) {
+	svc, store, rt, ds, _ := newSvcWithDrives()
+
+	d, _ := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "workspace", Size: "2G", MountPath: "/workspace",
+	})
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "worker", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+
+	// Attach
+	if err := svc.AttachDrive(context.Background(), d.ID, vm.ID); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	got, _ := ds.GetDrive(context.Background(), d.ID)
+	if got.VMID != vm.ID {
+		t.Errorf("drive vm_id = %q, want %q", got.VMID, vm.ID)
+	}
+	// Container should be recreated
+	if _, ok := rt.containers[vm.ID]; !ok {
+		t.Error("container not recreated after attach")
+	}
+
+	// VM state should still be created (not started)
+	vmGot, _ := store.Get(context.Background(), vm.ID)
+	if vmGot.State != domain.VMStateCreated {
+		t.Errorf("vm state = %q, want created", vmGot.State)
+	}
+
+	// Detach
+	if err := svc.DetachDrive(context.Background(), d.ID); err != nil {
+		t.Fatalf("detach: %v", err)
+	}
+	got, _ = ds.GetDrive(context.Background(), d.ID)
+	if got.VMID != "" {
+		t.Errorf("drive vm_id = %q, want empty", got.VMID)
+	}
+}
+
+func TestAttachDriveRunningVMFails(t *testing.T) {
+	svc, _, _, _, _ := newSvcWithDrives()
+
+	d, _ := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "data", Size: "1G", MountPath: "/data",
+	})
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "running-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	svc.StartVM(context.Background(), vm.ID)
+
+	err := svc.AttachDrive(context.Background(), d.ID, vm.ID)
+	if !errors.Is(err, domain.ErrInvalidState) {
+		t.Errorf("err = %v, want ErrInvalidState", err)
+	}
+}
+
+func TestDeleteVMAutoDetachesDrives(t *testing.T) {
+	svc, _, _, ds, _ := newSvcWithDrives()
+
+	d, _ := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "persistent", Size: "1G", MountPath: "/data",
+	})
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "ephemeral-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	svc.AttachDrive(context.Background(), d.ID, vm.ID)
+
+	// Delete the VM
+	if err := svc.DeleteVM(context.Background(), vm.ID); err != nil {
+		t.Fatalf("delete vm: %v", err)
+	}
+
+	// Drive should still exist but be detached
+	got, err := ds.GetDrive(context.Background(), d.ID)
+	if err != nil {
+		t.Fatalf("get drive after vm delete: %v", err)
+	}
+	if got.VMID != "" {
+		t.Errorf("drive vm_id = %q, want empty after VM delete", got.VMID)
+	}
+}
+
+func TestListDrives(t *testing.T) {
+	svc, _, _, _, _ := newSvcWithDrives()
+
+	svc.CreateDrive(context.Background(), domain.CreateDriveParams{Name: "d1", Size: "1G", MountPath: "/a"})
+	svc.CreateDrive(context.Background(), domain.CreateDriveParams{Name: "d2", Size: "2G", MountPath: "/b"})
+
+	drives, err := svc.ListDrives(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(drives) != 2 {
+		t.Errorf("count = %d, want 2", len(drives))
+	}
+}
+
+func TestGetDrive(t *testing.T) {
+	svc, _, _, _, _ := newSvcWithDrives()
+
+	created, _ := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "get-me", Size: "500Mi", MountPath: "/data",
+	})
+
+	got, err := svc.GetDrive(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Name != "get-me" {
+		t.Errorf("name = %q, want %q", got.Name, "get-me")
 	}
 }

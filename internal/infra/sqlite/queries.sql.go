@@ -10,6 +10,20 @@ import (
 	"database/sql"
 )
 
+const attachDrive = `-- name: AttachDrive :exec
+UPDATE drives SET vm_id = ? WHERE id = ?
+`
+
+type AttachDriveParams struct {
+	VmID sql.NullString `json:"vm_id"`
+	ID   string         `json:"id"`
+}
+
+func (q *Queries) AttachDrive(ctx context.Context, arg AttachDriveParams) error {
+	_, err := q.db.ExecContext(ctx, attachDrive, arg.VmID, arg.ID)
+	return err
+}
+
 const countVMs = `-- name: CountVMs :one
 SELECT COUNT(*) FROM vms
 `
@@ -21,6 +35,15 @@ func (q *Queries) CountVMs(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const deleteDrive = `-- name: DeleteDrive :exec
+DELETE FROM drives WHERE id = ?
+`
+
+func (q *Queries) DeleteDrive(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteDrive, id)
+	return err
+}
+
 const deleteVM = `-- name: DeleteVM :exec
 DELETE FROM vms WHERE id = ?
 `
@@ -28,6 +51,97 @@ DELETE FROM vms WHERE id = ?
 func (q *Queries) DeleteVM(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, deleteVM, id)
 	return err
+}
+
+const detachAllDrives = `-- name: DetachAllDrives :exec
+UPDATE drives SET vm_id = NULL WHERE vm_id = ?
+`
+
+func (q *Queries) DetachAllDrives(ctx context.Context, vmID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, detachAllDrives, vmID)
+	return err
+}
+
+const detachDrive = `-- name: DetachDrive :exec
+UPDATE drives SET vm_id = NULL WHERE id = ?
+`
+
+func (q *Queries) DetachDrive(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, detachDrive, id)
+	return err
+}
+
+const getDrive = `-- name: GetDrive :one
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives WHERE id = ?
+`
+
+func (q *Queries) GetDrive(ctx context.Context, id string) (Drive, error) {
+	row := q.db.QueryRowContext(ctx, getDrive, id)
+	var i Drive
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.SizeBytes,
+		&i.MountPath,
+		&i.VmID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getDriveByName = `-- name: GetDriveByName :one
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives WHERE name = ?
+`
+
+func (q *Queries) GetDriveByName(ctx context.Context, name string) (Drive, error) {
+	row := q.db.QueryRowContext(ctx, getDriveByName, name)
+	var i Drive
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.SizeBytes,
+		&i.MountPath,
+		&i.VmID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getDrivesByVM = `-- name: GetDrivesByVM :many
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives WHERE vm_id = ? ORDER BY name
+`
+
+func (q *Queries) GetDrivesByVM(ctx context.Context, vmID sql.NullString) ([]Drive, error) {
+	rows, err := q.db.QueryContext(ctx, getDrivesByVM, vmID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Drive{}
+	for rows.Next() {
+		var i Drive
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.SizeBytes,
+			&i.MountPath,
+			&i.VmID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getVM = `-- name: GetVM :one
@@ -80,6 +194,32 @@ func (q *Queries) GetVMByName(ctx context.Context, name string) (Vm, error) {
 	return i, err
 }
 
+const insertDrive = `-- name: InsertDrive :exec
+INSERT INTO drives (id, name, size_bytes, mount_path, vm_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type InsertDriveParams struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	SizeBytes int64          `json:"size_bytes"`
+	MountPath string         `json:"mount_path"`
+	VmID      sql.NullString `json:"vm_id"`
+	CreatedAt string         `json:"created_at"`
+}
+
+func (q *Queries) InsertDrive(ctx context.Context, arg InsertDriveParams) error {
+	_, err := q.db.ExecContext(ctx, insertDrive,
+		arg.ID,
+		arg.Name,
+		arg.SizeBytes,
+		arg.MountPath,
+		arg.VmID,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const insertVM = `-- name: InsertVM :exec
 
 INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path)
@@ -114,6 +254,41 @@ func (q *Queries) InsertVM(ctx context.Context, arg InsertVMParams) error {
 		arg.NetnsPath,
 	)
 	return err
+}
+
+const listDrives = `-- name: ListDrives :many
+SELECT id, name, size_bytes, mount_path, vm_id, created_at
+FROM drives ORDER BY created_at DESC
+`
+
+func (q *Queries) ListDrives(ctx context.Context) ([]Drive, error) {
+	rows, err := q.db.QueryContext(ctx, listDrives)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Drive{}
+	for rows.Next() {
+		var i Drive
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.SizeBytes,
+			&i.MountPath,
+			&i.VmID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listVMs = `-- name: ListVMs :many
