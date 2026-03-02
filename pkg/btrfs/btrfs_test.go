@@ -347,6 +347,30 @@ func TestCreateSnapshotAlreadyExists(t *testing.T) {
 	}
 }
 
+func TestGetQuotaUsageUnprivileged(t *testing.T) {
+	dir := testDir(t)
+	sub := filepath.Join(dir, "sysfs-test")
+	if err := CreateSubvolume(sub); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(sub) })
+
+	usage, err := GetQuotaUsage(sub)
+	if err != nil {
+		if errors.Is(err, ErrQuotaNotEnabled) {
+			t.Skip("quotas not enabled on test filesystem")
+		}
+		t.Fatalf("GetQuotaUsage: %v", err)
+	}
+
+	// No limit set yet.
+	if usage.MaxReferenced != 0 {
+		t.Errorf("expected MaxReferenced=0 (unlimited), got %d", usage.MaxReferenced)
+	}
+	t.Logf("usage: referenced=%d exclusive=%d max_ref=%d max_excl=%d",
+		usage.Referenced, usage.Exclusive, usage.MaxReferenced, usage.MaxExclusive)
+}
+
 func TestEnableQuota(t *testing.T) {
 	requireQuotaCap(t)
 	dir := testDir(t)

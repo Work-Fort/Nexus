@@ -20,7 +20,6 @@ const (
 const (
 	iocQuotaCtl    = 0xC0109428 // _IOWR(0x94, 40, btrfs_ioctl_quota_ctl_args)
 	iocQgroupLimit = 0x8030942B // _IOR(0x94, 43, btrfs_ioctl_qgroup_limit_args)
-	iocTreeSearch  = 0xD0009411 // _IOWR(0x94, 17, btrfs_ioctl_search_args)
 	iocInoLookup   = 0xD0009412 // _IOWR(0x94, 18, btrfs_ioctl_ino_lookup_args)
 )
 
@@ -35,9 +34,6 @@ const (
 const (
 	quotaCtlEnable     = uint64(1)       // BTRFS_QUOTA_CTL_ENABLE
 	qgroupLimitMaxRfer = uint64(1 << 0)  // BTRFS_QGROUP_LIMIT_MAX_RFER
-	quotaTreeObjectid  = uint64(8)       // BTRFS_QUOTA_TREE_OBJECTID
-	qgroupInfoKey      = uint32(242)     // BTRFS_QGROUP_INFO_KEY
-	qgroupLimitKey     = uint32(244)     // BTRFS_QGROUP_LIMIT_KEY
 )
 
 // ioctlVolArgsV2 maps to struct btrfs_ioctl_vol_args_v2 (4096 bytes).
@@ -88,40 +84,6 @@ type ioctlQgroupLimitArgs struct {
 	Lim      qgroupLimit
 }
 
-// searchKey maps to struct btrfs_ioctl_search_key (104 bytes).
-type searchKey struct {
-	TreeID      uint64
-	MinObjectid uint64
-	MaxObjectid uint64
-	MinOffset   uint64
-	MaxOffset   uint64
-	MinTransid  uint64
-	MaxTransid  uint64
-	MinType     uint32
-	MaxType     uint32
-	NrItems     uint32
-	Unused      uint32
-	Unused1     uint64
-	Unused2     uint64
-	Unused3     uint64
-	Unused4     uint64
-}
-
-// ioctlSearchArgs maps to struct btrfs_ioctl_search_args (4096 bytes).
-type ioctlSearchArgs struct {
-	Key searchKey
-	Buf [3992]byte
-}
-
-// searchHeader maps to struct btrfs_ioctl_search_header (32 bytes).
-type searchHeader struct {
-	Transid  uint64
-	Objectid uint64
-	Offset   uint64
-	Type     uint32
-	Len      uint32
-}
-
 // ioctlInoLookupArgs maps to struct btrfs_ioctl_ino_lookup_args (4096 bytes).
 type ioctlInoLookupArgs struct {
 	Treeid   uint64
@@ -134,7 +96,6 @@ var _ [1024]byte = [unsafe.Sizeof(ioctlFsInfoArgs{})]byte{}
 var _ [4096]byte = [unsafe.Sizeof(ioctlVolArgsV2{})]byte{}
 var _ [16]byte = [unsafe.Sizeof(ioctlQuotaCtlArgs{})]byte{}
 var _ [48]byte = [unsafe.Sizeof(ioctlQgroupLimitArgs{})]byte{}
-var _ [4096]byte = [unsafe.Sizeof(ioctlSearchArgs{})]byte{}
 var _ [4096]byte = [unsafe.Sizeof(ioctlInoLookupArgs{})]byte{}
 
 // ioctl performs a raw ioctl syscall.
