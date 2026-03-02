@@ -1006,3 +1006,58 @@ func TestDetachDeviceAlreadyDetached(t *testing.T) {
 		t.Fatalf("detach unattached: %v", err)
 	}
 }
+
+func TestAttachDeviceAlreadyAttached(t *testing.T) {
+	svc, _, _, _ := newSvcWithDevices()
+
+	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
+		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+	})
+	vmA, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "vm-a", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	vmB, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "vm-b", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	svc.AttachDevice(context.Background(), d.ID, vmA.ID)
+
+	err := svc.AttachDevice(context.Background(), d.ID, vmB.ID)
+	if !errors.Is(err, domain.ErrDeviceAttached) {
+		t.Errorf("err = %v, want ErrDeviceAttached", err)
+	}
+}
+
+func TestDetachDeviceRunningVMFails(t *testing.T) {
+	svc, _, _, _ := newSvcWithDevices()
+
+	d, _ := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
+		HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
+	})
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "running-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	svc.AttachDevice(context.Background(), d.ID, vm.ID)
+	svc.StartVM(context.Background(), vm.ID)
+
+	err := svc.DetachDevice(context.Background(), d.ID)
+	if !errors.Is(err, domain.ErrInvalidState) {
+		t.Errorf("err = %v, want ErrInvalidState", err)
+	}
+}
+
+func TestCreateDeviceWithGID(t *testing.T) {
+	svc, _, _, _ := newSvcWithDevices()
+
+	d, err := svc.CreateDevice(context.Background(), domain.CreateDeviceParams{
+		HostPath:      "/dev/dri/renderD128",
+		ContainerPath: "/dev/dri/renderD128",
+		Permissions:   "rw",
+		GID:           44,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if d.GID != 44 {
+		t.Errorf("gid = %d, want 44", d.GID)
+	}
+}
