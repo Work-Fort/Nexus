@@ -9,38 +9,109 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	gocni "github.com/containerd/go-cni"
+	"github.com/containernetworking/cni/libcni"
+	"github.com/containernetworking/cni/pkg/invoke"
+	types100 "github.com/containernetworking/cni/pkg/types/100"
+	"github.com/containernetworking/cni/pkg/version"
 
 	"github.com/Work-Fort/Nexus/internal/domain"
 )
 
-const netnsRunDir = "/var/run/netns"
-
 // Config holds CNI adapter configuration.
 type Config struct {
-	BinDir    string // directory containing CNI plugin binaries
-	Subnet    string // CIDR for the bridge network (e.g. "10.88.0.0/16")
-	HelperBin string // path to the nexus-netns helper binary
+	BinDir     string // directory containing real CNI plugin binaries
+	Subnet     string // CIDR for the bridge network (e.g. "10.88.0.0/16")
+	HelperBin  string // path to the nexus-netns helper binary
+	CNIExecBin string // path to the nexus-cni-exec wrapper binary
+}
+
+// netnsDir returns the directory for persistent network namespace bind-mounts.
+// Uses XDG_RUNTIME_DIR (per-user tmpfs), falling back to /tmp/nexus-netns-<uid>.
+func netnsDir() string {
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return filepath.Join(dir, "nexus", "netns")
+	}
+	return fmt.Sprintf("/tmp/nexus-netns-%d", os.Getuid())
 }
 
 // Network implements domain.Network using CNI plugins.
 type Network struct {
-	cni       gocni.CNI
-	confDir   string // temp dir where we write the CNI config
-	netnsDir  string
-	helperBin string
+	cni        *libcni.CNIConfig
+	confList   *libcni.NetworkConfigList
+	confDir    string // temp dir where we write the CNI config
+	wrapperDir string // temp dir with symlinks to nexus-cni-exec
+	netnsDir   string
+	helperBin  string
 }
 
-// New creates a CNI-backed Network adapter. It writes a bridge CNI config
-// to a temporary directory and initializes the go-cni library.
+// New creates a CNI-backed Network adapter. It creates a wrapper directory
+// containing symlinks named after each CNI plugin (e.g., "bridge") that
+// point to the nexus-cni-exec helper binary. When a plugin is invoked,
+// it follows the symlink to nexus-cni-exec, which raises the necessary
+// capabilities and execs the real plugin from the system CNI bin directory.
+//
+// We use containernetworking/cni/libcni directly (rather than go-cni)
+// because go-cni hardcodes its result cache to /var/lib/cni, which
+// requires root. libcni's NewCNIConfigWithCacheDir lets us use a
+// user-writable location.
 func New(cfg Config) (*Network, error) {
 	if _, err := exec.LookPath(cfg.HelperBin); err != nil {
 		return nil, fmt.Errorf("netns helper not found at %q: %w", cfg.HelperBin, err)
 	}
 
+	cniExecPath, err := exec.LookPath(cfg.CNIExecBin)
+	if err != nil {
+		return nil, fmt.Errorf("cni exec helper not found at %q: %w", cfg.CNIExecBin, err)
+	}
+	cniExecAbs, err := filepath.Abs(cniExecPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve cni exec path: %w", err)
+	}
+
+	// Tell nexus-cni-exec where the real plugins live.
+	os.Setenv("NEXUS_CNI_REAL_BIN_DIR", cfg.BinDir)
+
+	nsDir := netnsDir()
+	if err := os.MkdirAll(nsDir, 0700); err != nil {
+		return nil, fmt.Errorf("create netns dir %s: %w", nsDir, err)
+	}
+
+	// Create wrapper directory with symlinks for each plugin found in
+	// the real bin dir. Each symlink points to nexus-cni-exec, which
+	// determines the real plugin name from argv[0].
+	wrapperDir, err := os.MkdirTemp("", "nexus-cni-wrap-*")
+	if err != nil {
+		return nil, fmt.Errorf("create cni wrapper dir: %w", err)
+	}
+
+	entries, err := os.ReadDir(cfg.BinDir)
+	if err != nil {
+		os.RemoveAll(wrapperDir)
+		return nil, fmt.Errorf("read cni bin dir %s: %w", cfg.BinDir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if err := os.Symlink(cniExecAbs, filepath.Join(wrapperDir, e.Name())); err != nil {
+			os.RemoveAll(wrapperDir)
+			return nil, fmt.Errorf("create cni wrapper symlink %s: %w", e.Name(), err)
+		}
+	}
+
 	confDir, err := os.MkdirTemp("", "nexus-cni-*")
 	if err != nil {
+		os.RemoveAll(wrapperDir)
 		return nil, fmt.Errorf("create cni conf dir: %w", err)
+	}
+
+	// host-local IPAM stores allocations in dataDir (default /var/lib/cni,
+	// which requires root). Use a user-writable directory instead.
+	ipamDataDir := filepath.Join(nsDir, ".ipam")
+	if err := os.MkdirAll(ipamDataDir, 0700); err != nil {
+		os.RemoveAll(confDir)
+		os.RemoveAll(wrapperDir)
+		return nil, fmt.Errorf("create ipam data dir: %w", err)
 	}
 
 	confJSON := fmt.Sprintf(`{
@@ -54,37 +125,57 @@ func New(cfg Config) (*Network, error) {
       "ipMasq": true,
       "ipam": {
         "type": "host-local",
-        "subnet": %q
+        "subnet": %q,
+        "dataDir": %q
       }
     }
   ]
-}`, cfg.Subnet)
+}`, cfg.Subnet, ipamDataDir)
 
 	confPath := filepath.Join(confDir, "10-nexus.conflist")
 	if err := os.WriteFile(confPath, []byte(confJSON), 0644); err != nil {
 		os.RemoveAll(confDir)
+		os.RemoveAll(wrapperDir)
 		return nil, fmt.Errorf("write cni config: %w", err)
 	}
 
-	cniLib, err := gocni.New(
-		gocni.WithPluginDir([]string{cfg.BinDir}),
-		gocni.WithConfListBytes([]byte(confJSON)),
-	)
+	confList, err := libcni.ConfListFromBytes([]byte(confJSON))
 	if err != nil {
 		os.RemoveAll(confDir)
-		return nil, fmt.Errorf("init cni: %w", err)
+		os.RemoveAll(wrapperDir)
+		return nil, fmt.Errorf("parse cni config: %w", err)
 	}
 
+	// Use a user-writable cache dir instead of the default /var/lib/cni.
+	cacheDir := filepath.Join(nsDir, ".cache")
+	if err := os.MkdirAll(cacheDir, 0700); err != nil {
+		os.RemoveAll(confDir)
+		os.RemoveAll(wrapperDir)
+		return nil, fmt.Errorf("create cni cache dir: %w", err)
+	}
+
+	cniConfig := libcni.NewCNIConfigWithCacheDir(
+		[]string{wrapperDir},
+		cacheDir,
+		&invoke.DefaultExec{
+			RawExec:       &invoke.RawExec{Stderr: os.Stderr},
+			PluginDecoder: version.PluginDecoder{},
+		},
+	)
+
 	return &Network{
-		cni:       cniLib,
-		confDir:   confDir,
-		netnsDir:  netnsRunDir,
-		helperBin: cfg.HelperBin,
+		cni:        cniConfig,
+		confList:   confList,
+		confDir:    confDir,
+		wrapperDir: wrapperDir,
+		netnsDir:   nsDir,
+		helperBin:  cfg.HelperBin,
 	}, nil
 }
 
-// Close removes the temporary CNI config directory.
+// Close removes temporary directories.
 func (n *Network) Close() error {
+	os.RemoveAll(n.wrapperDir)
 	return os.RemoveAll(n.confDir)
 }
 
@@ -98,16 +189,24 @@ func (n *Network) Setup(ctx context.Context, id string) (*domain.NetworkInfo, er
 		return nil, fmt.Errorf("create netns %s: %w: %s", id, err, out)
 	}
 
-	result, err := n.cni.Setup(ctx, id, nsPath)
+	rt := &libcni.RuntimeConf{
+		ContainerID: id,
+		NetNS:       nsPath,
+		IfName:      "eth0",
+	}
+
+	result, err := n.cni.AddNetworkList(ctx, n.confList, rt)
 	if err != nil {
 		exec.CommandContext(ctx, n.helperBin, "delete", nsPath).Run() //nolint:errcheck
 		return nil, fmt.Errorf("cni setup %s: %w", id, err)
 	}
 
 	info := &domain.NetworkInfo{NetNSPath: nsPath}
-	if iface, ok := result.Interfaces["eth0"]; ok && len(iface.IPConfigs) > 0 {
-		info.IP = iface.IPConfigs[0].IP.String()
-		info.Gateway = iface.IPConfigs[0].Gateway.String()
+	if r, err := types100.GetResult(result); err == nil && len(r.IPs) > 0 {
+		info.IP = r.IPs[0].Address.IP.String()
+		if r.IPs[0].Gateway != nil {
+			info.Gateway = r.IPs[0].Gateway.String()
+		}
 	}
 	return info, nil
 }
@@ -116,7 +215,13 @@ func (n *Network) Setup(ctx context.Context, id string) (*domain.NetworkInfo, er
 func (n *Network) Teardown(ctx context.Context, id string) error {
 	nsPath := filepath.Join(n.netnsDir, id)
 
-	if err := n.cni.Remove(ctx, id, nsPath); err != nil {
+	rt := &libcni.RuntimeConf{
+		ContainerID: id,
+		NetNS:       nsPath,
+		IfName:      "eth0",
+	}
+
+	if err := n.cni.DelNetworkList(ctx, n.confList, rt); err != nil {
 		return fmt.Errorf("cni remove %s: %w", id, err)
 	}
 

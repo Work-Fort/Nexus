@@ -24,7 +24,7 @@ echo "Watching for btrfs test binary..."
 while true; do
     for binary in "${BINARY_PATHS[@]}"; do
         if [ -f "$binary" ]; then
-            setcap cap_sys_admin+eip "$binary" 2>/dev/null || true
+            setcap cap_sys_admin+ep "$binary" 2>/dev/null || true
             echo "[$(date +%H:%M:%S)] Set CAP_SYS_ADMIN on $binary"
         fi
     done

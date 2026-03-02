@@ -13,7 +13,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 
 	"golang.org/x/sys/unix"
@@ -45,10 +44,6 @@ func main() {
 }
 
 func createNetNS(nsPath string) error {
-	if err := os.MkdirAll(filepath.Dir(nsPath), 0755); err != nil {
-		return fmt.Errorf("create netns dir: %w", err)
-	}
-
 	f, err := os.Create(nsPath)
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)

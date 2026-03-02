@@ -1,11 +1,4 @@
-# Build output
-/nexusd
-/nexus-netns
 *.exe
-
-# Database
 *.db
-
-# OS/editor
 .DS_Store
 *.swp

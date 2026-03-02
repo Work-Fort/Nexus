@@ -2,17 +2,19 @@
 go = "1.26.0"
 
 [tasks.build]
-description = "Build nexusd and nexus-netns (debug)"
+description = "Build all binaries (debug)"
 run = [
-    "go build -o nexusd .",
-    "go build -o nexus-netns ./cmd/nexus-netns/",
+    "go build -o build/nexusd .",
+    "go build -o build/nexus-netns ./cmd/nexus-netns/",
+    "go build -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
 ]
 
 [tasks."build:release"]
-description = "Build nexusd and nexus-netns (static release binaries)"
+description = "Build all binaries (static release)"
 run = [
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o nexusd .",
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o nexus-netns ./cmd/nexus-netns/",
+    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexusd .",
+    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-netns ./cmd/nexus-netns/",
+    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
 ]
 
 [tasks.test]
@@ -29,7 +31,8 @@ run = "go test -v ./pkg/btrfs/"
 
 [tasks.run]
 description = "Run nexusd daemon"
-run = "go run . daemon"
+env = { PATH = "{{cwd}}/build:{{env.PATH}}" }
+run = "build/nexusd daemon"
 
 [tasks.check]
 description = "Vet and lint"
@@ -41,14 +44,14 @@ run = "sqlc generate"
 
 [tasks.clean]
 description = "Remove build artifacts"
-run = "rm -f nexusd nexus-netns"
+run = "rm -f build/nexusd build/nexus-netns build/nexus-cni-exec"
 
 [tasks."install:local"]
 description = "Install nexusd to ~/.local/bin + systemd unit"
 depends = ["build:release"]
 run = """
 mkdir -p ~/.local/bin
-cp nexusd ~/.local/bin/
+cp build/nexusd ~/.local/bin/
 mkdir -p ~/.config/systemd/user
 cp dist/nexus.service ~/.config/systemd/user/
 systemctl --user daemon-reload
