@@ -13,7 +13,9 @@ The current webhook system is tightly coupled to Sharkfin:
 
 Nexus is about to be called by multiple services (Sharkfin, Combine, cloud
 provisioner). Each is a regular API client — Nexus doesn't need to know or care
-who's calling.
+who's calling. The existing CRUD + start/stop API is already sufficient for all
+callers. Sharkfin checks agent presence and calls `POST /v1/vms/{id}/start`
+when an agent is offline — no special endpoint needed.
 
 ## Design
 
@@ -28,34 +30,7 @@ Remove entirely:
 - `POST /webhooks/sharkfin` route from handler.go
 - `webhook-url` viper default from `internal/config/config.go`
 
-### 2. Add EnsureVM endpoint
-
-New endpoint: `POST /v1/vms/ensure`
-
-Request:
-
-```json
-{
-  "name": "deploy-bot",
-  "image": "docker.io/library/alpine:latest"
-}
-```
-
-- `name` — required, used for lookup and creation
-- `image` — optional, defaults to `config.DefaultImage`
-
-Response: `200 OK` with the VM object (same shape as `GET /v1/vms/{id}`),
-regardless of whether it was just created, just started, or already running.
-
-Logic (new `EnsureVM` method on VMService):
-
-1. Resolve VM by name
-2. If not found, create with given params (role defaults to `agent`)
-3. If stopped/created, start it
-4. If already running, no-op
-5. Return the VM
-
-### 3. Migrate handlers to huma v2
+### 2. Migrate handlers to huma v2
 
 Replace all `func(w, r)` handlers with huma's typed handler signature:
 
@@ -71,11 +46,12 @@ Using the `humago` adapter for stdlib `net/http` compatibility. This gives us:
 - Interactive docs at `/docs`
 
 All existing endpoints migrate: VMs, drives, devices, exec, network reset.
+No new endpoints.
 
-### 4. Scope
+### 3. Scope
 
 - **Domain layer**: no changes
-- **App layer**: delete `SharkfinWebhook` + `HandleWebhook`, add `EnsureVM`
+- **App layer**: delete `SharkfinWebhook` + `HandleWebhook`
 - **HTTP layer**: rewrite all handlers to huma, delete `webhook.go`
 - **Config**: remove `webhook-url` default
 
@@ -100,21 +76,7 @@ Files:
 - `internal/infra/httpapi/webhook_test.go` (delete)
 - `internal/config/config.go`
 
-### Task 3: Add EnsureVM to app layer
-
-New method on VMService:
-
-```go
-// EnsureVM finds or creates a VM by name and ensures it is running.
-func (s *VMService) EnsureVM(ctx context.Context, name, image string) (*domain.VM, error)
-```
-
-Logic extracted from the old `HandleWebhook`, stripped of Sharkfin-specific
-fields. If `image` is empty, use `s.config.DefaultImage`.
-
-Files: `internal/app/vm_service.go`
-
-### Task 4: Migrate handler to huma — VM endpoints
+### Task 3: Migrate handler to huma — VM endpoints
 
 Rewrite all VM handlers to huma's typed signature using `humago` adapter.
 Define input/output structs with struct tags for OpenAPI metadata. Register
@@ -128,11 +90,10 @@ Endpoints:
 - `POST /v1/vms/{id}/start`
 - `POST /v1/vms/{id}/stop`
 - `POST /v1/vms/{id}/exec`
-- `POST /v1/vms/ensure` (new)
 
 Files: `internal/infra/httpapi/handler.go`
 
-### Task 5: Migrate handler to huma — drive endpoints
+### Task 4: Migrate handler to huma — drive endpoints
 
 Rewrite all drive handlers to huma.
 
@@ -146,7 +107,7 @@ Endpoints:
 
 Files: `internal/infra/httpapi/handler.go`
 
-### Task 6: Migrate handler to huma — device endpoints
+### Task 5: Migrate handler to huma — device endpoints
 
 Rewrite all device handlers to huma.
 
@@ -160,7 +121,7 @@ Endpoints:
 
 Files: `internal/infra/httpapi/handler.go`
 
-### Task 7: Migrate handler to huma — network + utility
+### Task 6: Migrate handler to huma — network + utility
 
 Rewrite network reset handler and shared helpers (error mapping, response
 conversion).
@@ -170,23 +131,15 @@ Endpoints:
 
 Files: `internal/infra/httpapi/handler.go`
 
-### Task 8: Update tests
+### Task 7: Update tests
 
-Rewrite HTTP handler tests for the new huma-based handlers. Replace webhook
-tests with ensure endpoint tests. Add tests:
-
-- `TestEnsureVMCreatesAndStarts` — new VM created and started
-- `TestEnsureVMIdempotent` — already running VM returns 200
-- `TestEnsureVMStartsStopped` — stopped VM gets started
-- `TestEnsureVMBadRequest` — missing name returns 400
-
-Existing CRUD tests updated to work with huma's response format.
+Rewrite HTTP handler tests for the new huma-based handlers. Delete webhook
+tests. Existing CRUD tests updated to work with huma's response format.
 
 Files:
 - `internal/infra/httpapi/handler_test.go`
-- `internal/infra/httpapi/webhook_test.go` (already deleted in task 2)
 
-### Task 9: Add mise task for OpenAPI spec export
+### Task 8: Add mise task for OpenAPI spec export
 
 Add a `mise.toml` task that starts the daemon briefly to dump the generated
 OpenAPI spec to `docs/openapi.yaml`. Or write a small Go program that
@@ -194,7 +147,7 @@ instantiates the huma API and writes the spec without starting a server.
 
 Files: `mise.toml`, possibly `cmd/openapi/main.go`
 
-### Task 10: Verify and build
+### Task 9: Verify and build
 
 Run `mise run build`, run all tests, verify the generated OpenAPI spec is
 complete and valid.
