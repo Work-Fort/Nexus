@@ -30,9 +30,10 @@ type Runtime interface {
 
 // CreateConfig holds optional configuration for Runtime.Create.
 type CreateConfig struct {
-	NetNSPath string
-	Mounts    []Mount
-	Devices   []DeviceInfo
+	NetNSPath      string
+	Mounts         []Mount
+	Devices        []DeviceInfo
+	ResolvConfPath string
 }
 
 // CreateOpt is a functional option for Runtime.Create.
@@ -96,6 +97,13 @@ func WithDevices(devices []DeviceInfo) CreateOpt {
 	}
 }
 
+// WithResolvConf bind-mounts a resolv.conf into the container.
+func WithResolvConf(path string) CreateOpt {
+	return func(c *CreateConfig) {
+		c.ResolvConfPath = path
+	}
+}
+
 // DriveStore persists drive metadata.
 type DriveStore interface {
 	CreateDrive(ctx context.Context, d *Drive) error
@@ -129,4 +137,21 @@ type Storage interface {
 	CreateVolume(ctx context.Context, name string, sizeBytes uint64) (path string, err error)
 	DeleteVolume(ctx context.Context, name string) error
 	VolumePath(name string) string
+}
+
+// DNSConfig holds per-VM DNS resolution settings.
+// Nil means use defaults (gateway as nameserver, "nexus.local" as search).
+type DNSConfig struct {
+	Servers []string // nameservers (default: [gateway IP])
+	Search  []string // search domains (default: ["nexus.local"])
+}
+
+// DNSManager manages internal DNS for VM name resolution.
+type DNSManager interface {
+	Start(ctx context.Context) error
+	Stop() error
+	AddRecord(ctx context.Context, name, ip string) error
+	RemoveRecord(ctx context.Context, name string) error
+	GenerateResolvConf(vmID string, cfg *DNSConfig) (path string, err error)
+	CleanupResolvConf(vmID string) error
 }

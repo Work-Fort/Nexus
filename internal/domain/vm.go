@@ -43,6 +43,7 @@ type VM struct {
 	IP        string
 	Gateway   string
 	NetNSPath string
+	DNSConfig *DNSConfig
 	CreatedAt time.Time
 	StartedAt *time.Time
 	StoppedAt *time.Time
@@ -50,10 +51,11 @@ type VM struct {
 
 // CreateVMParams holds parameters for creating a new VM.
 type CreateVMParams struct {
-	Name    string
-	Role    VMRole
-	Image   string
-	Runtime string
+	Name      string
+	Role      VMRole
+	Image     string
+	Runtime   string
+	DNSConfig *DNSConfig
 }
 
 // ExecResult holds the output of a command executed inside a VM.
