@@ -268,7 +268,107 @@ func (s *Store) DeleteDrive(ctx context.Context, id string) error {
 	return s.q.DeleteDrive(ctx, id)
 }
 
+// --- domain.DeviceStore implementation ---
+
+func (s *Store) CreateDevice(ctx context.Context, d *domain.Device) error {
+	var vmID sql.NullString
+	if d.VMID != "" {
+		vmID = sql.NullString{String: d.VMID, Valid: true}
+	}
+	return s.q.InsertDevice(ctx, InsertDeviceParams{
+		ID:            d.ID,
+		HostPath:      d.HostPath,
+		ContainerPath: d.ContainerPath,
+		Permissions:   d.Permissions,
+		Gid:           int64(d.GID),
+		VmID:          vmID,
+		CreatedAt:     d.CreatedAt.UTC().Format(timeFormat),
+	})
+}
+
+func (s *Store) GetDevice(ctx context.Context, id string) (*domain.Device, error) {
+	row, err := s.q.GetDevice(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("get device: %w", err)
+	}
+	return deviceFromRow(row)
+}
+
+func (s *Store) ListDevices(ctx context.Context) ([]*domain.Device, error) {
+	rows, err := s.q.ListDevices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
+	}
+	devices := make([]*domain.Device, len(rows))
+	for i, r := range rows {
+		d, err := deviceFromRow(r)
+		if err != nil {
+			return nil, err
+		}
+		devices[i] = d
+	}
+	return devices, nil
+}
+
+func (s *Store) AttachDevice(ctx context.Context, deviceID, vmID string) error {
+	return s.q.AttachDevice(ctx, AttachDeviceParams{
+		VmID: sql.NullString{String: vmID, Valid: true},
+		ID:   deviceID,
+	})
+}
+
+func (s *Store) DetachDevice(ctx context.Context, deviceID string) error {
+	return s.q.DetachDevice(ctx, deviceID)
+}
+
+func (s *Store) DetachAllDevices(ctx context.Context, vmID string) error {
+	return s.q.DetachAllDevices(ctx, sql.NullString{String: vmID, Valid: true})
+}
+
+func (s *Store) GetDevicesByVM(ctx context.Context, vmID string) ([]*domain.Device, error) {
+	rows, err := s.q.GetDevicesByVM(ctx, sql.NullString{String: vmID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("get devices by vm: %w", err)
+	}
+	devices := make([]*domain.Device, len(rows))
+	for i, r := range rows {
+		d, err := deviceFromRow(r)
+		if err != nil {
+			return nil, err
+		}
+		devices[i] = d
+	}
+	return devices, nil
+}
+
+func (s *Store) DeleteDevice(ctx context.Context, id string) error {
+	return s.q.DeleteDevice(ctx, id)
+}
+
 // --- type conversion helpers ---
+
+// deviceFromRow converts a sqlc-generated Device row into a domain.Device.
+func deviceFromRow(row Device) (*domain.Device, error) {
+	d := &domain.Device{
+		ID:            row.ID,
+		HostPath:      row.HostPath,
+		ContainerPath: row.ContainerPath,
+		Permissions:   row.Permissions,
+		GID:           uint32(row.Gid),
+	}
+	if row.VmID.Valid {
+		d.VMID = row.VmID.String
+	}
+	var err error
+	d.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse created_at for device %s: %w", row.ID, err)
+	}
+	return d, nil
+}
 
 // driveFromRow converts a sqlc-generated Drive row into a domain.Drive.
 func driveFromRow(row Drive) (*domain.Drive, error) {
