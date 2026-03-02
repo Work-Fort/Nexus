@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 
 	"github.com/Work-Fort/Nexus/internal/domain"
 )
@@ -123,6 +125,10 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 		specOpts = append(specOpts, oci.WithMounts(ociMounts))
 	}
 
+	if len(createCfg.Devices) > 0 {
+		specOpts = append(specOpts, withDevices(createCfg.Devices))
+	}
+
 	_, err = r.client.NewContainer(ctx, id,
 		client.WithImage(img),
 		client.WithNewSnapshot(id+"-snap", img),
@@ -154,6 +160,47 @@ func parseNumericUser(user string) (uint32, uint32, error) {
 		return 0, 0, fmt.Errorf("parse gid %q: %w", gidStr, err)
 	}
 	return uint32(uid), uint32(gid), nil
+}
+
+// withDevices returns an OCI spec option that adds device nodes and cgroup allow rules.
+func withDevices(devices []domain.DeviceInfo) oci.SpecOpts {
+	return func(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
+		for _, dev := range devices {
+			fi, err := os.Stat(dev.HostPath)
+			if err != nil {
+				return fmt.Errorf("stat device %s: %w", dev.HostPath, err)
+			}
+			stat, ok := fi.Sys().(*syscall.Stat_t)
+			if !ok {
+				return fmt.Errorf("cannot get device info for %s", dev.HostPath)
+			}
+
+			devType := "c"
+			if fi.Mode()&os.ModeDevice != 0 && fi.Mode()&os.ModeCharDevice == 0 {
+				devType = "b"
+			}
+			major := int64(unix.Major(stat.Rdev))
+			minor := int64(unix.Minor(stat.Rdev))
+
+			gid := dev.GID
+			s.Linux.Devices = append(s.Linux.Devices, specs.LinuxDevice{
+				Path:  dev.ContainerPath,
+				Type:  devType,
+				Major: major,
+				Minor: minor,
+				GID:   &gid,
+			})
+
+			s.Linux.Resources.Devices = append(s.Linux.Resources.Devices, specs.LinuxDeviceCgroup{
+				Allow:  true,
+				Type:   devType,
+				Major:  &major,
+				Minor:  &minor,
+				Access: dev.Permissions,
+			})
+		}
+		return nil
+	}
 }
 
 // Start creates and starts a task for the given container.
