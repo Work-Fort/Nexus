@@ -91,6 +91,7 @@ type driveResponse struct {
 }
 
 type createDeviceRequest struct {
+	Name          string `json:"name"`
 	HostPath      string `json:"host_path"`
 	ContainerPath string `json:"container_path"`
 	Permissions   string `json:"permissions"`
@@ -103,6 +104,7 @@ type attachDeviceRequest struct {
 
 type deviceResponse struct {
 	ID            string  `json:"id"`
+	Name          string  `json:"name"`
 	HostPath      string  `json:"host_path"`
 	ContainerPath string  `json:"container_path"`
 	Permissions   string  `json:"permissions"`
@@ -335,6 +337,7 @@ func driveToResponse(d *domain.Drive) driveResponse {
 func deviceToResponse(d *domain.Device) deviceResponse {
 	r := deviceResponse{
 		ID:            d.ID,
+		Name:          d.Name,
 		HostPath:      d.HostPath,
 		ContainerPath: d.ContainerPath,
 		Permissions:   d.Permissions,
@@ -450,6 +453,7 @@ func handleCreateDevice(svc *app.VMService) http.HandlerFunc {
 		}
 
 		d, err := svc.CreateDevice(r.Context(), domain.CreateDeviceParams{
+			Name:          req.Name,
 			HostPath:      req.HostPath,
 			ContainerPath: req.ContainerPath,
 			Permissions:   req.Permissions,
