@@ -2,9 +2,10 @@
 # Development script: Auto-set capabilities on Nexus helper binaries
 # Run with: sudo ./scripts/dev-setcap-loop.sh
 #
-# Sets CAP_SYS_ADMIN on nexus-netns (network namespace create/delete) and
-# CAP_NET_ADMIN+CAP_SYS_ADMIN on nexus-cni-exec (CNI plugin capability wrapper).
-# nexusd itself needs no special capabilities — all privileged operations
+# Sets CAP_SYS_ADMIN on nexus-netns (network namespace create/delete),
+# CAP_NET_ADMIN+CAP_SYS_ADMIN on nexus-cni-exec (CNI plugin capability wrapper),
+# and CAP_NET_BIND_SERVICE on nexus-dns (bind port 53 for CoreDNS).
+# nexus itself needs no special capabilities — all privileged operations
 # are delegated to these helper binaries.
 # Loops every 2 seconds to pick up rebuilds automatically.
 
@@ -21,12 +22,14 @@ trap 'echo -e "\nStopping capability auto-setter..."; exit 0' SIGINT SIGTERM
 NETNS_HELPER="$BUILD_DIR/nexus-netns"
 CNI_EXEC="$BUILD_DIR/nexus-cni-exec"
 QUOTA_HELPER="$BUILD_DIR/nexus-quota"
+DNS_HELPER="$BUILD_DIR/nexus-dns"
 
 echo "Starting capability auto-setter (Ctrl+C to stop)"
 echo "Watching:"
 echo "  $NETNS_HELPER  → CAP_SYS_ADMIN"
 echo "  $CNI_EXEC      → CAP_NET_ADMIN,CAP_SYS_ADMIN"
-echo "  $QUOTA_HELPER   → CAP_SYS_ADMIN"
+echo "  $QUOTA_HELPER  → CAP_SYS_ADMIN"
+echo "  $DNS_HELPER    → CAP_NET_BIND_SERVICE"
 
 while true; do
     if [ -f "$NETNS_HELPER" ]; then
@@ -40,6 +43,9 @@ while true; do
     fi
     if [ -f "$QUOTA_HELPER" ]; then
         setcap cap_sys_admin+ep "$QUOTA_HELPER" 2>/dev/null || true
+    fi
+    if [ -f "$DNS_HELPER" ]; then
+        setcap cap_net_bind_service+ep "$DNS_HELPER" 2>/dev/null || true
     fi
     echo "[$(date +%H:%M:%S)] Capabilities set"
     sleep 2

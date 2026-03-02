@@ -27,6 +27,7 @@ const (
 	DefaultDrivesDir    = "" // empty = auto-detect ($XDG_STATE_HOME/nexus/drives)
 	DefaultQuotaHelper  = "nexus-quota"
 	DefaultCoreDNSBin   = "coredns"
+	DefaultDNSHelper    = "nexus-dns"
 )
 
 // Paths holds XDG-compliant directory paths.
@@ -101,6 +102,7 @@ func InitViper() {
 	viper.SetDefault("quota-helper", DefaultQuotaHelper)
 	viper.SetDefault("dns-enabled", true)
 	viper.SetDefault("coredns-bin", DefaultCoreDNSBin)
+	viper.SetDefault("dns-helper", DefaultDNSHelper)
 
 	viper.SetConfigName(ConfigFileName)
 	viper.SetConfigType(ConfigType)

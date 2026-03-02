@@ -24,6 +24,7 @@ import (
 // Config holds DNS manager configuration.
 type Config struct {
 	CoreDNSBin string   // path to coredns binary
+	DNSHelper  string   // path to nexus-dns helper (raises cap_net_bind_service)
 	GatewayIP  string   // bridge gateway IP (e.g. "172.16.0.1")
 	StateDir   string   // persistent dir for Corefile + hosts
 	RuntimeDir string   // runtime dir for per-VM resolv.conf files
@@ -41,8 +42,15 @@ type Manager struct {
 // New creates a DNS manager. Call Start() to launch CoreDNS.
 func New(cfg Config) (*Manager, error) {
 	if cfg.CoreDNSBin != "" {
-		if _, err := exec.LookPath(cfg.CoreDNSBin); err != nil {
+		resolved, err := exec.LookPath(cfg.CoreDNSBin)
+		if err != nil {
 			return nil, fmt.Errorf("coredns binary not found at %q: %w", cfg.CoreDNSBin, err)
+		}
+		cfg.CoreDNSBin = resolved
+	}
+	if cfg.DNSHelper != "" {
+		if _, err := exec.LookPath(cfg.DNSHelper); err != nil {
+			return nil, fmt.Errorf("dns helper not found at %q: %w", cfg.DNSHelper, err)
 		}
 	}
 	if err := os.MkdirAll(cfg.StateDir, 0755); err != nil {
@@ -74,7 +82,14 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	corefilePath := filepath.Join(m.cfg.StateDir, "Corefile")
-	m.cmd = exec.CommandContext(ctx, m.cfg.CoreDNSBin, "-conf", corefilePath, "-dns.port", "53")
+	corednsArgs := []string{"-conf", corefilePath, "-dns.port", "53"}
+	if m.cfg.DNSHelper != "" {
+		// nexus-dns <coredns-binary> [args...]
+		args := append([]string{m.cfg.CoreDNSBin}, corednsArgs...)
+		m.cmd = exec.CommandContext(ctx, m.cfg.DNSHelper, args...)
+	} else {
+		m.cmd = exec.CommandContext(ctx, m.cfg.CoreDNSBin, corednsArgs...)
+	}
 	m.cmd.Stdout = os.Stderr // CoreDNS logs to stdout
 	m.cmd.Stderr = os.Stderr
 
@@ -198,6 +213,7 @@ func (m *Manager) writeCorefile() error {
 	upstreams := strings.Join(m.cfg.Upstreams, " ")
 
 	corefile := fmt.Sprintf(`nexus.local {
+    bind %s
     hosts %s {
         reload 2s
         fallthrough
@@ -206,10 +222,11 @@ func (m *Manager) writeCorefile() error {
 }
 
 . {
+    bind %s
     forward . %s
     log
 }
-`, hostsPath, upstreams)
+`, m.cfg.GatewayIP, hostsPath, m.cfg.GatewayIP, upstreams)
 
 	path := filepath.Join(m.cfg.StateDir, "Corefile")
 	return os.WriteFile(path, []byte(corefile), 0644)

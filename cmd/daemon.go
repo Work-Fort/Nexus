@@ -80,8 +80,19 @@ func newDaemonCmd() *cobra.Command {
 					runtimeDir = fmt.Sprintf("/tmp/nexus-dns-%d", os.Getuid())
 				}
 
+				dnsHelper := viper.GetString("dns-helper")
+				if dnsHelper != "" {
+					if resolved, err := exec.LookPath(dnsHelper); err != nil {
+						log.Warn("dns helper not found, CoreDNS may fail to bind port 53", "helper", dnsHelper)
+						dnsHelper = ""
+					} else {
+						dnsHelper = resolved
+					}
+				}
+
 				dm, err := dns.New(dns.Config{
 					CoreDNSBin: viper.GetString("coredns-bin"),
+					DNSHelper:  dnsHelper,
 					GatewayIP:  gatewayIP,
 					StateDir:   filepath.Join(config.GlobalPaths.StateDir, "dns"),
 					RuntimeDir: filepath.Join(runtimeDir, "nexus", "dns"),
@@ -208,8 +219,9 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("quota-helper", config.DefaultQuotaHelper, "Path to nexus-quota helper binary (empty to disable)")
 	cmd.Flags().Bool("dns-enabled", true, "Enable internal DNS for VM name resolution")
 	cmd.Flags().String("coredns-bin", config.DefaultCoreDNSBin, "Path to CoreDNS binary")
+	cmd.Flags().String("dns-helper", config.DefaultDNSHelper, "Path to nexus-dns helper binary (cap_net_bind_service)")
 
-	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "drives-dir", "quota-helper", "dns-enabled", "coredns-bin"} {
+	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "drives-dir", "quota-helper", "dns-enabled", "coredns-bin", "dns-helper"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}
