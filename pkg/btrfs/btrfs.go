@@ -8,6 +8,7 @@ package btrfs
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -52,6 +53,29 @@ func IsBtrfs(path string) (bool, error) {
 		return false, fmt.Errorf("btrfs: statfs %s: %w", path, err)
 	}
 	return sfs.Type == superMagic, nil
+}
+
+// GetFSID returns the filesystem UUID for the btrfs filesystem containing path.
+// Does not require CAP_SYS_ADMIN.
+func GetFSID(path string) (string, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return "", fmt.Errorf("btrfs: open %s: %w", path, err)
+	}
+	defer unix.Close(fd)
+
+	var args ioctlFsInfoArgs
+	if err := ioctl(uintptr(fd), iocFsInfo, uintptr(unsafe.Pointer(&args))); err != nil {
+		return "", fmt.Errorf("btrfs: fs info %s: %w", path, err)
+	}
+
+	return formatFSID(args.FSID), nil
+}
+
+// formatFSID formats a 16-byte btrfs FSID as a standard UUID string.
+func formatFSID(fsid [16]byte) string {
+	h := hex.EncodeToString(fsid[:])
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }
 
 // IsSubvolume reports whether the given path is a btrfs subvolume root.

@@ -57,6 +57,23 @@ func requireQuotaCap(t *testing.T) {
 	}
 }
 
+func TestGetFSID(t *testing.T) {
+	dir := testDir(t)
+
+	fsid, err := GetFSID(dir)
+	if err != nil {
+		t.Fatalf("GetFSID: %v", err)
+	}
+	// UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars)
+	if len(fsid) != 36 {
+		t.Fatalf("expected 36-char UUID, got %d: %q", len(fsid), fsid)
+	}
+	if fsid[8] != '-' || fsid[13] != '-' || fsid[18] != '-' || fsid[23] != '-' {
+		t.Fatalf("bad UUID format: %q", fsid)
+	}
+	t.Logf("FSID: %s", fsid)
+}
+
 func TestIsBtrfs(t *testing.T) {
 	requireBtrfs(t)
 	ok, err := IsBtrfs(".")
