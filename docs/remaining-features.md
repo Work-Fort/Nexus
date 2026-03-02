@@ -79,3 +79,9 @@ Command-line utility for interacting with Nexus instances:
 - REST/WebSocket client for all API operations
 - VM TTY access (depends on terminal access research)
 - stdio-to-HTTP MCP bridge (same pattern as Sharkfin's `mcp-bridge`)
+
+## 10. VM Tags
+
+Add tagging support for VMs (was present in the Rust version, missed in the Go
+port). Tags replace the `role` field as the way to organize and categorize VMs
+(e.g. `agent`, `ci-runner`, `dev`). Once tags exist, `role` becomes redundant.
