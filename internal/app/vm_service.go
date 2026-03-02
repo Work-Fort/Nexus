@@ -43,6 +43,7 @@ type VMService struct {
 	driveStore  domain.DriveStore
 	storage     domain.Storage
 	deviceStore domain.DeviceStore
+	dns         domain.DNSManager
 	config      VMServiceConfig
 }
 
@@ -82,6 +83,13 @@ func WithStorage(driveStore domain.DriveStore, storage domain.Storage) func(*VMS
 func WithDeviceStore(deviceStore domain.DeviceStore) func(*VMService) {
 	return func(s *VMService) {
 		s.deviceStore = deviceStore
+	}
+}
+
+// WithDNS enables internal DNS management.
+func WithDNS(dns domain.DNSManager) func(*VMService) {
+	return func(s *VMService) {
+		s.dns = dns
 	}
 }
 

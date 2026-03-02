@@ -20,6 +20,7 @@ import (
 	"github.com/Work-Fort/Nexus/internal/config"
 	"github.com/Work-Fort/Nexus/internal/domain"
 	"github.com/Work-Fort/Nexus/internal/infra/cni"
+	"github.com/Work-Fort/Nexus/internal/infra/dns"
 	ctrd "github.com/Work-Fort/Nexus/internal/infra/containerd"
 	"github.com/Work-Fort/Nexus/internal/infra/httpapi"
 	"github.com/Work-Fort/Nexus/internal/infra/sqlite"
@@ -67,6 +68,38 @@ func newDaemonCmd() *cobra.Command {
 				network = &cni.NoopNetwork{}
 			}
 
+			var dnsManager domain.DNSManager
+			if viper.GetBool("network-enabled") && viper.GetBool("dns-enabled") {
+				gatewayIP, err := cni.GatewayIP(viper.GetString("network-subnet"))
+				if err != nil {
+					return fmt.Errorf("derive gateway IP: %w", err)
+				}
+
+				runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+				if runtimeDir == "" {
+					runtimeDir = fmt.Sprintf("/tmp/nexus-dns-%d", os.Getuid())
+				}
+
+				dm, err := dns.New(dns.Config{
+					CoreDNSBin: viper.GetString("coredns-bin"),
+					GatewayIP:  gatewayIP,
+					StateDir:   filepath.Join(config.GlobalPaths.StateDir, "dns"),
+					RuntimeDir: filepath.Join(runtimeDir, "nexus", "dns"),
+				})
+				if err != nil {
+					return fmt.Errorf("init dns: %w", err)
+				}
+
+				if err := dm.Start(context.Background()); err != nil {
+					return fmt.Errorf("start dns: %w", err)
+				}
+				defer dm.Stop()
+				dnsManager = dm
+				log.Info("dns enabled", "gateway", gatewayIP)
+			} else {
+				dnsManager = &dns.NoopManager{}
+			}
+
 			if logFile != nil {
 				defer logFile.Close()
 			}
@@ -76,6 +109,8 @@ func newDaemonCmd() *cobra.Command {
 				DefaultImage:   viper.GetString("agent-image"),
 				DefaultRuntime: viper.GetString("runtime"),
 			}))
+
+			svcOpts = append(svcOpts, app.WithDNS(dnsManager))
 
 			drivesDir := viper.GetString("drives-dir")
 			if drivesDir == "" {
@@ -167,8 +202,10 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("cni-exec-bin", config.DefaultCNIExecBin, "Path to nexus-cni-exec wrapper binary")
 	cmd.Flags().String("drives-dir", config.DefaultDrivesDir, "Directory for drive volumes (default: $XDG_STATE_HOME/nexus/drives)")
 	cmd.Flags().String("quota-helper", config.DefaultQuotaHelper, "Path to nexus-quota helper binary (empty to disable)")
+	cmd.Flags().Bool("dns-enabled", true, "Enable internal DNS for VM name resolution")
+	cmd.Flags().String("coredns-bin", config.DefaultCoreDNSBin, "Path to CoreDNS binary")
 
-	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "drives-dir", "quota-helper"} {
+	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "drives-dir", "quota-helper", "dns-enabled", "coredns-bin"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}
