@@ -277,6 +277,7 @@ func (s *Store) CreateDevice(ctx context.Context, d *domain.Device) error {
 	}
 	return s.q.InsertDevice(ctx, InsertDeviceParams{
 		ID:            d.ID,
+		Name:          d.Name,
 		HostPath:      d.HostPath,
 		ContainerPath: d.ContainerPath,
 		Permissions:   d.Permissions,
@@ -348,12 +349,59 @@ func (s *Store) DeleteDevice(ctx context.Context, id string) error {
 	return s.q.DeleteDevice(ctx, id)
 }
 
+func (s *Store) GetDeviceByName(ctx context.Context, name string) (*domain.Device, error) {
+	row, err := s.q.GetDeviceByName(ctx, name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("get device by name: %w", err)
+	}
+	return deviceFromRow(row)
+}
+
+// --- Resolve methods (lookup by ID or name) ---
+
+func (s *Store) Resolve(ctx context.Context, ref string) (*domain.VM, error) {
+	row, err := s.q.ResolveVM(ctx, ResolveVMParams{ID: ref, Name: ref})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("resolve vm: %w", err)
+	}
+	return vmFromRow(row)
+}
+
+func (s *Store) ResolveDrive(ctx context.Context, ref string) (*domain.Drive, error) {
+	row, err := s.q.ResolveDrive(ctx, ResolveDriveParams{ID: ref, Name: ref})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("resolve drive: %w", err)
+	}
+	return driveFromRow(row)
+}
+
+func (s *Store) ResolveDevice(ctx context.Context, ref string) (*domain.Device, error) {
+	row, err := s.q.ResolveDevice(ctx, ResolveDeviceParams{ID: ref, Name: ref})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("resolve device: %w", err)
+	}
+	return deviceFromRow(row)
+}
+
 // --- type conversion helpers ---
 
 // deviceFromRow converts a sqlc-generated Device row into a domain.Device.
 func deviceFromRow(row Device) (*domain.Device, error) {
 	d := &domain.Device{
 		ID:            row.ID,
+		Name:          row.Name,
 		HostPath:      row.HostPath,
 		ContainerPath: row.ContainerPath,
 		Permissions:   row.Permissions,
