@@ -108,6 +108,7 @@ func newDaemonCmd() *cobra.Command {
 				log.Info("drives enabled", "backend", "directory", "dir", drivesDir)
 			}
 			svcOpts = append(svcOpts, app.WithStorage(store, storageBackend))
+			svcOpts = append(svcOpts, app.WithDeviceStore(store))
 
 			svc := app.NewVMService(store, runtime, network, svcOpts...)
 
