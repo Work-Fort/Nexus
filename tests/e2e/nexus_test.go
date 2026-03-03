@@ -662,6 +662,145 @@ func TestExportImportRoundTrip(t *testing.T) {
 	c.StopVM(imported.VM.ID)
 }
 
+func TestCrashRestart(t *testing.T) {
+	d, c := startDaemon(t)
+
+	// Create VM with always restart policy and immediate strategy for fast test.
+	vm, err := c.CreateVMWithRestartPolicy("test-crash-restart", "agent", "always", "immediate")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Kill the containerd task externally.
+	killCmd := exec.Command("ctr", "-n", d.Namespace(), "tasks", "kill", vm.ID, "--signal", "SIGKILL")
+	if out, err := killCmd.CombinedOutput(); err != nil {
+		t.Fatalf("ctr tasks kill: %v: %s", err, out)
+	}
+
+	// Wait for the crash monitor to restart the VM.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := c.GetVM(vm.ID)
+		if err != nil {
+			t.Fatalf("get VM: %v", err)
+		}
+		if got.State == "running" {
+			t.Log("VM restarted after crash")
+			return // success
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatal("VM did not restart within 10s after task kill")
+}
+
+func TestBootRecoveryKill9(t *testing.T) {
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Start first daemon instance.
+	d1, err := harness.StartDaemon(nexusBin, binDir, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := harness.NewClient(addr)
+	vm, err := c.CreateVMWithRestartPolicy("test-boot-recovery", "agent", "always", "immediate")
+	if err != nil {
+		d1.Stop()
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		d1.Stop()
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Kill the daemon with SIGKILL (simulates crash — no graceful shutdown).
+	d1.Kill()
+
+	// Start a second daemon on the same addr, namespace, and state dir.
+	d2, err := harness.StartDaemonWithNamespace(nexusBin, binDir, addr, d1.Namespace(), d1.XDGDir())
+	if err != nil {
+		t.Fatalf("start second daemon: %v", err)
+	}
+	defer d2.StopFatal(t)
+
+	// The boot recovery should have restarted the VM.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := c.GetVM(vm.ID)
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if got.State == "running" {
+			t.Log("VM restored after daemon kill -9")
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatal("VM not restored to running within 10s after daemon restart")
+}
+
+func TestNoPolicyCleanupKill9(t *testing.T) {
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d1, err := harness.StartDaemon(nexusBin, binDir, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := harness.NewClient(addr)
+	// Default policy is "none".
+	vm, err := c.CreateVM("test-no-policy-cleanup", "agent")
+	if err != nil {
+		d1.Stop()
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		d1.Stop()
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Verify it's running.
+	got, err := c.GetVM(vm.ID)
+	if err != nil || got.State != "running" {
+		d1.Stop()
+		t.Fatalf("VM should be running, state=%s err=%v", got.State, err)
+	}
+
+	d1.Kill()
+
+	d2, err := harness.StartDaemonWithNamespace(nexusBin, binDir, addr, d1.Namespace(), d1.XDGDir())
+	if err != nil {
+		t.Fatalf("start second daemon: %v", err)
+	}
+	defer d2.StopFatal(t)
+
+	// The boot recovery should have marked the VM as stopped.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := c.GetVM(vm.ID)
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if got.State == "stopped" {
+			t.Log("VM correctly marked as stopped after daemon kill -9 (policy=none)")
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatal("VM not marked as stopped within 10s after daemon restart")
+}
+
 func TestGracefulShutdown(t *testing.T) {
 	addr, err := harness.FreePort()
 	if err != nil {
