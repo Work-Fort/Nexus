@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -139,6 +140,16 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 
 func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) error {
 	return nil
+}
+
+func (m *mockRuntime) ExportImage(_ context.Context, _ string, w io.Writer) error {
+	_, err := w.Write([]byte("mock-image-data"))
+	return err
+}
+
+func (m *mockRuntime) ImportImage(_ context.Context, r io.Reader) (string, error) {
+	io.ReadAll(r) //nolint:errcheck
+	return "imported:latest", nil
 }
 
 // --- test helpers ---
