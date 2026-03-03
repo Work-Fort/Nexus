@@ -453,6 +453,40 @@ func TestCreateVM(t *testing.T) {
 	}
 }
 
+func TestCreateVMWithRootSize(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+	vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "sized-vm", Role: domain.VMRoleAgent, Image: "alpine:latest",
+		Runtime: "runc", RootSize: 1_000_000_000, // 1G
+	})
+	if err != nil {
+		t.Fatalf("CreateVM error: %v", err)
+	}
+	if vm.RootSize != 1_000_000_000 {
+		t.Errorf("RootSize = %d, want 1000000000", vm.RootSize)
+	}
+}
+
+func TestCreateVMRootSizeTooSmall(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+	_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "tiny-vm", Role: domain.VMRoleAgent, Image: "alpine:latest",
+		Runtime: "runc", RootSize: 1_000_000, // 1M — below 64M minimum
+	})
+	if err == nil {
+		t.Fatal("expected error for root_size below minimum")
+	}
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Errorf("err = %v, want ErrValidation", err)
+	}
+}
+
 func TestCreateVMInvalidRole(t *testing.T) {
 	svc := app.NewVMService(newMockStore(), newMockRuntime(), &cni.NoopNetwork{})
 	_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{

@@ -81,6 +81,8 @@ func WithDNS(dns domain.DNSManager) func(*VMService) {
 	}
 }
 
+const minRootSize = 64 * 1_000_000 // 64M
+
 // CreateVM validates parameters, creates a container via the runtime, and
 // persists the VM record.
 func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) (*domain.VM, error) {
@@ -99,6 +101,12 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	if params.Runtime == "" {
 		params.Runtime = s.config.DefaultRuntime
 	}
+	if params.RootSize < 0 {
+		return nil, fmt.Errorf("root_size must be positive: %w", domain.ErrValidation)
+	}
+	if params.RootSize > 0 && params.RootSize < minRootSize {
+		return nil, fmt.Errorf("root_size minimum is 64M: %w", domain.ErrValidation)
+	}
 
 	vm := &domain.VM{
 		ID:        nxid.New(),
@@ -107,6 +115,7 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		State:     domain.VMStateCreated,
 		Image:     params.Image,
 		Runtime:   params.Runtime,
+		RootSize:  params.RootSize,
 		CreatedAt: time.Now().UTC(),
 	}
 
@@ -141,6 +150,9 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	}
 	if resolvConfPath != "" {
 		createOpts = append(createOpts, domain.WithResolvConf(resolvConfPath))
+	}
+	if params.RootSize > 0 {
+		createOpts = append(createOpts, domain.WithRootSize(params.RootSize))
 	}
 
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
