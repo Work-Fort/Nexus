@@ -107,6 +107,18 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	if params.RootSize > 0 && params.RootSize < minRootSize {
 		return nil, fmt.Errorf("root_size minimum is 64M: %w", domain.ErrValidation)
 	}
+	if params.RestartPolicy == "" {
+		params.RestartPolicy = domain.RestartPolicyNone
+	}
+	if !domain.ValidRestartPolicy(params.RestartPolicy) {
+		return nil, fmt.Errorf("invalid restart_policy %q: %w", params.RestartPolicy, domain.ErrValidation)
+	}
+	if params.RestartStrategy == "" {
+		params.RestartStrategy = domain.RestartStrategyBackoff
+	}
+	if !domain.ValidRestartStrategy(params.RestartStrategy) {
+		return nil, fmt.Errorf("invalid restart_strategy %q: %w", params.RestartStrategy, domain.ErrValidation)
+	}
 
 	vm := &domain.VM{
 		ID:        nxid.New(),
@@ -115,8 +127,10 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		State:     domain.VMStateCreated,
 		Image:     params.Image,
 		Runtime:   params.Runtime,
-		RootSize:  params.RootSize,
-		CreatedAt: time.Now().UTC(),
+		RootSize:        params.RootSize,
+		RestartPolicy:   params.RestartPolicy,
+		RestartStrategy: params.RestartStrategy,
+		CreatedAt:       time.Now().UTC(),
 	}
 
 	netInfo, err := s.network.Setup(ctx, vm.ID)
@@ -312,6 +326,30 @@ func (s *VMService) ExpandRootSize(ctx context.Context, ref string, newSize int6
 
 	log.Info("root size expanded", "id", vm.ID, "old", vm.RootSize, "new", newSize)
 	return nil
+}
+
+// UpdateRestartPolicy changes the restart policy and strategy for a VM.
+func (s *VMService) UpdateRestartPolicy(ctx context.Context, ref string, policy domain.RestartPolicy, strategy domain.RestartStrategy) (*domain.VM, error) {
+	if !domain.ValidRestartPolicy(policy) {
+		return nil, fmt.Errorf("invalid restart_policy %q: %w", policy, domain.ErrValidation)
+	}
+	if !domain.ValidRestartStrategy(strategy) {
+		return nil, fmt.Errorf("invalid restart_strategy %q: %w", strategy, domain.ErrValidation)
+	}
+
+	vm, err := s.store.Resolve(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.store.UpdateRestartPolicy(ctx, vm.ID, policy, strategy); err != nil {
+		return nil, fmt.Errorf("store update restart policy: %w", err)
+	}
+
+	vm.RestartPolicy = policy
+	vm.RestartStrategy = strategy
+	log.Info("restart policy updated", "id", vm.ID, "policy", policy, "strategy", strategy)
+	return vm, nil
 }
 
 // ResetNetwork deletes the bridge and clears CNI state. Refuses if any VMs exist.
