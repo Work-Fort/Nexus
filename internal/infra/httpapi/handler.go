@@ -8,10 +8,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 
 	"github.com/charmbracelet/log"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"github.com/danielgtaylor/huma/v2/sse"
 
 	"github.com/Work-Fort/Nexus/internal/app"
 	"github.com/Work-Fort/Nexus/internal/domain"
@@ -192,6 +194,35 @@ type execResponse struct {
 	ExitCode int    `json:"exit_code" doc:"Process exit code"`
 	Stdout   string `json:"stdout" doc:"Standard output"`
 	Stderr   string `json:"stderr" doc:"Standard error"`
+}
+
+// --- SSE exec stream types ---
+
+type stdoutData struct {
+	Data string `json:"data"`
+}
+type stderrData struct {
+	Data string `json:"data"`
+}
+type exitData struct {
+	ExitCode int `json:"exit_code"`
+}
+
+// sseWriter adapts an SSE sender into an io.Writer. Each Write call sends one
+// SSE event whose type is determined by the makeMsg function.
+type sseWriter struct {
+	send    sse.Sender
+	makeMsg func(string) sse.Message
+	mu      *sync.Mutex
+}
+
+func (w *sseWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.send(w.makeMsg(string(p))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 // --- helpers ---
@@ -485,6 +516,46 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 			return nil, mapDomainError(err)
 		}
 		return &VMOutput{Body: vmToResponse(vm)}, nil
+	})
+
+	sse.Register(api, huma.Operation{
+		OperationID: "exec-stream-vm",
+		Method:      http.MethodPost,
+		Path:        "/v1/vms/{id}/exec/stream",
+		Summary:     "Stream command output from a VM",
+		Tags:        []string{"VMs"},
+	}, map[string]any{
+		"stdout": stdoutData{},
+		"stderr": stderrData{},
+		"exit":   exitData{},
+	}, func(ctx context.Context, input *ExecVMInput, send sse.Sender) {
+		var mu sync.Mutex
+		stdoutW := &sseWriter{
+			send: send,
+			makeMsg: func(s string) sse.Message {
+				return sse.Message{Data: stdoutData{Data: s}}
+			},
+			mu: &mu,
+		}
+		stderrW := &sseWriter{
+			send: send,
+			makeMsg: func(s string) sse.Message {
+				return sse.Message{Data: stderrData{Data: s}}
+			},
+			mu: &mu,
+		}
+
+		exitCode, err := svc.ExecStreamVM(ctx, input.ID, input.Body.Cmd, stdoutW, stderrW)
+		if err != nil {
+			mu.Lock()
+			send(sse.Message{Data: exitData{ExitCode: -1}}) //nolint:errcheck
+			mu.Unlock()
+			return
+		}
+
+		mu.Lock()
+		send(sse.Message{Data: exitData{ExitCode: exitCode}}) //nolint:errcheck
+		mu.Unlock()
 	})
 }
 
