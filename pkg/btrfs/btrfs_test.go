@@ -2,6 +2,7 @@
 package btrfs
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -486,6 +487,69 @@ func TestGetQuotaUsage(t *testing.T) {
 	}
 	if usage.MaxReferenced != 0 {
 		t.Fatalf("expected MaxReferenced=0 (unlimited), got %d", usage.MaxReferenced)
+	}
+}
+
+func TestSendReceive(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("btrfs send/receive requires root")
+	}
+	dir := testDir(t)
+
+	// Create source subvolume with test data.
+	src := filepath.Join(dir, "@send-src")
+	if err := CreateSubvolume(src); err != nil {
+		t.Fatalf("CreateSubvolume: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(src) })
+
+	if err := os.WriteFile(filepath.Join(src, "data.txt"), []byte("send-receive-test"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	// Create a read-only snapshot (required for btrfs send).
+	snap := filepath.Join(dir, "@send-snap")
+	if err := CreateSnapshot(src, snap, true); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+	t.Cleanup(func() { DeleteSubvolume(snap) })
+
+	// Send snapshot to a buffer.
+	var buf bytes.Buffer
+	if err := Send(snap, &buf); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("expected non-empty send stream")
+	}
+
+	// Receive into a new directory.
+	recvDir := filepath.Join(dir, "recv")
+	if err := os.MkdirAll(recvDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := Receive(recvDir, &buf); err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+
+	// The received subvolume has the same name as the snapshot.
+	received := filepath.Join(recvDir, "@send-snap")
+	t.Cleanup(func() { DeleteSubvolume(received) })
+
+	ok, err := IsSubvolume(received)
+	if err != nil {
+		t.Fatalf("IsSubvolume: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected received path to be a subvolume")
+	}
+
+	data, err := os.ReadFile(filepath.Join(received, "data.txt"))
+	if err != nil {
+		t.Fatalf("read received file: %v", err)
+	}
+	if string(data) != "send-receive-test" {
+		t.Fatalf("data = %q, want %q", string(data), "send-receive-test")
 	}
 }
 

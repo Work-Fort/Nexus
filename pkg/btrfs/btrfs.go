@@ -7,10 +7,13 @@
 package btrfs
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -249,6 +252,35 @@ func CreateSnapshot(source, dest string, readOnly bool) error {
 
 	if err := ioctl(uintptr(dstFd), iocSnapCreateV2, uintptr(unsafe.Pointer(&args))); err != nil {
 		return fmt.Errorf("btrfs: snapshot %s -> %s: %w", source, dest, err)
+	}
+	return nil
+}
+
+// Send writes a btrfs send stream for the read-only snapshot at path to w.
+// The snapshot must be read-only (use CreateSnapshot with readOnly=true).
+// Calls `btrfs send` as a subprocess — requires btrfs-progs installed.
+func Send(path string, w io.Writer) error {
+	cmd := exec.Command("btrfs", "send", path)
+	cmd.Stdout = w
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("btrfs send %s: %w: %s", path, err, stderr.String())
+	}
+	return nil
+}
+
+// Receive reads a btrfs send stream from r and applies it under destDir.
+// The received subvolume is created as a child of destDir.
+// Calls `btrfs receive` as a subprocess — requires btrfs-progs and
+// CAP_SYS_ADMIN (or root).
+func Receive(destDir string, r io.Reader) error {
+	cmd := exec.Command("btrfs", "receive", destDir)
+	cmd.Stdin = r
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("btrfs receive %s: %w: %s", destDir, err, stderr.String())
 	}
 	return nil
 }
