@@ -724,6 +724,9 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 	if resolvConfPath != "" {
 		createOpts = append(createOpts, domain.WithResolvConf(resolvConfPath))
 	}
+	if vm.RootSize > 0 {
+		createOpts = append(createOpts, domain.WithRootSize(vm.RootSize))
+	}
 
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
 		return fmt.Errorf("runtime create: %w", err)
