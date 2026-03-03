@@ -36,7 +36,7 @@ func TestSendReceive(t *testing.T) {
 **Step 2: Run to verify it fails**
 
 ```bash
-sudo go test -v -run TestSendReceive ./pkg/btrfs/
+go test -v -run TestSendReceive ./pkg/btrfs/
 ```
 
 Expected: FAIL (functions don't exist yet).
@@ -81,7 +81,7 @@ Add `"bytes"`, `"io"`, `"os/exec"` to imports.
 **Step 4: Run test to verify it passes**
 
 ```bash
-sudo go test -v -run TestSendReceive ./pkg/btrfs/
+go test -v -run TestSendReceive ./pkg/btrfs/
 ```
 
 Expected: PASS.
@@ -1373,7 +1373,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 **Step 3: Run the E2E test**
 
 ```bash
-sudo go test -v -run TestExportImportRoundTrip -count=1 ./tests/e2e/
+go test -v -run TestExportImportRoundTrip -count=1 ./tests/e2e/
 ```
 
 Expected: PASS — data written before export survives the export/delete/import cycle.

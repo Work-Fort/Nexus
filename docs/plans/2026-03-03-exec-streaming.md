@@ -600,7 +600,7 @@ the existing patterns (e.g. if `startDaemon` takes different args, or if
 
 **Step 2: Run the E2E test**
 
-Run: `cd /home/kazw/Work/WorkFort/nexus/lead && sudo go test ./tests/e2e/ -run TestExecStream -v -count=1 -timeout 120s`
+Run: `cd /home/kazw/Work/WorkFort/nexus/lead && go test ./tests/e2e/ -run TestExecStream -v -count=1 -timeout 120s`
 Expected: PASS
 
 **Step 3: Commit**
@@ -626,7 +626,7 @@ Expected: PASS
 
 **Step 3: Run E2E tests**
 
-Run: `cd /home/kazw/Work/WorkFort/nexus/lead && sudo go test ./tests/e2e/ -v -count=1 -timeout 300s`
+Run: `cd /home/kazw/Work/WorkFort/nexus/lead && go test ./tests/e2e/ -v -count=1 -timeout 300s`
 Expected: PASS
 
 **Step 4: Verify OpenAPI docs**

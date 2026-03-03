@@ -1149,7 +1149,7 @@ Actually, simpler: just modify `Kill()` to NOT call cleanup. The `StopFatal` on 
 **Step 4: Run E2E tests**
 
 ```bash
-sudo go test -v -run "TestCrashRestart|TestBootRecovery|TestNoPolicyCleanup" -count=1 ./tests/e2e/
+go test -v -run "TestCrashRestart|TestBootRecovery|TestNoPolicyCleanup" -count=1 ./tests/e2e/
 ```
 
 Expected: PASS.
