@@ -1216,7 +1216,178 @@ git commit -m "test(app): add export/import round-trip integration test"
 
 ---
 
-### Task 10: Verify Full Build and Run
+### Task 10: E2E Test — Export/Import Round-Trip
+
+**Files:**
+- Modify: `tests/e2e/harness/harness.go` (add `ExportVM`, `ImportVM` client methods)
+- Modify: `tests/e2e/nexus_test.go` (add `TestExportImportRoundTrip`)
+
+**Step 1: Add harness client methods**
+
+Add to `tests/e2e/harness/harness.go`, after the device operations section:
+
+```go
+// --- Backup operations ---
+
+type ImportResponse struct {
+	VM       VM       `json:"vm"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+func (c *Client) ExportVM(id string, includeDevices bool) ([]byte, error) {
+	u := fmt.Sprintf("%s/v1/vms/%s/export?include_devices=%t", c.base, id, includeDevices)
+	resp, err := c.http.Post(u, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(resp.Body)
+}
+
+func (c *Client) ImportVM(archive []byte, strictDevices bool) (*ImportResponse, error) {
+	u := fmt.Sprintf("%s/v1/vms/import?strict_devices=%t", c.base, strictDevices)
+	resp, err := c.http.Post(u, "application/zstd", bytes.NewReader(archive))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var result ImportResponse
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+```
+
+Add `"bytes"` to imports.
+
+**Step 2: Write the E2E test**
+
+Add to `tests/e2e/nexus_test.go`:
+
+```go
+func TestExportImportRoundTrip(t *testing.T) {
+	_, c := startDaemon(t)
+
+	// Create VM with nginx:alpine (stays alive for exec).
+	vm, err := c.CreateVMWithImage("test-backup", "agent", "docker.io/library/nginx:alpine")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	// Create and attach a drive.
+	drv, err := c.CreateDrive("test-backup-data", "256M", "/mnt/data")
+	if err != nil {
+		t.Fatalf("create drive: %v", err)
+	}
+	if err := c.AttachDrive(drv.ID, vm.ID); err != nil {
+		t.Fatalf("attach drive: %v", err)
+	}
+
+	// Start VM and write test data to the drive.
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+	var result *harness.ExecResult
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"sh", "-c", "echo test-data > /mnt/data/file.txt"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("write test data: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("write exit code = %d, stderr: %s", result.ExitCode, result.Stderr)
+	}
+
+	// Stop VM before export (required).
+	if err := c.StopVM(vm.ID); err != nil {
+		t.Fatalf("stop VM: %v", err)
+	}
+
+	// Export VM.
+	archive, err := c.ExportVM(vm.ID, false)
+	if err != nil {
+		t.Fatalf("export VM: %v", err)
+	}
+	if len(archive) == 0 {
+		t.Fatal("expected non-empty archive")
+	}
+	t.Logf("archive size: %d bytes", len(archive))
+
+	// Delete original VM and drive to free the names.
+	c.DetachDrive(drv.ID)
+	if err := c.DeleteVM(vm.ID); err != nil {
+		t.Fatalf("delete original VM: %v", err)
+	}
+	if err := c.DeleteDrive(drv.ID); err != nil {
+		t.Fatalf("delete original drive: %v", err)
+	}
+
+	// Import from archive.
+	imported, err := c.ImportVM(archive, false)
+	if err != nil {
+		t.Fatalf("import VM: %v", err)
+	}
+	if imported.VM.Name != "test-backup" {
+		t.Errorf("imported name = %q, want %q", imported.VM.Name, "test-backup")
+	}
+	if imported.VM.State != "created" {
+		t.Errorf("imported state = %q, want %q", imported.VM.State, "created")
+	}
+
+	// Start imported VM and verify data is intact.
+	if err := c.StartVM(imported.VM.ID); err != nil {
+		t.Fatalf("start imported VM: %v", err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(imported.VM.ID, []string{"cat", "/mnt/data/file.txt"})
+		if err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("read test data: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("read exit code = %d, stderr: %s", result.ExitCode, result.Stderr)
+	}
+	if strings.TrimSpace(result.Stdout) != "test-data" {
+		t.Errorf("data = %q, want %q", strings.TrimSpace(result.Stdout), "test-data")
+	}
+
+	// Clean up.
+	c.StopVM(imported.VM.ID)
+}
+```
+
+**Step 3: Run the E2E test**
+
+```bash
+sudo go test -v -run TestExportImportRoundTrip -count=1 ./tests/e2e/
+```
+
+Expected: PASS — data written before export survives the export/delete/import cycle.
+
+**Step 4: Commit**
+
+```bash
+git add tests/e2e/harness/harness.go tests/e2e/nexus_test.go
+git commit -m "test(e2e): add export/import round-trip E2E test"
+```
+
+---
+
+### Task 11: Verify Full Build and Run
 
 **Step 1: Run all unit tests**
 
