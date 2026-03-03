@@ -4,6 +4,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -137,6 +138,14 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 
 func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) error {
 	return nil
+}
+
+func (m *mockRuntime) ExportImage(_ context.Context, _ string, _ io.Writer) error {
+	return nil
+}
+
+func (m *mockRuntime) ImportImage(_ context.Context, _ io.Reader) (string, error) {
+	return "", nil
 }
 
 // --- mock DriveStore ---

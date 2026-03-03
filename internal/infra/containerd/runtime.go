@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/containerd/containerd/v2/core/images/archive"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
@@ -402,4 +404,30 @@ func (r *Runtime) Exec(ctx context.Context, id string, cmd []string) (*domain.Ex
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 	}, nil
+}
+
+// ExportImage writes the OCI image as a tar stream to w.
+func (r *Runtime) ExportImage(ctx context.Context, imageRef string, w io.Writer) error {
+	ctx = r.nsCtx(ctx)
+
+	img, err := r.client.GetImage(ctx, imageRef)
+	if err != nil {
+		return fmt.Errorf("get image %s: %w", imageRef, err)
+	}
+
+	return r.client.Export(ctx, w, archive.WithImage(r.client.ImageService(), img.Name()))
+}
+
+// ImportImage reads an OCI image tar stream from reader and returns the image reference.
+func (r *Runtime) ImportImage(ctx context.Context, reader io.Reader) (string, error) {
+	ctx = r.nsCtx(ctx)
+
+	imgs, err := r.client.Import(ctx, reader)
+	if err != nil {
+		return "", fmt.Errorf("import image: %w", err)
+	}
+	if len(imgs) == 0 {
+		return "", fmt.Errorf("import returned no images")
+	}
+	return imgs[0].Name, nil
 }
