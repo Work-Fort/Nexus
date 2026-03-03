@@ -6,6 +6,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -305,6 +306,24 @@ func (s *VMService) ExecVM(ctx context.Context, ref string, cmd []string) (*doma
 	}
 
 	return s.runtime.Exec(ctx, vm.ID, cmd)
+}
+
+// ExecStreamVM runs a command in the VM and streams output to the provided writers.
+// Returns the exit code when the process exits.
+func (s *VMService) ExecStreamVM(ctx context.Context, ref string, cmd []string, stdout, stderr io.Writer) (int, error) {
+	if len(cmd) == 0 {
+		return -1, fmt.Errorf("cmd is required: %w", domain.ErrValidation)
+	}
+
+	vm, err := s.store.Resolve(ctx, ref)
+	if err != nil {
+		return -1, err
+	}
+	if vm.State != domain.VMStateRunning {
+		return -1, domain.ErrInvalidState
+	}
+
+	return s.runtime.ExecStream(ctx, vm.ID, cmd, stdout, stderr)
 }
 
 // ExpandRootSize increases the root size quota for a VM.
