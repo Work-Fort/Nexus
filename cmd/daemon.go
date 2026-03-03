@@ -164,6 +164,12 @@ func newDaemonCmd() *cobra.Command {
 				return fmt.Errorf("sync dns: %w", err)
 			}
 
+			svc.RestoreVMs(context.Background())
+
+			monitorCtx, monitorCancel := context.WithCancel(context.Background())
+			defer monitorCancel()
+			svc.StartCrashMonitor(monitorCtx)
+
 			handler := httpapi.NewHandler(svc)
 
 			httpServer := &http.Server{
