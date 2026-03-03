@@ -118,6 +118,65 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 	return nil, fmt.Errorf("daemon did not become ready on %s within 10s", addr)
 }
 
+// StartDaemonWithNamespace starts a daemon reusing an existing namespace and
+// XDG directory. Used for testing boot recovery after daemon crash.
+func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, opts ...DaemonOption) (*Daemon, error) {
+	cfg := &daemonConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	args := []string{
+		"daemon",
+		"--listen", addr,
+		"--namespace", namespace,
+		"--log-level", "disabled",
+		fmt.Sprintf("--network-enabled=%t", cfg.networkEnabled),
+		fmt.Sprintf("--dns-enabled=%t", cfg.dnsEnabled),
+	}
+	if cfg.runtime != "" {
+		args = append(args, "--runtime", cfg.runtime)
+	}
+	if cfg.drivesDir != "" {
+		args = append(args, "--drives-dir", cfg.drivesDir)
+	}
+
+	var stderrBuf bytes.Buffer
+
+	cmd := exec.Command(binary, args...)
+	cmd.Env = append(os.Environ(),
+		"XDG_CONFIG_HOME="+xdgDir+"/config",
+		"XDG_STATE_HOME="+xdgDir+"/state",
+		"PATH="+binDir+":"+os.Getenv("PATH"),
+	)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start daemon: %w", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return &Daemon{
+				cmd:       cmd,
+				addr:      addr,
+				xdgDir:    xdgDir,
+				namespace: namespace,
+				stderr:    &stderrBuf,
+			}, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cmd.Process.Kill()
+	cmd.Wait()
+	return nil, fmt.Errorf("daemon did not become ready on %s within 10s", addr)
+}
+
 func (d *Daemon) Addr() string      { return d.addr }
 func (d *Daemon) Namespace() string { return d.namespace }
 
@@ -131,6 +190,18 @@ func (d *Daemon) StopFatal(t testing.TB) {
 		t.Fatal("data race detected in daemon (see stderr output above)")
 	}
 }
+
+// Kill sends SIGKILL to the daemon (simulates crash). Does NOT clean up
+// namespace or XDG dir — those are reused by the next daemon instance.
+func (d *Daemon) Kill() {
+	if d.cmd.Process != nil {
+		d.cmd.Process.Kill()
+		d.cmd.Wait()
+	}
+}
+
+// XDGDir returns the XDG temp directory used by this daemon.
+func (d *Daemon) XDGDir() string { return d.xdgDir }
 
 func (d *Daemon) Stop() error {
 	if d.cmd.Process == nil {
@@ -223,9 +294,11 @@ type VM struct {
 	Runtime   string  `json:"runtime"`
 	IP        string  `json:"ip,omitempty"`
 	Gateway   string  `json:"gateway,omitempty"`
-	CreatedAt string  `json:"created_at"`
-	StartedAt *string `json:"started_at,omitempty"`
-	StoppedAt *string `json:"stopped_at,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+	StartedAt       *string `json:"started_at,omitempty"`
+	StoppedAt       *string `json:"stopped_at,omitempty"`
+	RestartPolicy   string  `json:"restart_policy"`
+	RestartStrategy string  `json:"restart_strategy"`
 }
 
 type ExecResult struct {
@@ -286,6 +359,35 @@ func (c *Client) CreateVMWithImage(name, role, image string) (*VM, error) {
 	}
 	defer resp.Body.Close()
 	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
+}
+
+func (c *Client) CreateVMWithRestartPolicy(name, role, policy, strategy string) (*VM, error) {
+	body := fmt.Sprintf(`{"name":%q,"role":%q,"restart_policy":%q,"restart_strategy":%q}`,
+		name, role, policy, strategy)
+	resp, err := c.post("/v1/vms", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
+}
+
+func (c *Client) UpdateRestartPolicy(id, policy, strategy string) (*VM, error) {
+	body := fmt.Sprintf(`{"restart_policy":%q,"restart_strategy":%q}`, policy, strategy)
+	resp, err := c.put("/v1/vms/"+id+"/restart-policy", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
 		return nil, err
 	}
 	var vm VM
@@ -530,6 +632,15 @@ func (c *Client) get(path string) (*http.Response, error) {
 
 func (c *Client) post(path, body string) (*http.Response, error) {
 	return c.http.Post(c.base+path, "application/json", strings.NewReader(body))
+}
+
+func (c *Client) put(path, body string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodPut, c.base+path, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.http.Do(req)
 }
 
 func (c *Client) delete(path string) (*http.Response, error) {
