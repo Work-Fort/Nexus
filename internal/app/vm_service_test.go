@@ -99,6 +99,16 @@ func (m *mockStore) UpdateRootSize(_ context.Context, id string, rootSize int64)
 	return nil
 }
 
+func (m *mockStore) UpdateRestartPolicy(_ context.Context, id string, policy domain.RestartPolicy, strategy domain.RestartStrategy) error {
+	vm, ok := m.vms[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	vm.RestartPolicy = policy
+	vm.RestartStrategy = strategy
+	return nil
+}
+
 func (m *mockStore) Delete(_ context.Context, id string) error {
 	delete(m.vms, id)
 	return nil

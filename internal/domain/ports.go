@@ -17,6 +17,7 @@ type VMStore interface {
 	Resolve(ctx context.Context, ref string) (*VM, error)
 	UpdateState(ctx context.Context, id string, state VMState, now time.Time) error
 	UpdateRootSize(ctx context.Context, id string, rootSize int64) error
+	UpdateRestartPolicy(ctx context.Context, id string, policy RestartPolicy, strategy RestartStrategy) error
 	Delete(ctx context.Context, id string) error
 }
 

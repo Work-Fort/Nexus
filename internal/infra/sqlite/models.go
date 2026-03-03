@@ -29,19 +29,21 @@ type Drive struct {
 }
 
 type Vm struct {
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	Role       string         `json:"role"`
-	Image      string         `json:"image"`
-	Runtime    string         `json:"runtime"`
-	State      string         `json:"state"`
-	CreatedAt  string         `json:"created_at"`
-	StartedAt  sql.NullString `json:"started_at"`
-	StoppedAt  sql.NullString `json:"stopped_at"`
-	Ip         string         `json:"ip"`
-	Gateway    string         `json:"gateway"`
-	NetnsPath  string         `json:"netns_path"`
-	DnsServers sql.NullString `json:"dns_servers"`
-	DnsSearch  sql.NullString `json:"dns_search"`
-	RootSize   int64          `json:"root_size"`
+	ID              string         `json:"id"`
+	Name            string         `json:"name"`
+	Role            string         `json:"role"`
+	Image           string         `json:"image"`
+	Runtime         string         `json:"runtime"`
+	State           string         `json:"state"`
+	CreatedAt       string         `json:"created_at"`
+	StartedAt       sql.NullString `json:"started_at"`
+	StoppedAt       sql.NullString `json:"stopped_at"`
+	Ip              string         `json:"ip"`
+	Gateway         string         `json:"gateway"`
+	NetnsPath       string         `json:"netns_path"`
+	DnsServers      sql.NullString `json:"dns_servers"`
+	DnsSearch       sql.NullString `json:"dns_search"`
+	RootSize        int64          `json:"root_size"`
+	RestartPolicy   string         `json:"restart_policy"`
+	RestartStrategy string         `json:"restart_strategy"`
 }

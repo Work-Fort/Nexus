@@ -100,19 +100,21 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 		}
 	}
 	return s.q.InsertVM(ctx, InsertVMParams{
-		ID:         vm.ID,
-		Name:       vm.Name,
-		Role:       string(vm.Role),
-		Image:      vm.Image,
-		Runtime:    vm.Runtime,
-		State:      string(vm.State),
-		CreatedAt:  vm.CreatedAt.UTC().Format(timeFormat),
-		Ip:         vm.IP,
-		Gateway:    vm.Gateway,
-		NetnsPath:  vm.NetNSPath,
-		DnsServers: dnsServers,
-		DnsSearch:  dnsSearch,
-		RootSize:   vm.RootSize,
+		ID:              vm.ID,
+		Name:            vm.Name,
+		Role:            string(vm.Role),
+		Image:           vm.Image,
+		Runtime:         vm.Runtime,
+		State:           string(vm.State),
+		CreatedAt:       vm.CreatedAt.UTC().Format(timeFormat),
+		Ip:              vm.IP,
+		Gateway:         vm.Gateway,
+		NetnsPath:       vm.NetNSPath,
+		DnsServers:      dnsServers,
+		DnsSearch:       dnsSearch,
+		RootSize:        vm.RootSize,
+		RestartPolicy:   string(vm.RestartPolicy),
+		RestartStrategy: string(vm.RestartStrategy),
 	})
 }
 
@@ -191,6 +193,14 @@ func (s *Store) UpdateState(ctx context.Context, id string, state domain.VMState
 
 func (s *Store) UpdateRootSize(ctx context.Context, id string, rootSize int64) error {
 	return s.q.UpdateVMRootSize(ctx, UpdateVMRootSizeParams{RootSize: rootSize, ID: id})
+}
+
+func (s *Store) UpdateRestartPolicy(ctx context.Context, id string, policy domain.RestartPolicy, strategy domain.RestartStrategy) error {
+	return s.q.UpdateVMRestartPolicy(ctx, UpdateVMRestartPolicyParams{
+		RestartPolicy:   string(policy),
+		RestartStrategy: string(strategy),
+		ID:              id,
+	})
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
@@ -468,7 +478,9 @@ func vmFromRow(row Vm) (*domain.VM, error) {
 		IP:        row.Ip,
 		Gateway:   row.Gateway,
 		NetNSPath: row.NetnsPath,
-		RootSize:  row.RootSize,
+		RootSize:        row.RootSize,
+		RestartPolicy:   domain.RestartPolicy(row.RestartPolicy),
+		RestartStrategy: domain.RestartStrategy(row.RestartStrategy),
 	}
 	var err error
 	vm.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)
