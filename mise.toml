@@ -115,3 +115,26 @@ fi
 
 echo "Nexus state cleaned"
 """
+
+[tasks.e2e]
+description = "Run E2E tests (requires root, containerd, btrfs)"
+depends = ["build"]
+run = "cd tests/e2e && go test -v -count=1 -parallel 1 -timeout 10m ."
+
+[tasks."e2e:clean"]
+description = "Clean up leaked E2E containerd namespaces"
+run = """
+#!/usr/bin/env bash
+set -e
+echo "Cleaning E2E namespaces..."
+for ns in $(ctr namespaces list -q | grep ^nexus-e2e- 2>/dev/null); do
+  echo "  Cleaning namespace: $ns"
+  for c in $(ctr -n "$ns" containers list -q 2>/dev/null); do
+    ctr -n "$ns" tasks kill "$c" 2>/dev/null || true
+    ctr -n "$ns" tasks delete "$c" 2>/dev/null || true
+    ctr -n "$ns" containers delete "$c" 2>/dev/null || true
+  done
+  ctr namespaces remove "$ns" 2>/dev/null || true
+done
+echo "E2E cleanup done"
+"""
