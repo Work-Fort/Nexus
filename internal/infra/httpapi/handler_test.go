@@ -148,6 +148,11 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 	return &domain.ExecResult{ExitCode: 0, Stdout: "ok\n"}, nil
 }
 
+func (m *mockRuntime) ExecStream(_ context.Context, id string, cmd []string, stdout, stderr io.Writer) (int, error) {
+	stdout.Write([]byte("ok\n")) //nolint:errcheck
+	return 0, nil
+}
+
 func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) error {
 	return nil
 }
