@@ -4,6 +4,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -37,4 +38,12 @@ func (s *NoopStorage) DeleteVolume(_ context.Context, name string) error {
 
 func (s *NoopStorage) VolumePath(name string) string {
 	return filepath.Join(s.basePath, name)
+}
+
+func (s *NoopStorage) SendVolume(_ context.Context, name string, _ io.Writer) error {
+	return fmt.Errorf("send volume: not supported on noop storage")
+}
+
+func (s *NoopStorage) ReceiveVolume(_ context.Context, name string, _ io.Reader) error {
+	return fmt.Errorf("receive volume: not supported on noop storage")
 }

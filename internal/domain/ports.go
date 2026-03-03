@@ -150,6 +150,8 @@ type Storage interface {
 	CreateVolume(ctx context.Context, name string, sizeBytes uint64) (path string, err error)
 	DeleteVolume(ctx context.Context, name string) error
 	VolumePath(name string) string
+	SendVolume(ctx context.Context, name string, w io.Writer) error
+	ReceiveVolume(ctx context.Context, name string, r io.Reader) error
 }
 
 // DNSConfig holds per-VM DNS resolution settings.

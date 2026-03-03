@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,4 +70,36 @@ func (s *BtrfsStorage) DeleteVolume(_ context.Context, name string) error {
 
 func (s *BtrfsStorage) VolumePath(name string) string {
 	return filepath.Join(s.basePath, name)
+}
+
+// SendVolume creates a read-only snapshot of the named volume and writes a
+// btrfs send stream to w. The temporary snapshot is cleaned up after sending.
+func (s *BtrfsStorage) SendVolume(_ context.Context, name string, w io.Writer) error {
+	srcPath := filepath.Join(s.basePath, name)
+	snapPath := srcPath + ".export-snap"
+
+	if err := btrfs.CreateSnapshot(srcPath, snapPath, true); err != nil {
+		return fmt.Errorf("create export snapshot %s: %w", name, err)
+	}
+	defer btrfs.DeleteSubvolume(snapPath) //nolint:errcheck
+
+	return btrfs.Send(snapPath, w)
+}
+
+// ReceiveVolume reads a btrfs send stream from r and receives it as a new
+// volume named name. The received subvolume is created under basePath.
+func (s *BtrfsStorage) ReceiveVolume(_ context.Context, name string, r io.Reader) error {
+	if err := btrfs.Receive(s.basePath, r); err != nil {
+		return fmt.Errorf("receive volume %s: %w", name, err)
+	}
+	// btrfs receive creates the subvolume with the original snapshot name.
+	// Rename to the desired name if different.
+	receivedPath := filepath.Join(s.basePath, name+".export-snap")
+	targetPath := filepath.Join(s.basePath, name)
+
+	if err := os.Rename(receivedPath, targetPath); err != nil {
+		return fmt.Errorf("rename received volume: %w", err)
+	}
+
+	return btrfs.SetReadOnly(targetPath, false)
 }

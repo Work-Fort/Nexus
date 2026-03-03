@@ -409,6 +409,14 @@ func (m *mockStorage) VolumePath(name string) string {
 	return "/mock/drives/" + name
 }
 
+func (m *mockStorage) SendVolume(_ context.Context, _ string, _ io.Writer) error {
+	return nil
+}
+
+func (m *mockStorage) ReceiveVolume(_ context.Context, _ string, _ io.Reader) error {
+	return nil
+}
+
 // --- helper ---
 
 func newSvcWithDrives() (*app.VMService, *mockStore, *mockRuntime, *mockDriveStore, *mockStorage) {
