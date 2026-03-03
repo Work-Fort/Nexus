@@ -25,13 +25,15 @@ func TestStoreCreateAndGet(t *testing.T) {
 	ctx := context.Background()
 
 	vm := &domain.VM{
-		ID:        "vm-001",
-		Name:      "test-agent",
-		Role:      domain.VMRoleAgent,
-		State:     domain.VMStateCreated,
-		Image:     "alpine:latest",
-		Runtime:   "io.containerd.runc.v2",
-		CreatedAt: time.Now().UTC().Truncate(time.Millisecond),
+		ID:              "vm-001",
+		Name:            "test-agent",
+		Role:            domain.VMRoleAgent,
+		State:           domain.VMStateCreated,
+		Image:           "alpine:latest",
+		Runtime:         "io.containerd.runc.v2",
+		RestartPolicy:   domain.RestartPolicyNone,
+		RestartStrategy: domain.RestartStrategyBackoff,
+		CreatedAt:       time.Now().UTC().Truncate(time.Millisecond),
 	}
 
 	if err := store.Create(ctx, vm); err != nil {
@@ -69,13 +71,15 @@ func TestStoreGetByName(t *testing.T) {
 	ctx := context.Background()
 
 	vm := &domain.VM{
-		ID:        "vm-002",
-		Name:      "deploy-agent",
-		Role:      domain.VMRoleAgent,
-		State:     domain.VMStateCreated,
-		Image:     "alpine:latest",
-		Runtime:   "io.containerd.runc.v2",
-		CreatedAt: time.Now().UTC().Truncate(time.Millisecond),
+		ID:              "vm-002",
+		Name:            "deploy-agent",
+		Role:            domain.VMRoleAgent,
+		State:           domain.VMStateCreated,
+		Image:           "alpine:latest",
+		Runtime:         "io.containerd.runc.v2",
+		RestartPolicy:   domain.RestartPolicyNone,
+		RestartStrategy: domain.RestartStrategyBackoff,
+		CreatedAt:       time.Now().UTC().Truncate(time.Millisecond),
 	}
 	store.Create(ctx, vm)
 
@@ -93,8 +97,8 @@ func TestStoreList(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	store.Create(ctx, &domain.VM{ID: "a1", Name: "agent-1", Role: domain.VMRoleAgent, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", CreatedAt: now})
-	store.Create(ctx, &domain.VM{ID: "s1", Name: "svc-1", Role: domain.VMRoleService, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", CreatedAt: now})
+	store.Create(ctx, &domain.VM{ID: "a1", Name: "agent-1", Role: domain.VMRoleAgent, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
+	store.Create(ctx, &domain.VM{ID: "s1", Name: "svc-1", Role: domain.VMRoleService, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
 
 	// List all
 	vms, err := store.List(ctx, domain.VMFilter{})
@@ -124,7 +128,7 @@ func TestStoreUpdateState(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	store.Create(ctx, &domain.VM{ID: "vm-1", Name: "test", Role: domain.VMRoleAgent, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", CreatedAt: now})
+	store.Create(ctx, &domain.VM{ID: "vm-1", Name: "test", Role: domain.VMRoleAgent, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
 
 	// Start
 	startTime := now.Add(time.Second)
@@ -158,7 +162,7 @@ func TestStoreDelete(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	store.Create(ctx, &domain.VM{ID: "vm-del", Name: "deleteme", Role: domain.VMRoleAgent, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", CreatedAt: now})
+	store.Create(ctx, &domain.VM{ID: "vm-del", Name: "deleteme", Role: domain.VMRoleAgent, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
 
 	if err := store.Delete(ctx, "vm-del"); err != nil {
 		t.Fatalf("delete: %v", err)
