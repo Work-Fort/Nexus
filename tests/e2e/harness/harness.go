@@ -271,6 +271,20 @@ func (c *Client) CreateVM(name, role string) (*VM, error) {
 	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
 }
 
+func (c *Client) CreateVMWithImage(name, role, image string) (*VM, error) {
+	body := fmt.Sprintf(`{"name":%q,"role":%q,"image":%q}`, name, role, image)
+	resp, err := c.post("/v1/vms", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
+}
+
 func (c *Client) GetVM(id string) (*VM, error) {
 	resp, err := c.get("/v1/vms/" + id)
 	if err != nil {
