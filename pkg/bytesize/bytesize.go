@@ -73,3 +73,34 @@ func Parse(s string) (uint64, error) {
 
 	return uint64(result), nil
 }
+
+// Format converts bytes to a human-readable size string using SI suffixes.
+// Uses the largest whole suffix that divides evenly, falling back to one
+// decimal place if needed. Zero returns "0".
+func Format(n uint64) string {
+	if n == 0 {
+		return "0"
+	}
+
+	type unit struct {
+		suffix string
+		size   uint64
+	}
+	units := []unit{
+		{"T", 1_000_000_000_000},
+		{"G", 1_000_000_000},
+		{"M", 1_000_000},
+		{"K", 1_000},
+	}
+
+	for _, u := range units {
+		if n >= u.size {
+			if n%u.size == 0 {
+				return fmt.Sprintf("%d%s", n/u.size, u.suffix)
+			}
+			val := float64(n) / float64(u.size)
+			return fmt.Sprintf("%.1f%s", val, u.suffix)
+		}
+	}
+	return fmt.Sprintf("%d", n)
+}

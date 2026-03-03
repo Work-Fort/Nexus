@@ -42,6 +42,31 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestFormat(t *testing.T) {
+	tests := []struct {
+		input uint64
+		want  string
+	}{
+		{0, "0"},
+		{512, "512"},
+		{1_000_000_000, "1G"},
+		{2_000_000_000_000, "2T"},
+		{500_000_000, "500M"},
+		{1_500_000_000, "1.5G"},
+		{1_000_000, "1M"},
+		{1_000, "1K"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := bytesize.Format(tt.input)
+			if got != tt.want {
+				t.Errorf("Format(%d) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	tests := []string{
 		"",
