@@ -220,11 +220,15 @@ func (s *VMService) StartVM(ctx context.Context, ref string) error {
 	return nil
 }
 
-// StopVM stops a running VM.
+// StopVM stops a running VM. It is idempotent: stopping an already-stopped
+// VM returns nil.
 func (s *VMService) StopVM(ctx context.Context, ref string) error {
 	vm, err := s.store.Resolve(ctx, ref)
 	if err != nil {
 		return err
+	}
+	if vm.State == domain.VMStateStopped {
+		return nil // already stopped, idempotent
 	}
 	if vm.State != domain.VMStateRunning {
 		return domain.ErrInvalidState

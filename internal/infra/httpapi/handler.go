@@ -693,13 +693,18 @@ func registerBackupRoutes(api huma.API, svc *app.VMService) {
 		ID             string `path:"id" doc:"VM ID or name"`
 		IncludeDevices bool   `query:"include_devices" default:"false" doc:"Include device mappings"`
 	}) (*huma.StreamResponse, error) {
+		// Buffer the archive so errors can be reported properly
+		// rather than partially streaming a corrupt archive.
+		var buf bytes.Buffer
+		if err := svc.ExportVM(ctx, input.ID, input.IncludeDevices, &buf); err != nil {
+			return nil, mapDomainError(err)
+		}
+
 		return &huma.StreamResponse{
 			Body: func(ctx huma.Context) {
 				ctx.SetHeader("Content-Type", "application/zstd")
 				ctx.SetHeader("Content-Disposition", `attachment; filename="nexus-backup.tar.zst"`)
-				if err := svc.ExportVM(ctx.Context(), input.ID, input.IncludeDevices, ctx.BodyWriter()); err != nil {
-					log.Error("export VM", "err", err)
-				}
+				ctx.BodyWriter().Write(buf.Bytes()) //nolint:errcheck
 			},
 		}, nil
 	})

@@ -31,12 +31,14 @@ type ExportManifest struct {
 }
 
 type ManifestVM struct {
-	Name     string       `json:"name"`
-	Role     string       `json:"role"`
-	Image    string       `json:"image"`
-	Runtime  string       `json:"runtime"`
-	RootSize string       `json:"root_size,omitempty"`
-	DNS      *ManifestDNS `json:"dns,omitempty"`
+	Name            string       `json:"name"`
+	Role            string       `json:"role"`
+	Image           string       `json:"image"`
+	Runtime         string       `json:"runtime"`
+	RootSize        string       `json:"root_size,omitempty"`
+	RestartPolicy   string       `json:"restart_policy,omitempty"`
+	RestartStrategy string       `json:"restart_strategy,omitempty"`
+	DNS             *ManifestDNS `json:"dns,omitempty"`
 }
 
 type ManifestDNS struct {
@@ -93,10 +95,12 @@ func (s *VMService) ExportVM(ctx context.Context, ref string, includeDevices boo
 	manifest := ExportManifest{
 		Version: manifestVersion,
 		VM: ManifestVM{
-			Name:    vm.Name,
-			Role:    string(vm.Role),
-			Image:   vm.Image,
-			Runtime: vm.Runtime,
+			Name:            vm.Name,
+			Role:            string(vm.Role),
+			Image:           vm.Image,
+			Runtime:         vm.Runtime,
+			RestartPolicy:   string(vm.RestartPolicy),
+			RestartStrategy: string(vm.RestartStrategy),
 		},
 	}
 	if vm.RootSize > 0 {
@@ -328,15 +332,25 @@ func (s *VMService) ImportVM(ctx context.Context, r io.Reader, strictDevices boo
 	}
 
 	// Create VM record.
+	restartPolicy := domain.RestartPolicy(manifest.VM.RestartPolicy)
+	if !domain.ValidRestartPolicy(restartPolicy) {
+		restartPolicy = domain.RestartPolicyNone
+	}
+	restartStrategy := domain.RestartStrategy(manifest.VM.RestartStrategy)
+	if !domain.ValidRestartStrategy(restartStrategy) {
+		restartStrategy = domain.RestartStrategyBackoff
+	}
 	vm := &domain.VM{
-		ID:        nxid.New(),
-		Name:      manifest.VM.Name,
-		Role:      domain.VMRole(manifest.VM.Role),
-		State:     domain.VMStateCreated,
-		Image:     manifest.VM.Image,
-		Runtime:   manifest.VM.Runtime,
-		RootSize:  rootSize,
-		CreatedAt: time.Now().UTC(),
+		ID:              nxid.New(),
+		Name:            manifest.VM.Name,
+		Role:            domain.VMRole(manifest.VM.Role),
+		State:           domain.VMStateCreated,
+		Image:           manifest.VM.Image,
+		Runtime:         manifest.VM.Runtime,
+		RootSize:        rootSize,
+		RestartPolicy:   restartPolicy,
+		RestartStrategy: restartStrategy,
+		CreatedAt:       time.Now().UTC(),
 	}
 	if manifest.VM.DNS != nil {
 		vm.DNSConfig = &domain.DNSConfig{

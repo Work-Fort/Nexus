@@ -19,10 +19,12 @@ import (
 	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/images/archive"
+	"github.com/containerd/containerd/v2/core/leases"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	"github.com/containerd/platforms"
 	"github.com/containerd/typeurl/v2"
 	"github.com/Work-Fort/Nexus/pkg/nxid"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -409,26 +411,68 @@ func (r *Runtime) Exec(ctx context.Context, id string, cmd []string) (*domain.Ex
 }
 
 // ExportImage writes the OCI image as a tar stream to w.
+// It creates a temporary lease and force-pulls the image to ensure content
+// blobs are available, since containerd's GC may have removed them after
+// they were unpacked into snapshots.
 func (r *Runtime) ExportImage(ctx context.Context, imageRef string, w io.Writer) error {
 	ctx = r.nsCtx(ctx)
 
-	img, err := r.client.GetImage(ctx, imageRef)
+	// Create a temporary lease to prevent the GC from removing content
+	// between the pull and the export.
+	ls := r.client.LeasesService()
+	lease, err := ls.Create(ctx, leases.WithRandomID(), leases.WithExpiration(5*time.Minute))
 	if err != nil {
-		return fmt.Errorf("get image %s: %w", imageRef, err)
+		return fmt.Errorf("create export lease: %w", err)
+	}
+	defer ls.Delete(ctx, lease) //nolint:errcheck
+
+	leasedCtx := leases.WithLease(ctx, lease.ID)
+
+	// Remove the existing image record so that Pull does a full fetch
+	// (otherwise it may skip downloading content that was GC'd).
+	imgSvc := r.client.ImageService()
+	if err := imgSvc.Delete(leasedCtx, imageRef); err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("remove image before export re-pull: %w", err)
 	}
 
-	return r.client.Export(ctx, w, archive.WithImage(r.client.ImageService(), img.Name()))
+	img, err := r.client.Pull(leasedCtx, imageRef, client.WithPullUnpack)
+	if err != nil {
+		return fmt.Errorf("pull image for export %s: %w", imageRef, err)
+	}
+
+	return r.client.Export(leasedCtx, w,
+		archive.WithImage(imgSvc, img.Name()),
+		archive.WithPlatform(platforms.DefaultStrict()),
+	)
 }
 
-// ImportImage reads an OCI image tar stream from reader and returns the image reference.
+// ImportImage reads an OCI image tar stream from reader and returns the image
+// reference. A temporary lease protects the imported content from GC.
 func (r *Runtime) ImportImage(ctx context.Context, reader io.Reader) (string, error) {
 	ctx = r.nsCtx(ctx)
 
-	imgs, err := r.client.Import(ctx, reader)
+	// Create a lease to protect imported content from GC until the caller
+	// has a chance to create a container referencing the image.
+	ls := r.client.LeasesService()
+	lease, err := ls.Create(ctx, leases.WithRandomID(), leases.WithExpiration(10*time.Minute))
 	if err != nil {
+		return "", fmt.Errorf("create import lease: %w", err)
+	}
+	// Intentionally NOT deleting the lease immediately — it expires after
+	// 10 minutes, giving the caller time to create a container.
+
+	leasedCtx := leases.WithLease(ctx, lease.ID)
+
+	imgs, err := r.client.Import(leasedCtx, reader,
+		client.WithSkipMissing(),
+		client.WithImportPlatform(platforms.DefaultStrict()),
+	)
+	if err != nil {
+		ls.Delete(ctx, lease) //nolint:errcheck
 		return "", fmt.Errorf("import image: %w", err)
 	}
 	if len(imgs) == 0 {
+		ls.Delete(ctx, lease) //nolint:errcheck
 		return "", fmt.Errorf("import returned no images")
 	}
 	return imgs[0].Name, nil

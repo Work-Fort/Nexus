@@ -247,7 +247,9 @@ func cleanupNamespace(ns string) {
 	for _, img := range strings.Fields(strings.TrimSpace(string(imgOut))) {
 		exec.Command("ctr", "-n", ns, "images", "remove", img).Run()
 	}
-	exec.Command("ctr", "-n", ns, "content", "prune", "references").Run()
+	// Note: we intentionally do NOT run "content prune references" here because
+	// it operates globally across namespaces and can remove content that a
+	// concurrent or subsequent test still needs for image export.
 	exec.Command("ctr", "namespaces", "remove", ns).Run()
 }
 
