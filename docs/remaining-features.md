@@ -63,6 +63,10 @@ TTY/console access per VM. Must survive Nexus restarts. Research needed:
 Kata/containerd shim may already hold the TTY FDs independently of the client
 process, making this straightforward.
 
+> **Future addition:** Add an endpoint/operation to sync the system-set default
+> shell from the VM rootfs (e.g. probe `/etc/shells` or `/etc/passwd`) into the
+> VM's `shell` field in the DB. Not part of the initial implementation.
+
 ## 8. MCP Endpoint
 
 HTTP streaming MCP server exposing REST-equivalent functions:
