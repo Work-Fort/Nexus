@@ -4,6 +4,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -281,6 +282,7 @@ func NewHandler(svc *app.VMService) http.Handler {
 	registerDriveRoutes(api, svc)
 	registerDeviceRoutes(api, svc)
 	registerNetworkRoutes(api, svc)
+	registerBackupRoutes(api, svc)
 
 	return mux
 }
@@ -643,6 +645,68 @@ func registerDeviceRoutes(api huma.API, svc *app.VMService) {
 			return nil, mapDomainError(err)
 		}
 		return &StatusOutput{Body: statusBody{Status: "ok"}}, nil
+	})
+}
+
+// --- Backup routes ---
+
+func registerBackupRoutes(api huma.API, svc *app.VMService) {
+	huma.Register(api, huma.Operation{
+		OperationID: "export-vm",
+		Method:      http.MethodPost,
+		Path:        "/v1/vms/{id}/export",
+		Summary:     "Export a VM as a backup archive",
+		Tags:        []string{"Backup"},
+	}, func(ctx context.Context, input *struct {
+		ID             string `path:"id" doc:"VM ID or name"`
+		IncludeDevices bool   `query:"include_devices" default:"false" doc:"Include device mappings"`
+	}) (*huma.StreamResponse, error) {
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				ctx.SetHeader("Content-Type", "application/zstd")
+				ctx.SetHeader("Content-Disposition", `attachment; filename="nexus-backup.tar.zst"`)
+				if err := svc.ExportVM(ctx.Context(), input.ID, input.IncludeDevices, ctx.BodyWriter()); err != nil {
+					log.Error("export VM", "err", err)
+				}
+			},
+		}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "import-vm",
+		Method:        http.MethodPost,
+		Path:          "/v1/vms/import",
+		Summary:       "Import a VM from a backup archive",
+		DefaultStatus: http.StatusCreated,
+		Tags:          []string{"Backup"},
+	}, func(ctx context.Context, input *struct {
+		StrictDevices bool `query:"strict_devices" default:"false" doc:"Error on missing devices"`
+		RawBody       []byte
+	}) (*struct {
+		Body struct {
+			VM       vmResponse `json:"vm"`
+			Warnings []string   `json:"warnings,omitempty"`
+		}
+	}, error) {
+		result, err := svc.ImportVM(ctx, bytes.NewReader(input.RawBody), input.StrictDevices)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+
+		return &struct {
+			Body struct {
+				VM       vmResponse `json:"vm"`
+				Warnings []string   `json:"warnings,omitempty"`
+			}
+		}{
+			Body: struct {
+				VM       vmResponse `json:"vm"`
+				Warnings []string   `json:"warnings,omitempty"`
+			}{
+				VM:       vmToResponse(result.VM),
+				Warnings: result.Warnings,
+			},
+		}, nil
 	})
 }
 
