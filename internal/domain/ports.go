@@ -15,6 +15,7 @@ type VMStore interface {
 	GetByName(ctx context.Context, name string) (*VM, error)
 	Resolve(ctx context.Context, ref string) (*VM, error)
 	UpdateState(ctx context.Context, id string, state VMState, now time.Time) error
+	UpdateRootSize(ctx context.Context, id string, rootSize int64) error
 	Delete(ctx context.Context, id string) error
 }
 
@@ -34,6 +35,7 @@ type CreateConfig struct {
 	Mounts         []Mount
 	Devices        []DeviceInfo
 	ResolvConfPath string
+	RootSize       int64 // bytes, 0 = no quota
 }
 
 // CreateOpt is a functional option for Runtime.Create.
@@ -101,6 +103,13 @@ func WithDevices(devices []DeviceInfo) CreateOpt {
 func WithResolvConf(path string) CreateOpt {
 	return func(c *CreateConfig) {
 		c.ResolvConfPath = path
+	}
+}
+
+// WithRootSize sets a btrfs quota limit on the container snapshot.
+func WithRootSize(size int64) CreateOpt {
+	return func(c *CreateConfig) {
+		c.RootSize = size
 	}
 }
 

@@ -44,6 +44,7 @@ type VM struct {
 	Gateway   string
 	NetNSPath string
 	DNSConfig *DNSConfig
+	RootSize  int64 // bytes, 0 = unlimited
 	CreatedAt time.Time
 	StartedAt *time.Time
 	StoppedAt *time.Time
@@ -56,6 +57,7 @@ type CreateVMParams struct {
 	Image     string
 	Runtime   string
 	DNSConfig *DNSConfig
+	RootSize  int64 // bytes, 0 = unlimited
 }
 
 // ExecResult holds the output of a command executed inside a VM.
