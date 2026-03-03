@@ -2,8 +2,10 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -140,12 +142,20 @@ func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) err
 	return nil
 }
 
-func (m *mockRuntime) ExportImage(_ context.Context, _ string, _ io.Writer) error {
-	return nil
+func (m *mockRuntime) ExportImage(_ context.Context, _ string, w io.Writer) error {
+	_, err := w.Write([]byte("mock-image-data"))
+	return err
 }
 
-func (m *mockRuntime) ImportImage(_ context.Context, _ io.Reader) (string, error) {
-	return "", nil
+func (m *mockRuntime) ImportImage(_ context.Context, r io.Reader) (string, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("empty image data")
+	}
+	return "imported:latest", nil
 }
 
 // --- mock DriveStore ---
@@ -409,11 +419,20 @@ func (m *mockStorage) VolumePath(name string) string {
 	return "/mock/drives/" + name
 }
 
-func (m *mockStorage) SendVolume(_ context.Context, _ string, _ io.Writer) error {
-	return nil
+func (m *mockStorage) SendVolume(_ context.Context, name string, w io.Writer) error {
+	_, err := w.Write([]byte("btrfs-stream-" + name))
+	return err
 }
 
-func (m *mockStorage) ReceiveVolume(_ context.Context, _ string, _ io.Reader) error {
+func (m *mockStorage) ReceiveVolume(_ context.Context, name string, r io.Reader) error {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("empty btrfs stream")
+	}
+	m.volumes[name] = true
 	return nil
 }
 
@@ -1110,6 +1129,173 @@ func TestGetDevice(t *testing.T) {
 	}
 }
 
+// --- export/import integration tests ---
+
+func TestExportImportRoundTrip(t *testing.T) {
+	svc, store, _, ds, st, _, _ := newSvcFull()
+	ctx := context.Background()
+
+	// Create a VM with a drive attached.
+	vm, err := svc.CreateVM(ctx, domain.CreateVMParams{
+		Name: "export-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	d, err := svc.CreateDrive(ctx, domain.CreateDriveParams{
+		Name: "data", Size: "1G", MountPath: "/data",
+	})
+	if err != nil {
+		t.Fatalf("create drive: %v", err)
+	}
+	if err := svc.AttachDrive(ctx, d.ID, vm.ID); err != nil {
+		t.Fatalf("attach drive: %v", err)
+	}
+
+	// Export the VM.
+	var archive bytes.Buffer
+	if err := svc.ExportVM(ctx, vm.ID, false, &archive); err != nil {
+		t.Fatalf("ExportVM: %v", err)
+	}
+	if archive.Len() == 0 {
+		t.Fatal("archive is empty")
+	}
+
+	// Delete the original VM and drive so names don't conflict.
+	if err := svc.DetachDrive(ctx, d.ID); err != nil {
+		t.Fatalf("detach: %v", err)
+	}
+	if err := svc.DeleteVM(ctx, vm.ID); err != nil {
+		t.Fatalf("delete VM: %v", err)
+	}
+	if err := svc.DeleteDrive(ctx, d.ID); err != nil {
+		t.Fatalf("delete drive: %v", err)
+	}
+
+	// Import the archive.
+	result, err := svc.ImportVM(ctx, &archive, false)
+	if err != nil {
+		t.Fatalf("ImportVM: %v", err)
+	}
+
+	// Verify imported VM.
+	if result.VM.Name != "export-me" {
+		t.Errorf("imported name = %q, want %q", result.VM.Name, "export-me")
+	}
+	if result.VM.Role != domain.VMRoleAgent {
+		t.Errorf("imported role = %q, want agent", result.VM.Role)
+	}
+	if result.VM.State != domain.VMStateCreated {
+		t.Errorf("imported state = %q, want created", result.VM.State)
+	}
+	if result.VM.Image != "alpine:latest" {
+		t.Errorf("imported image = %q, want alpine:latest", result.VM.Image)
+	}
+
+	// Verify VM is in the store.
+	got, err := store.Get(ctx, result.VM.ID)
+	if err != nil {
+		t.Fatalf("get imported VM: %v", err)
+	}
+	if got.Name != "export-me" {
+		t.Errorf("stored name = %q, want %q", got.Name, "export-me")
+	}
+
+	// Verify drive was imported and attached.
+	drives, err := ds.GetDrivesByVM(ctx, result.VM.ID)
+	if err != nil {
+		t.Fatalf("get drives: %v", err)
+	}
+	if len(drives) != 1 {
+		t.Fatalf("drive count = %d, want 1", len(drives))
+	}
+	if drives[0].Name != "data" {
+		t.Errorf("drive name = %q, want %q", drives[0].Name, "data")
+	}
+	if drives[0].MountPath != "/data" {
+		t.Errorf("drive mount_path = %q, want /data", drives[0].MountPath)
+	}
+
+	// Verify storage volume was received.
+	if !st.volumes["data"] {
+		t.Error("storage volume 'data' not received")
+	}
+}
+
+func TestExportRunningVMFails(t *testing.T) {
+	svc, _, _, _, _, _, _ := newSvcFull()
+	ctx := context.Background()
+
+	vm, _ := svc.CreateVM(ctx, domain.CreateVMParams{
+		Name: "running-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	svc.StartVM(ctx, vm.ID)
+
+	var buf bytes.Buffer
+	err := svc.ExportVM(ctx, vm.ID, false, &buf)
+	if err == nil {
+		t.Fatal("expected error exporting running VM")
+	}
+	if !errors.Is(err, domain.ErrInvalidState) {
+		t.Errorf("err = %v, want ErrInvalidState", err)
+	}
+}
+
+func TestImportNameConflict(t *testing.T) {
+	svc, _, _, _, _, _, _ := newSvcFull()
+	ctx := context.Background()
+
+	// Create a VM and export it.
+	vm, _ := svc.CreateVM(ctx, domain.CreateVMParams{
+		Name: "conflict-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	var archive bytes.Buffer
+	if err := svc.ExportVM(ctx, vm.ID, false, &archive); err != nil {
+		t.Fatalf("ExportVM: %v", err)
+	}
+
+	// Import without deleting the original — name conflict.
+	_, err := svc.ImportVM(ctx, &archive, false)
+	if err == nil {
+		t.Fatal("expected error for name conflict")
+	}
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Errorf("err = %v, want ErrAlreadyExists", err)
+	}
+}
+
+func TestExportWithDNS(t *testing.T) {
+	svc, _, _, _, _, _, _ := newSvcFull()
+	ctx := context.Background()
+
+	vm, _ := svc.CreateVM(ctx, domain.CreateVMParams{
+		Name: "dns-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		DNSConfig: &domain.DNSConfig{
+			Servers: []string{"8.8.8.8"},
+			Search:  []string{"test.local"},
+		},
+	})
+
+	var archive bytes.Buffer
+	if err := svc.ExportVM(ctx, vm.ID, false, &archive); err != nil {
+		t.Fatalf("ExportVM: %v", err)
+	}
+
+	// Delete original, import, and verify DNS config is restored.
+	svc.DeleteVM(ctx, vm.ID)
+
+	result, err := svc.ImportVM(ctx, &archive, false)
+	if err != nil {
+		t.Fatalf("ImportVM: %v", err)
+	}
+	if result.VM.DNSConfig == nil {
+		t.Fatal("DNS config not restored")
+	}
+	if result.VM.DNSConfig.Servers[0] != "8.8.8.8" {
+		t.Errorf("dns server = %q, want 8.8.8.8", result.VM.DNSConfig.Servers[0])
+	}
+}
+
 func TestDetachDeviceAlreadyDetached(t *testing.T) {
 	svc, _, _, _ := newSvcWithDevices()
 
@@ -1141,6 +1327,21 @@ func TestAttachDeviceAlreadyAttached(t *testing.T) {
 	if !errors.Is(err, domain.ErrDeviceAttached) {
 		t.Errorf("err = %v, want ErrDeviceAttached", err)
 	}
+}
+
+func newSvcFull() (*app.VMService, *mockStore, *mockRuntime, *mockDriveStore, *mockStorage, *mockDeviceStore, *mockDNS) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	ds := newMockDriveStore()
+	st := newMockStorage()
+	devStore := newMockDeviceStore()
+	dns := newMockDNS()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
+		app.WithStorage(ds, st),
+		app.WithDeviceStore(devStore),
+		app.WithDNS(dns),
+	)
+	return svc, store, rt, ds, st, devStore, dns
 }
 
 func TestDetachDeviceRunningVMFails(t *testing.T) {
