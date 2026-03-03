@@ -137,6 +137,10 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 	return &domain.ExecResult{ExitCode: 0, Stdout: "ok\n"}, nil
 }
 
+func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) error {
+	return nil
+}
+
 // --- test helpers ---
 
 func setupHandler() http.Handler {

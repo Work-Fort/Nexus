@@ -135,6 +135,10 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 	return &domain.ExecResult{ExitCode: 0, Stdout: "ok\n"}, nil
 }
 
+func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) error {
+	return nil
+}
+
 // --- mock DriveStore ---
 
 type mockDriveStore struct {
@@ -484,6 +488,43 @@ func TestCreateVMRootSizeTooSmall(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Errorf("err = %v, want ErrValidation", err)
+	}
+}
+
+func TestExpandRootSize(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "expand-vm", Role: domain.VMRoleAgent, Image: "alpine:latest",
+		Runtime: "runc", RootSize: 1_000_000_000,
+	})
+
+	err := svc.ExpandRootSize(context.Background(), vm.ID, 2_000_000_000)
+	if err != nil {
+		t.Fatalf("ExpandRootSize error: %v", err)
+	}
+
+	got, _ := svc.GetVM(context.Background(), vm.ID)
+	if got.RootSize != 2_000_000_000 {
+		t.Errorf("RootSize = %d, want 2000000000", got.RootSize)
+	}
+}
+
+func TestExpandRootSizeShrinkFails(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "shrink-vm", Role: domain.VMRoleAgent, Image: "alpine:latest",
+		Runtime: "runc", RootSize: 2_000_000_000,
+	})
+
+	err := svc.ExpandRootSize(context.Background(), vm.ID, 1_000_000_000)
+	if err == nil {
+		t.Fatal("expected error when shrinking")
 	}
 }
 

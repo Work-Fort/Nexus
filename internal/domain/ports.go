@@ -27,6 +27,7 @@ type Runtime interface {
 	Stop(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
 	Exec(ctx context.Context, id string, cmd []string) (*ExecResult, error)
+	SetSnapshotQuota(ctx context.Context, snapName string, sizeBytes int64) error
 }
 
 // CreateConfig holds optional configuration for Runtime.Create.

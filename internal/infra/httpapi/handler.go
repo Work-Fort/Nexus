@@ -14,6 +14,7 @@ import (
 
 	"github.com/Work-Fort/Nexus/internal/app"
 	"github.com/Work-Fort/Nexus/internal/domain"
+	"github.com/Work-Fort/Nexus/pkg/bytesize"
 )
 
 const timeFormatJSON = "2006-01-02T15:04:05.000Z"
@@ -36,6 +37,13 @@ type ListVMsInput struct {
 
 type VMPathInput struct {
 	ID string `path:"id" doc:"VM ID or name"`
+}
+
+type PatchVMInput struct {
+	ID   string `path:"id" doc:"VM ID or name"`
+	Body struct {
+		RootSize string `json:"root_size" doc:"New root size (must be larger than current)"`
+	}
 }
 
 type ExecVMInput struct {
@@ -404,6 +412,29 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 			Stdout:   result.Stdout,
 			Stderr:   result.Stderr,
 		}}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "patch-vm",
+		Method:      http.MethodPatch,
+		Path:        "/v1/vms/{id}",
+		Summary:     "Update VM settings",
+		Tags:        []string{"VMs"},
+	}, func(ctx context.Context, input *PatchVMInput) (*VMOutput, error) {
+		if input.Body.RootSize != "" {
+			sizeBytes, err := bytesize.Parse(input.Body.RootSize)
+			if err != nil {
+				return nil, huma.NewError(http.StatusBadRequest, err.Error())
+			}
+			if err := svc.ExpandRootSize(ctx, input.ID, int64(sizeBytes)); err != nil {
+				return nil, mapDomainError(err)
+			}
+		}
+		vm, err := svc.GetVM(ctx, input.ID)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &VMOutput{Body: vmToResponse(vm)}, nil
 	})
 }
 

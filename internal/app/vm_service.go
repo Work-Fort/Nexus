@@ -289,6 +289,31 @@ func (s *VMService) ExecVM(ctx context.Context, ref string, cmd []string) (*doma
 	return s.runtime.Exec(ctx, vm.ID, cmd)
 }
 
+// ExpandRootSize increases the root size quota for a VM.
+func (s *VMService) ExpandRootSize(ctx context.Context, ref string, newSize int64) error {
+	vm, err := s.store.Resolve(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if vm.RootSize == 0 {
+		return fmt.Errorf("VM has no root size limit set: %w", domain.ErrValidation)
+	}
+	if newSize <= vm.RootSize {
+		return fmt.Errorf("new size must be larger than current (%d): %w", vm.RootSize, domain.ErrValidation)
+	}
+
+	if err := s.runtime.SetSnapshotQuota(ctx, vm.ID+"-snap", newSize); err != nil {
+		return fmt.Errorf("set quota: %w", err)
+	}
+
+	if err := s.store.UpdateRootSize(ctx, vm.ID, newSize); err != nil {
+		return fmt.Errorf("store update root_size: %w", err)
+	}
+
+	log.Info("root size expanded", "id", vm.ID, "old", vm.RootSize, "new", newSize)
+	return nil
+}
+
 // ResetNetwork deletes the bridge and clears CNI state. Refuses if any VMs exist.
 func (s *VMService) ResetNetwork(ctx context.Context) error {
 	vms, err := s.store.List(ctx, domain.VMFilter{})
