@@ -2,6 +2,7 @@
 package harness
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/json"
@@ -309,6 +310,12 @@ type ExecResult struct {
 	Stderr   string `json:"stderr"`
 }
 
+// SSEEvent represents a parsed SSE event from the exec stream endpoint.
+type SSEEvent struct {
+	Type string // "stdout", "stderr", or "exit"
+	Data string // raw data field
+}
+
 type Drive struct {
 	ID        string  `json:"id"`
 	Name      string  `json:"name"`
@@ -462,6 +469,49 @@ func (c *Client) ExecVM(id string, cmd []string) (*ExecResult, error) {
 	}
 	var result ExecResult
 	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+func (c *Client) ExecStreamVM(id string, cmd []string) ([]SSEEvent, error) {
+	cmdJSON, _ := json.Marshal(cmd)
+	body := fmt.Sprintf(`{"cmd":%s}`, cmdJSON)
+	resp, err := c.post("/v1/vms/"+id+"/exec/stream", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	return parseSSEStream(resp.Body)
+}
+
+func parseSSEStream(r io.Reader) ([]SSEEvent, error) {
+	var events []SSEEvent
+	var currentType, currentData string
+
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			currentType = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "data: "):
+			currentData = strings.TrimPrefix(line, "data: ")
+		case line == "":
+			if currentType != "" {
+				events = append(events, SSEEvent{Type: currentType, Data: currentData})
+				currentType = ""
+				currentData = ""
+			}
+		}
+	}
+	if currentType != "" {
+		events = append(events, SSEEvent{Type: currentType, Data: currentData})
+	}
+
+	return events, scanner.Err()
 }
 
 // --- Drive operations ---
