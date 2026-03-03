@@ -205,6 +205,22 @@ func TestCreateVM(t *testing.T) {
 	}
 }
 
+func TestCreateVMWithRootSize(t *testing.T) {
+	h := setupHandler()
+
+	rec := doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "sized", "role": "agent", "root_size": "1G",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	decodeJSON(t, rec, &resp)
+	if resp["root_size"] != "1G" {
+		t.Errorf("root_size = %v, want 1G", resp["root_size"])
+	}
+}
+
 func TestCreateVMBadJSON(t *testing.T) {
 	h := setupHandler()
 

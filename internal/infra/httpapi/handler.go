@@ -23,11 +23,12 @@ const timeFormatJSON = "2006-01-02T15:04:05.000Z"
 
 type CreateVMInput struct {
 	Body struct {
-		Name    string         `json:"name" doc:"VM name"`
-		Role    string         `json:"role" doc:"VM role (agent or service)"`
-		Image   string         `json:"image,omitempty" doc:"OCI image"`
-		Runtime string         `json:"runtime,omitempty" doc:"Container runtime handler"`
-		DNS     *dnsConfigBody `json:"dns,omitempty" doc:"DNS configuration"`
+		Name     string         `json:"name" doc:"VM name"`
+		Role     string         `json:"role" doc:"VM role (agent or service)"`
+		Image    string         `json:"image,omitempty" doc:"OCI image"`
+		Runtime  string         `json:"runtime,omitempty" doc:"Container runtime handler"`
+		DNS      *dnsConfigBody `json:"dns,omitempty" doc:"DNS configuration"`
+		RootSize string         `json:"root_size,omitempty" doc:"Root filesystem size limit (e.g. 1G, 500M)"`
 	}
 }
 
@@ -148,6 +149,7 @@ type vmResponse struct {
 	IP        string         `json:"ip,omitempty" doc:"Assigned IP address"`
 	Gateway   string         `json:"gateway,omitempty" doc:"Network gateway"`
 	DNS       *dnsConfigBody `json:"dns,omitempty" doc:"DNS configuration"`
+	RootSize  *string        `json:"root_size,omitempty" doc:"Root filesystem size limit"`
 	CreatedAt string         `json:"created_at" doc:"Creation timestamp"`
 	StartedAt *string        `json:"started_at,omitempty" doc:"Start timestamp"`
 	StoppedAt *string        `json:"stopped_at,omitempty" doc:"Stop timestamp"`
@@ -198,6 +200,10 @@ func vmToResponse(vm *domain.VM) vmResponse {
 			Servers: vm.DNSConfig.Servers,
 			Search:  vm.DNSConfig.Search,
 		}
+	}
+	if vm.RootSize > 0 {
+		s := bytesize.Format(uint64(vm.RootSize))
+		r.RootSize = &s
 	}
 	if vm.StartedAt != nil {
 		s := vm.StartedAt.UTC().Format(timeFormatJSON)
@@ -298,12 +304,22 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 			}
 		}
 
+		var rootSize int64
+		if input.Body.RootSize != "" {
+			sz, err := bytesize.Parse(input.Body.RootSize)
+			if err != nil {
+				return nil, huma.NewError(http.StatusBadRequest, err.Error())
+			}
+			rootSize = int64(sz)
+		}
+
 		vm, err := svc.CreateVM(ctx, domain.CreateVMParams{
 			Name:      input.Body.Name,
 			Role:      domain.VMRole(input.Body.Role),
 			Image:     input.Body.Image,
 			Runtime:   input.Body.Runtime,
 			DNSConfig: dnsCfg,
+			RootSize:  rootSize,
 		})
 		if err != nil {
 			return nil, mapDomainError(err)
