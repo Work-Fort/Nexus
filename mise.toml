@@ -62,6 +62,10 @@ systemctl --user daemon-reload
 echo "Installed nexus to ~/.local/bin/ and nexus.service"
 """
 
+[tasks."openapi:export"]
+description = "Export OpenAPI spec from running daemon (daemon must be running)"
+run = "curl -sf http://127.0.0.1:9600/openapi -o docs/openapi.json && echo 'Exported to docs/openapi.json'"
+
 [tasks.wipe]
 description = "Remove all Nexus state (database, config, logs)"
 run = """
