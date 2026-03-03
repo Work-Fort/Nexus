@@ -410,6 +410,52 @@ func (r *Runtime) Exec(ctx context.Context, id string, cmd []string) (*domain.Ex
 	}, nil
 }
 
+// ExecStream runs a command inside the running container's task and streams
+// output to the provided writers. Returns the exit code when the process exits.
+func (r *Runtime) ExecStream(ctx context.Context, id string, cmd []string, stdout, stderr io.Writer) (int, error) {
+	ctx = r.nsCtx(ctx)
+
+	container, err := r.client.LoadContainer(ctx, id)
+	if err != nil {
+		return -1, fmt.Errorf("load container %s: %w", id, err)
+	}
+
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		return -1, fmt.Errorf("get task %s: %w", id, err)
+	}
+
+	spec, err := container.Spec(ctx)
+	if err != nil {
+		return -1, fmt.Errorf("get spec %s: %w", id, err)
+	}
+
+	pspec := *spec.Process
+	pspec.Args = cmd
+
+	execID := fmt.Sprintf("%s-exec-%s", id, nxid.New())
+	proc, err := task.Exec(ctx, execID, &pspec,
+		cio.NewCreator(cio.WithFIFODir(os.TempDir()), cio.WithStreams(nil, stdout, stderr)),
+	)
+	if err != nil {
+		return -1, fmt.Errorf("exec in %s: %w", id, err)
+	}
+
+	if err := proc.Start(ctx); err != nil {
+		return -1, fmt.Errorf("start exec %s: %w", id, err)
+	}
+
+	ch, err := proc.Wait(ctx)
+	if err != nil {
+		return -1, fmt.Errorf("wait exec %s: %w", id, err)
+	}
+	status := <-ch
+
+	proc.Delete(ctx) //nolint:errcheck // best-effort cleanup
+
+	return int(status.ExitCode()), nil
+}
+
 // ExportImage writes the OCI image as a tar stream to w.
 // It creates a temporary lease and force-pulls the image to ensure content
 // blobs are available, since containerd's GC may have removed them after
