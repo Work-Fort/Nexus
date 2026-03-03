@@ -92,7 +92,6 @@ func InitViper() {
 	viper.SetDefault("runtime", DefaultRuntime)
 	viper.SetDefault("namespace", DefaultNamespace)
 	viper.SetDefault("agent-image", DefaultAgentImage)
-	viper.SetDefault("webhook-url", "")
 	viper.SetDefault("cni-bin-dir", DefaultCNIBinDir)
 	viper.SetDefault("network-subnet", DefaultNetSubnet)
 	viper.SetDefault("network-enabled", true)
