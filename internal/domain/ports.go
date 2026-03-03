@@ -29,6 +29,7 @@ type Runtime interface {
 	Stop(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
 	Exec(ctx context.Context, id string, cmd []string) (*ExecResult, error)
+	ExecStream(ctx context.Context, id string, cmd []string, stdout, stderr io.Writer) (int, error)
 	SetSnapshotQuota(ctx context.Context, snapName string, sizeBytes int64) error
 	ExportImage(ctx context.Context, imageRef string, w io.Writer) error
 	ImportImage(ctx context.Context, reader io.Reader) (string, error)
