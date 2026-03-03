@@ -148,6 +148,11 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 	return &domain.ExecResult{ExitCode: 0, Stdout: "ok\n"}, nil
 }
 
+func (m *mockRuntime) ExecStream(_ context.Context, id string, cmd []string, stdout, stderr io.Writer) (int, error) {
+	stdout.Write([]byte("ok\n")) //nolint:errcheck
+	return 0, nil
+}
+
 func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) error {
 	return nil
 }
@@ -711,6 +716,62 @@ func TestExecVMEmptyCmd(t *testing.T) {
 	_, err := svc.ExecVM(context.Background(), vm.ID, []string{})
 	if err == nil {
 		t.Fatal("expected error for empty cmd")
+	}
+}
+
+func TestExecStreamVMRejectsStopped(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "stream-stopped", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+
+	var stdout, stderr bytes.Buffer
+	_, err := svc.ExecStreamVM(context.Background(), vm.ID, []string{"ls"}, &stdout, &stderr)
+	if !errors.Is(err, domain.ErrInvalidState) {
+		t.Fatalf("expected ErrInvalidState, got %v", err)
+	}
+}
+
+func TestExecStreamVMEmptyCmd(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "stream-empty", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	svc.StartVM(context.Background(), vm.ID)
+
+	var stdout, stderr bytes.Buffer
+	_, err := svc.ExecStreamVM(context.Background(), vm.ID, []string{}, &stdout, &stderr)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("expected ErrValidation, got %v", err)
+	}
+}
+
+func TestExecStreamVMSuccess(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name: "stream-ok", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+	})
+	svc.StartVM(context.Background(), vm.ID)
+
+	var stdout, stderr bytes.Buffer
+	exitCode, err := svc.ExecStreamVM(context.Background(), vm.ID, []string{"echo", "hi"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+	if stdout.String() != "ok\n" {
+		t.Fatalf("expected stdout %q, got %q", "ok\n", stdout.String())
 	}
 }
 
