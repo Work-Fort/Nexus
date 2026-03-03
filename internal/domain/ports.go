@@ -32,6 +32,7 @@ type Runtime interface {
 	SetSnapshotQuota(ctx context.Context, snapName string, sizeBytes int64) error
 	ExportImage(ctx context.Context, imageRef string, w io.Writer) error
 	ImportImage(ctx context.Context, reader io.Reader) (string, error)
+	WatchExits(ctx context.Context, onExit func(containerID string, exitCode uint32)) error
 }
 
 // CreateConfig holds optional configuration for Runtime.Create.

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	apievents "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/images/archive"
@@ -22,6 +23,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	"github.com/containerd/typeurl/v2"
 	"github.com/Work-Fort/Nexus/pkg/nxid"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
@@ -430,4 +432,40 @@ func (r *Runtime) ImportImage(ctx context.Context, reader io.Reader) (string, er
 		return "", fmt.Errorf("import returned no images")
 	}
 	return imgs[0].Name, nil
+}
+
+// WatchExits subscribes to task exit events in this runtime's namespace and
+// calls onExit for each container init process that exits. Blocks until ctx
+// is canceled. Exec process exits (e.ID != e.ContainerID) are filtered out.
+func (r *Runtime) WatchExits(ctx context.Context, onExit func(containerID string, exitCode uint32)) error {
+	ctx = r.nsCtx(ctx)
+	ch, errs := r.client.Subscribe(ctx, `topic=="/tasks/exit"`)
+
+	for {
+		select {
+		case env := <-ch:
+			if env == nil {
+				return nil
+			}
+			v, err := typeurl.UnmarshalAny(env.Event)
+			if err != nil {
+				continue
+			}
+			e, ok := v.(*apievents.TaskExit)
+			if !ok {
+				continue
+			}
+			// Only handle init process exits, not exec process exits.
+			if e.ID != e.ContainerID {
+				continue
+			}
+			onExit(e.ContainerID, e.ExitStatus)
+
+		case err := <-errs:
+			if err == nil {
+				return nil // clean shutdown
+			}
+			return fmt.Errorf("event stream: %w", err)
+		}
+	}
 }

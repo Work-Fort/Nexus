@@ -168,6 +168,10 @@ func (m *mockRuntime) ImportImage(_ context.Context, r io.Reader) (string, error
 	return "imported:latest", nil
 }
 
+func (m *mockRuntime) WatchExits(_ context.Context, _ func(string, uint32)) error {
+	return nil
+}
+
 // --- mock DriveStore ---
 
 type mockDriveStore struct {
