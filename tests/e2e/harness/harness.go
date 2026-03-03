@@ -475,6 +475,40 @@ func (c *Client) DetachDevice(id string) error {
 	return checkStatus(resp, http.StatusOK)
 }
 
+// --- Backup operations ---
+
+type ImportResponse struct {
+	VM       VM       `json:"vm"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+func (c *Client) ExportVM(id string, includeDevices bool) ([]byte, error) {
+	u := fmt.Sprintf("%s/v1/vms/%s/export?include_devices=%t", c.base, id, includeDevices)
+	resp, err := c.http.Post(u, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(resp.Body)
+}
+
+func (c *Client) ImportVM(archive []byte, strictDevices bool) (*ImportResponse, error) {
+	u := fmt.Sprintf("%s/v1/vms/import?strict_devices=%t", c.base, strictDevices)
+	resp, err := c.http.Post(u, "application/zstd", bytes.NewReader(archive))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var result ImportResponse
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
 // --- Raw access ---
 
 func (c *Client) RawRequest(method, path string, body io.Reader) (*http.Response, error) {

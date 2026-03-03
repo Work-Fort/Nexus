@@ -562,6 +562,106 @@ func TestInvalidCreatePayload(t *testing.T) {
 	}
 }
 
+func TestExportImportRoundTrip(t *testing.T) {
+	_, c := startDaemon(t)
+
+	// Create VM with nginx:alpine (stays alive for exec).
+	vm, err := c.CreateVMWithImage("test-backup", "agent", "docker.io/library/nginx:alpine")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	// Create and attach a drive.
+	drv, err := c.CreateDrive("test-backup-data", "256M", "/mnt/data")
+	if err != nil {
+		t.Fatalf("create drive: %v", err)
+	}
+	if err := c.AttachDrive(drv.ID, vm.ID); err != nil {
+		t.Fatalf("attach drive: %v", err)
+	}
+
+	// Start VM and write test data to the drive.
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+	var result *harness.ExecResult
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"sh", "-c", "echo test-data > /mnt/data/file.txt"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("write test data: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("write exit code = %d, stderr: %s", result.ExitCode, result.Stderr)
+	}
+
+	// Stop VM before export (required).
+	if err := c.StopVM(vm.ID); err != nil {
+		t.Fatalf("stop VM: %v", err)
+	}
+
+	// Export VM.
+	archive, err := c.ExportVM(vm.ID, false)
+	if err != nil {
+		t.Fatalf("export VM: %v", err)
+	}
+	if len(archive) == 0 {
+		t.Fatal("expected non-empty archive")
+	}
+	t.Logf("archive size: %d bytes", len(archive))
+
+	// Delete original VM and drive to free the names.
+	c.DetachDrive(drv.ID)
+	if err := c.DeleteVM(vm.ID); err != nil {
+		t.Fatalf("delete original VM: %v", err)
+	}
+	if err := c.DeleteDrive(drv.ID); err != nil {
+		t.Fatalf("delete original drive: %v", err)
+	}
+
+	// Import from archive.
+	imported, err := c.ImportVM(archive, false)
+	if err != nil {
+		t.Fatalf("import VM: %v", err)
+	}
+	if imported.VM.Name != "test-backup" {
+		t.Errorf("imported name = %q, want %q", imported.VM.Name, "test-backup")
+	}
+	if imported.VM.State != "created" {
+		t.Errorf("imported state = %q, want %q", imported.VM.State, "created")
+	}
+
+	// Start imported VM and verify data is intact.
+	if err := c.StartVM(imported.VM.ID); err != nil {
+		t.Fatalf("start imported VM: %v", err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(imported.VM.ID, []string{"cat", "/mnt/data/file.txt"})
+		if err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("read test data: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("read exit code = %d, stderr: %s", result.ExitCode, result.Stderr)
+	}
+	if strings.TrimSpace(result.Stdout) != "test-data" {
+		t.Errorf("data = %q, want %q", strings.TrimSpace(result.Stdout), "test-data")
+	}
+
+	// Clean up.
+	c.StopVM(imported.VM.ID)
+}
+
 func TestGracefulShutdown(t *testing.T) {
 	addr, err := harness.FreePort()
 	if err != nil {
