@@ -112,6 +112,7 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 		NetnsPath:  vm.NetNSPath,
 		DnsServers: dnsServers,
 		DnsSearch:  dnsSearch,
+		RootSize:   vm.RootSize,
 	})
 }
 
@@ -186,6 +187,10 @@ func (s *Store) UpdateState(ctx context.Context, id string, state domain.VMState
 	default:
 		return fmt.Errorf("unknown state: %s", state)
 	}
+}
+
+func (s *Store) UpdateRootSize(ctx context.Context, id string, rootSize int64) error {
+	return s.q.UpdateVMRootSize(ctx, UpdateVMRootSizeParams{RootSize: rootSize, ID: id})
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
@@ -463,6 +468,7 @@ func vmFromRow(row Vm) (*domain.VM, error) {
 		IP:        row.Ip,
 		Gateway:   row.Gateway,
 		NetNSPath: row.NetnsPath,
+		RootSize:  row.RootSize,
 	}
 	var err error
 	vm.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)

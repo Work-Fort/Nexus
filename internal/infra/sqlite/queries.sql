@@ -1,23 +1,23 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- name: InsertVM :exec
-INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size
 FROM vms WHERE id = ?;
 
 -- name: GetVMByName :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size
 FROM vms WHERE name = ?;
 
 -- name: ListVMs :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size
 FROM vms ORDER BY created_at DESC;
 
 -- name: ListVMsByRole :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size
 FROM vms WHERE role = ? ORDER BY created_at DESC;
 
 -- name: UpdateVMStateCreated :exec
@@ -28,6 +28,9 @@ UPDATE vms SET state = 'running', started_at = ? WHERE id = ?;
 
 -- name: UpdateVMStopped :exec
 UPDATE vms SET state = 'stopped', stopped_at = ? WHERE id = ?;
+
+-- name: UpdateVMRootSize :exec
+UPDATE vms SET root_size = ? WHERE id = ?;
 
 -- name: DeleteVM :exec
 DELETE FROM vms WHERE id = ?;
@@ -100,7 +103,7 @@ FROM devices WHERE vm_id = ? ORDER BY host_path;
 DELETE FROM devices WHERE id = ?;
 
 -- name: ResolveVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size
 FROM vms WHERE id = ? OR name = ?;
 
 -- name: ResolveDrive :one

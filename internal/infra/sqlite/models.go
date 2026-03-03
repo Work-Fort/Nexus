@@ -43,4 +43,5 @@ type Vm struct {
 	NetnsPath  string         `json:"netns_path"`
 	DnsServers sql.NullString `json:"dns_servers"`
 	DnsSearch  sql.NullString `json:"dns_search"`
+	RootSize   int64          `json:"root_size"`
 }
