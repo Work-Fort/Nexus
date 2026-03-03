@@ -29,7 +29,9 @@ type CreateVMInput struct {
 		Image    string         `json:"image,omitempty" doc:"OCI image"`
 		Runtime  string         `json:"runtime,omitempty" doc:"Container runtime handler"`
 		DNS      *dnsConfigBody `json:"dns,omitempty" doc:"DNS configuration"`
-		RootSize string         `json:"root_size,omitempty" doc:"Root filesystem size limit (e.g. 1G, 500M)"`
+		RootSize        string         `json:"root_size,omitempty" doc:"Root filesystem size limit (e.g. 1G, 500M)"`
+		RestartPolicy   string         `json:"restart_policy,omitempty" doc:"Restart policy (none, on-boot, always)" default:"none"`
+		RestartStrategy string         `json:"restart_strategy,omitempty" doc:"Restart strategy (immediate, backoff, fixed)" default:"backoff"`
 	}
 }
 
@@ -95,6 +97,14 @@ type AttachDeviceInput struct {
 	}
 }
 
+type UpdateRestartPolicyInput struct {
+	ID   string `path:"id" doc:"VM ID or name"`
+	Body struct {
+		RestartPolicy   string `json:"restart_policy" doc:"Restart policy (none, on-boot, always)"`
+		RestartStrategy string `json:"restart_strategy" doc:"Restart strategy (immediate, backoff, fixed)"`
+	}
+}
+
 // --- huma output types ---
 
 type VMOutput struct {
@@ -150,8 +160,10 @@ type vmResponse struct {
 	IP        string         `json:"ip,omitempty" doc:"Assigned IP address"`
 	Gateway   string         `json:"gateway,omitempty" doc:"Network gateway"`
 	DNS       *dnsConfigBody `json:"dns,omitempty" doc:"DNS configuration"`
-	RootSize  *string        `json:"root_size,omitempty" doc:"Root filesystem size limit"`
-	CreatedAt string         `json:"created_at" doc:"Creation timestamp"`
+	RootSize        *string        `json:"root_size,omitempty" doc:"Root filesystem size limit"`
+	RestartPolicy   string         `json:"restart_policy" doc:"Restart policy"`
+	RestartStrategy string         `json:"restart_strategy" doc:"Restart strategy"`
+	CreatedAt       string         `json:"created_at" doc:"Creation timestamp"`
 	StartedAt *string        `json:"started_at,omitempty" doc:"Start timestamp"`
 	StoppedAt *string        `json:"stopped_at,omitempty" doc:"Stop timestamp"`
 }
@@ -196,6 +208,8 @@ func vmToResponse(vm *domain.VM) vmResponse {
 		Gateway:   vm.Gateway,
 		CreatedAt: vm.CreatedAt.UTC().Format(timeFormatJSON),
 	}
+	r.RestartPolicy = string(vm.RestartPolicy)
+	r.RestartStrategy = string(vm.RestartStrategy)
 	if vm.DNSConfig != nil {
 		r.DNS = &dnsConfigBody{
 			Servers: vm.DNSConfig.Servers,
@@ -316,12 +330,14 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 		}
 
 		vm, err := svc.CreateVM(ctx, domain.CreateVMParams{
-			Name:      input.Body.Name,
-			Role:      domain.VMRole(input.Body.Role),
-			Image:     input.Body.Image,
-			Runtime:   input.Body.Runtime,
-			DNSConfig: dnsCfg,
-			RootSize:  rootSize,
+			Name:            input.Body.Name,
+			Role:            domain.VMRole(input.Body.Role),
+			Image:           input.Body.Image,
+			Runtime:         input.Body.Runtime,
+			DNSConfig:       dnsCfg,
+			RootSize:        rootSize,
+			RestartPolicy:   domain.RestartPolicy(input.Body.RestartPolicy),
+			RestartStrategy: domain.RestartStrategy(input.Body.RestartStrategy),
 		})
 		if err != nil {
 			return nil, mapDomainError(err)
@@ -449,6 +465,22 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 			}
 		}
 		vm, err := svc.GetVM(ctx, input.ID)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &VMOutput{Body: vmToResponse(vm)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "update-restart-policy",
+		Method:      http.MethodPut,
+		Path:        "/v1/vms/{id}/restart-policy",
+		Summary:     "Update VM restart policy",
+		Tags:        []string{"VMs"},
+	}, func(ctx context.Context, input *UpdateRestartPolicyInput) (*VMOutput, error) {
+		vm, err := svc.UpdateRestartPolicy(ctx, input.ID,
+			domain.RestartPolicy(input.Body.RestartPolicy),
+			domain.RestartStrategy(input.Body.RestartStrategy))
 		if err != nil {
 			return nil, mapDomainError(err)
 		}
