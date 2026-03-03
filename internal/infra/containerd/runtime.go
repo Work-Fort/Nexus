@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,18 +29,28 @@ import (
 
 // Runtime implements domain.Runtime backed by containerd.
 type Runtime struct {
-	client    *client.Client
-	namespace string
+	client      *client.Client
+	namespace   string
+	snapshotter string
+	quotaHelper string // path to nexus-quota binary, empty to skip
 }
 
 // New connects to containerd at the given socket path and returns a Runtime
 // scoped to the given namespace.
-func New(socketPath, namespace string) (*Runtime, error) {
+func New(socketPath, namespace, snapshotter, quotaHelper string) (*Runtime, error) {
 	c, err := client.New(socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("connect to containerd: %w", err)
 	}
-	return &Runtime{client: c, namespace: namespace}, nil
+	if snapshotter == "" {
+		snapshotter = "overlayfs"
+	}
+	return &Runtime{
+		client:      c,
+		namespace:   namespace,
+		snapshotter: snapshotter,
+		quotaHelper: quotaHelper,
+	}, nil
 }
 
 // Close closes the underlying containerd client connection.
@@ -140,6 +151,7 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 
 	_, err = r.client.NewContainer(ctx, id,
 		client.WithImage(img),
+		client.WithSnapshotter(r.snapshotter),
 		client.WithNewSnapshot(id+"-snap", img),
 		client.WithRuntime(runtimeHandler, nil),
 		client.WithNewSpec(specOpts...),
@@ -147,6 +159,18 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 	if err != nil {
 		return fmt.Errorf("create container %s: %w", id, err)
 	}
+
+	if createCfg.RootSize > 0 {
+		if err := r.setSnapshotQuota(ctx, id+"-snap", createCfg.RootSize); err != nil {
+			// Clean up the container we just created.
+			container, _ := r.client.LoadContainer(ctx, id)
+			if container != nil {
+				container.Delete(ctx, client.WithSnapshotCleanup) //nolint:errcheck
+			}
+			return fmt.Errorf("set root size quota: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -216,6 +240,38 @@ func withDevices(devices []domain.DeviceInfo) oci.SpecOpts {
 		}
 		return nil
 	}
+}
+
+// SetSnapshotQuota sets a btrfs qgroup limit on the given snapshot.
+// Exposed for use by the expand endpoint.
+func (r *Runtime) SetSnapshotQuota(ctx context.Context, snapName string, sizeBytes int64) error {
+	return r.setSnapshotQuota(r.nsCtx(ctx), snapName, sizeBytes)
+}
+
+// setSnapshotQuota sets a btrfs qgroup limit on the snapshot's subvolume.
+func (r *Runtime) setSnapshotQuota(ctx context.Context, snapName string, sizeBytes int64) error {
+	if r.quotaHelper == "" {
+		return fmt.Errorf("quota helper not configured")
+	}
+
+	snapshotter := r.client.SnapshotService(r.snapshotter)
+	mounts, err := snapshotter.Mounts(ctx, snapName)
+	if err != nil {
+		return fmt.Errorf("get snapshot mounts %s: %w", snapName, err)
+	}
+	if len(mounts) == 0 {
+		return fmt.Errorf("no mounts for snapshot %s", snapName)
+	}
+
+	// For btrfs snapshotter, the mount source is the subvolume path.
+	subvolPath := mounts[0].Source
+
+	cmd := exec.CommandContext(ctx, r.quotaHelper, "set-limit", subvolPath, strconv.FormatInt(sizeBytes, 10))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s set-limit %s %d: %s: %w", r.quotaHelper, subvolPath, sizeBytes, string(out), err)
+	}
+
+	return nil
 }
 
 // Start creates and starts a task for the given container.
