@@ -246,3 +246,147 @@ func TestCreateDuplicateName(t *testing.T) {
 		t.Fatal("expected error creating duplicate name, got nil")
 	}
 }
+
+func TestCreateDrive(t *testing.T) {
+	_, c := startDaemon(t)
+
+	d, err := c.CreateDrive("test-drive", "1G", "/data")
+	if err != nil {
+		t.Fatalf("create drive: %v", err)
+	}
+	if d.ID == "" {
+		t.Fatal("expected non-empty drive ID")
+	}
+	if d.Name != "test-drive" {
+		t.Errorf("name = %q, want %q", d.Name, "test-drive")
+	}
+
+	drives, err := c.ListDrives()
+	if err != nil {
+		t.Fatalf("list drives: %v", err)
+	}
+	if len(drives) != 1 {
+		t.Fatalf("expected 1 drive, got %d", len(drives))
+	}
+}
+
+func TestAttachDetachDrive(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVM("test-drive-vm", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	d, err := c.CreateDrive("test-attach", "512M", "/mnt/data")
+	if err != nil {
+		t.Fatalf("create drive: %v", err)
+	}
+
+	if err := c.AttachDrive(d.ID, vm.ID); err != nil {
+		t.Fatalf("attach drive: %v", err)
+	}
+
+	// Verify drive shows vm_id.
+	got, err := c.ListDrives()
+	if err != nil {
+		t.Fatalf("list drives: %v", err)
+	}
+	if len(got) != 1 || got[0].VMID == nil || *got[0].VMID != vm.ID {
+		t.Errorf("drive should show vm_id=%s after attach", vm.ID)
+	}
+
+	if err := c.DetachDrive(d.ID); err != nil {
+		t.Fatalf("detach drive: %v", err)
+	}
+
+	got, err = c.ListDrives()
+	if err != nil {
+		t.Fatalf("list drives: %v", err)
+	}
+	if len(got) != 1 || got[0].VMID != nil {
+		t.Error("drive should have nil vm_id after detach")
+	}
+}
+
+func TestDeleteAttachedDrive(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVM("test-delattach-vm", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	d, err := c.CreateDrive("test-delattach", "256M", "/mnt/x")
+	if err != nil {
+		t.Fatalf("create drive: %v", err)
+	}
+
+	if err := c.AttachDrive(d.ID, vm.ID); err != nil {
+		t.Fatalf("attach drive: %v", err)
+	}
+
+	err = c.DeleteDrive(d.ID)
+	if err == nil {
+		t.Fatal("expected error deleting attached drive, got nil")
+	}
+
+	// Clean up.
+	c.DetachDrive(d.ID)
+	c.DeleteDrive(d.ID)
+}
+
+func TestDriveInVM(t *testing.T) {
+	_, c := startDaemon(t)
+
+	// Use nginx:alpine so the container stays alive for exec.
+	vm, err := c.CreateVMWithImage("test-driveinvm", "agent", "docker.io/library/nginx:alpine")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	d, err := c.CreateDrive("test-visible", "256M", "/mnt/testdrive")
+	if err != nil {
+		t.Fatalf("create drive: %v", err)
+	}
+
+	if err := c.AttachDrive(d.ID, vm.ID); err != nil {
+		t.Fatalf("attach drive: %v", err)
+	}
+
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	result, err := c.ExecVM(vm.ID, []string{"mount"})
+	if err != nil {
+		t.Fatalf("exec mount: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("mount exit code = %d, stderr: %s", result.ExitCode, result.Stderr)
+	}
+	t.Logf("mount output:\n%s", result.Stdout)
+
+	// Stop + cleanup.
+	c.StopVM(vm.ID)
+}
+
+func TestDeleteDrive(t *testing.T) {
+	_, c := startDaemon(t)
+
+	d, err := c.CreateDrive("test-deldrive", "128M", "/data")
+	if err != nil {
+		t.Fatalf("create drive: %v", err)
+	}
+	if err := c.DeleteDrive(d.ID); err != nil {
+		t.Fatalf("delete drive: %v", err)
+	}
+
+	drives, err := c.ListDrives()
+	if err != nil {
+		t.Fatalf("list drives: %v", err)
+	}
+	if len(drives) != 0 {
+		t.Errorf("expected 0 drives after delete, got %d", len(drives))
+	}
+}
