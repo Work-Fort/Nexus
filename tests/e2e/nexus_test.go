@@ -390,3 +390,100 @@ func TestDeleteDrive(t *testing.T) {
 		t.Errorf("expected 0 drives after delete, got %d", len(drives))
 	}
 }
+
+func TestCreateDevice(t *testing.T) {
+	_, c := startDaemon(t)
+
+	d, err := c.CreateDevice("test-dev", "/dev/null", "/dev/null", "rwm")
+	if err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+	if d.ID == "" {
+		t.Fatal("expected non-empty device ID")
+	}
+
+	devices, err := c.ListDevices()
+	if err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devices))
+	}
+}
+
+func TestAttachDetachDevice(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVM("test-dev-vm", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	d, err := c.CreateDevice("test-devattach", "/dev/null", "/dev/null", "rwm")
+	if err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+
+	if err := c.AttachDevice(d.ID, vm.ID); err != nil {
+		t.Fatalf("attach device: %v", err)
+	}
+
+	devices, err := c.ListDevices()
+	if err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	if len(devices) != 1 || devices[0].VMID == nil || *devices[0].VMID != vm.ID {
+		t.Errorf("device should show vm_id=%s after attach", vm.ID)
+	}
+
+	if err := c.DetachDevice(d.ID); err != nil {
+		t.Fatalf("detach device: %v", err)
+	}
+}
+
+func TestDeleteAttachedDevice(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVM("test-devdelatt-vm", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	d, err := c.CreateDevice("test-devdelatt", "/dev/null", "/dev/null", "rwm")
+	if err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+
+	if err := c.AttachDevice(d.ID, vm.ID); err != nil {
+		t.Fatalf("attach device: %v", err)
+	}
+
+	err = c.DeleteDevice(d.ID)
+	if err == nil {
+		t.Fatal("expected error deleting attached device, got nil")
+	}
+
+	// Clean up.
+	c.DetachDevice(d.ID)
+	c.DeleteDevice(d.ID)
+}
+
+func TestDeleteDevice(t *testing.T) {
+	_, c := startDaemon(t)
+
+	d, err := c.CreateDevice("test-devdel", "/dev/null", "/dev/null", "rwm")
+	if err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+	if err := c.DeleteDevice(d.ID); err != nil {
+		t.Fatalf("delete device: %v", err)
+	}
+
+	devices, err := c.ListDevices()
+	if err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	if len(devices) != 0 {
+		t.Errorf("expected 0 devices after delete, got %d", len(devices))
+	}
+}
