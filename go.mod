@@ -7,6 +7,7 @@ require (
 	github.com/containerd/containerd/v2 v2.2.1
 	github.com/containerd/errdefs v1.0.0
 	github.com/containernetworking/cni v1.3.0
+	github.com/danielgtaylor/huma/v2 v2.37.2
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/spf13/cobra v1.10.2
