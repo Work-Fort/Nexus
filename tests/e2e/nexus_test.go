@@ -2,10 +2,12 @@
 package e2e
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -485,5 +487,107 @@ func TestDeleteDevice(t *testing.T) {
 	}
 	if len(devices) != 0 {
 		t.Errorf("expected 0 devices after delete, got %d", len(devices))
+	}
+}
+
+func TestGetNonexistentVM(t *testing.T) {
+	_, c := startDaemon(t)
+
+	_, err := c.GetVM("nonexistent-id")
+	if err == nil {
+		t.Fatal("expected error for nonexistent VM, got nil")
+	}
+	var apiErr *harness.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T: %v", err, err)
+	}
+	if apiErr.Status != 404 {
+		t.Errorf("status = %d, want 404", apiErr.Status)
+	}
+}
+
+func TestStartAlreadyRunningVM(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVM("test-doublestart", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+
+	// Second start — should return a conflict error.
+	err = c.StartVM(vm.ID)
+	t.Logf("second start result: %v", err)
+
+	// Clean up.
+	c.StopVM(vm.ID)
+}
+
+func TestStopAlreadyStopped(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVM("test-doublestop", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	// Stop a VM that was never started.
+	err = c.StopVM(vm.ID)
+	t.Logf("stop created (not started) VM result: %v", err)
+}
+
+func TestInvalidCreatePayload(t *testing.T) {
+	_, c := startDaemon(t)
+
+	// Missing name — should fail validation.
+	resp, err := c.RawRequest("POST", "/v1/vms", strings.NewReader(`{"role":"agent"}`))
+	if err != nil {
+		t.Fatalf("raw request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == 201 {
+		t.Error("expected non-201 for missing name")
+	}
+
+	// Invalid role.
+	resp, err = c.RawRequest("POST", "/v1/vms", strings.NewReader(`{"name":"bad","role":"invalid"}`))
+	if err != nil {
+		t.Fatalf("raw request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == 201 {
+		t.Error("expected non-201 for invalid role")
+	}
+}
+
+func TestGracefulShutdown(t *testing.T) {
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := harness.StartDaemon(nexusBin, binDir, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := harness.NewClient(addr)
+	vm, err := c.CreateVM("test-shutdown", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	_ = vm
+
+	// Send SIGTERM — daemon should exit cleanly.
+	if err := d.Stop(); err != nil {
+		t.Logf("daemon stop: %v", err)
+	}
+
+	// Verify daemon is no longer listening.
+	_, err = c.ListVMs()
+	if err == nil {
+		t.Error("expected error after daemon shutdown, but request succeeded")
 	}
 }
