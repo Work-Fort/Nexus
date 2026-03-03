@@ -774,6 +774,90 @@ func TestNoPolicyCleanupKill9(t *testing.T) {
 	t.Fatal("VM not marked as stopped within 10s after daemon restart")
 }
 
+func TestExecStream(t *testing.T) {
+	_, c := startDaemon(t)
+
+	// Use nginx:alpine because its master process stays alive.
+	vm, err := c.CreateVMWithImage("test-stream", "agent", "docker.io/library/nginx:alpine")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Wait for the container task to initialize (retry like existing exec test).
+	var events []harness.SSEEvent
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		events, err = c.ExecStreamVM(vm.ID, []string{"echo", "hello world"})
+		if err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("ExecStreamVM: %v", err)
+	}
+
+	// Must have at least one stdout event and exactly one exit event.
+	var gotStdout bool
+	var exitEvent *harness.SSEEvent
+	for i := range events {
+		switch events[i].Type {
+		case "stdout":
+			gotStdout = true
+		case "exit":
+			exitEvent = &events[i]
+		}
+	}
+
+	if !gotStdout {
+		t.Fatal("expected at least one stdout event")
+	}
+	if exitEvent == nil {
+		t.Fatal("expected an exit event")
+	}
+	if !strings.Contains(exitEvent.Data, `"exit_code":0`) && !strings.Contains(exitEvent.Data, `"exit_code": 0`) {
+		t.Fatalf("expected exit_code 0, got: %s", exitEvent.Data)
+	}
+
+	// Stream exec: write to stderr.
+	events, err = c.ExecStreamVM(vm.ID, []string{"sh", "-c", "echo err >&2"})
+	if err != nil {
+		t.Fatalf("ExecStreamVM stderr: %v", err)
+	}
+
+	var gotStderr bool
+	for i := range events {
+		if events[i].Type == "stderr" {
+			gotStderr = true
+		}
+	}
+	if !gotStderr {
+		t.Fatal("expected at least one stderr event")
+	}
+
+	// Stream exec: non-zero exit code.
+	events, err = c.ExecStreamVM(vm.ID, []string{"sh", "-c", "exit 42"})
+	if err != nil {
+		t.Fatalf("ExecStreamVM exit 42: %v", err)
+	}
+
+	exitEvent = nil
+	for i := range events {
+		if events[i].Type == "exit" {
+			exitEvent = &events[i]
+		}
+	}
+	if exitEvent == nil {
+		t.Fatal("expected an exit event")
+	}
+	if !strings.Contains(exitEvent.Data, `"exit_code":42`) && !strings.Contains(exitEvent.Data, `"exit_code": 42`) {
+		t.Fatalf("expected exit_code 42, got: %s", exitEvent.Data)
+	}
+}
+
 func TestGracefulShutdown(t *testing.T) {
 	addr, err := harness.FreePort()
 	if err != nil {
