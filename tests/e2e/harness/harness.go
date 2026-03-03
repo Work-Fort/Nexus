@@ -158,7 +158,7 @@ func (d *Daemon) cleanup() {
 }
 
 func cleanupNamespace(ns string) {
-	// Kill all tasks, delete all containers, remove namespace.
+	// Kill all tasks, delete all containers, remove images/snapshots, then namespace.
 	// Errors are ignored — best-effort cleanup.
 	out, err := exec.Command("ctr", "-n", ns, "containers", "list", "-q").Output()
 	if err != nil {
@@ -168,8 +168,15 @@ func cleanupNamespace(ns string) {
 	for _, id := range ids {
 		exec.Command("ctr", "-n", ns, "tasks", "kill", id).Run()
 		exec.Command("ctr", "-n", ns, "tasks", "delete", id).Run()
+		exec.Command("ctr", "-n", ns, "snapshots", "rm", id+"-snap").Run()
 		exec.Command("ctr", "-n", ns, "containers", "delete", id).Run()
 	}
+	// Remove images pulled into this namespace.
+	imgOut, _ := exec.Command("ctr", "-n", ns, "images", "list", "-q").Output()
+	for _, img := range strings.Fields(strings.TrimSpace(string(imgOut))) {
+		exec.Command("ctr", "-n", ns, "images", "remove", img).Run()
+	}
+	exec.Command("ctr", "-n", ns, "content", "prune", "references").Run()
 	exec.Command("ctr", "namespaces", "remove", ns).Run()
 }
 

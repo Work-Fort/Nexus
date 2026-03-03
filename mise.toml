@@ -134,6 +134,10 @@ for ns in $(ctr namespaces list -q | grep ^nexus-e2e- 2>/dev/null); do
     ctr -n "$ns" tasks delete "$c" 2>/dev/null || true
     ctr -n "$ns" containers delete "$c" 2>/dev/null || true
   done
+  for img in $(ctr -n "$ns" images list -q 2>/dev/null); do
+    ctr -n "$ns" images remove "$img" 2>/dev/null || true
+  done
+  ctr -n "$ns" content prune references 2>/dev/null || true
   ctr namespaces remove "$ns" 2>/dev/null || true
 done
 echo "E2E cleanup done"
