@@ -138,12 +138,15 @@ func setupHandler() http.Handler {
 }
 
 func doRequest(handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {
-	var buf bytes.Buffer
+	var req *http.Request
 	if body != nil {
+		var buf bytes.Buffer
 		json.NewEncoder(&buf).Encode(body)
+		req = httptest.NewRequest(method, path, &buf)
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req = httptest.NewRequest(method, path, nil)
 	}
-	req := httptest.NewRequest(method, path, &buf)
-	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	return rec
