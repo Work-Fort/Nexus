@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // --- Daemon ---
@@ -286,6 +288,11 @@ func NewClient(daemonAddr string) *Client {
 	}
 }
 
+// BaseURL returns the base HTTP URL of the API.
+func (c *Client) BaseURL() string {
+	return c.base
+}
+
 // --- Response types ---
 
 type VM struct {
@@ -302,6 +309,7 @@ type VM struct {
 	StoppedAt       *string `json:"stopped_at,omitempty"`
 	RestartPolicy   string  `json:"restart_policy"`
 	RestartStrategy string  `json:"restart_strategy"`
+	Shell           string  `json:"shell"`
 }
 
 type ExecResult struct {
@@ -512,6 +520,65 @@ func parseSSEStream(r io.Reader) ([]SSEEvent, error) {
 	}
 
 	return events, scanner.Err()
+}
+
+// --- Console operations ---
+
+// ConsoleSession wraps a WebSocket connection to a VM console.
+type ConsoleSession struct {
+	ws *websocket.Conn
+}
+
+// ConsoleVM opens a WebSocket console to the VM.
+func (c *Client) ConsoleVM(id string, cols, rows int) (*ConsoleSession, error) {
+	// Convert http:// to ws://
+	wsURL := "ws" + strings.TrimPrefix(c.base, "http") +
+		fmt.Sprintf("/v1/vms/%s/console?cols=%d&rows=%d", id, cols, rows)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("dial console: %w", err)
+	}
+	return &ConsoleSession{ws: ws}, nil
+}
+
+// Send writes data to the console stdin.
+func (cs *ConsoleSession) Send(data string) error {
+	return cs.ws.WriteMessage(websocket.TextMessage, []byte(data))
+}
+
+// Resize sends a resize message.
+func (cs *ConsoleSession) Resize(cols, rows int) error {
+	msg, _ := json.Marshal(map[string]any{"type": "resize", "cols": cols, "rows": rows})
+	return cs.ws.WriteMessage(websocket.TextMessage, msg)
+}
+
+// ReadAll reads all messages until the WebSocket closes or an exit event is
+// received. Returns collected output and the exit code.
+func (cs *ConsoleSession) ReadAll() (output string, exitCode int, err error) {
+	exitCode = -1
+	for {
+		msgType, data, err := cs.ws.ReadMessage()
+		if err != nil {
+			return output, exitCode, nil // connection closed
+		}
+		if msgType == websocket.TextMessage {
+			var msg struct {
+				Type     string `json:"type"`
+				ExitCode int    `json:"exit_code"`
+			}
+			if json.Unmarshal(data, &msg) == nil && msg.Type == "exit" {
+				return output, msg.ExitCode, nil
+			}
+		}
+		if msgType == websocket.BinaryMessage {
+			output += string(data)
+		}
+	}
+}
+
+// Close closes the WebSocket connection.
+func (cs *ConsoleSession) Close() error {
+	return cs.ws.Close()
 }
 
 // --- Drive operations ---
