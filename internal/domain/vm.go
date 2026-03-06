@@ -72,7 +72,8 @@ type VM struct {
 	Gateway   string
 	NetNSPath string
 	DNSConfig *DNSConfig
-	RootSize        int64 // bytes, 0 = unlimited
+	RootSize        int64  // bytes, 0 = unlimited
+	Shell           string // default shell for console, empty = /bin/sh
 	RestartPolicy   RestartPolicy
 	RestartStrategy RestartStrategy
 	CreatedAt       time.Time
@@ -87,7 +88,8 @@ type CreateVMParams struct {
 	Image     string
 	Runtime   string
 	DNSConfig *DNSConfig
-	RootSize        int64 // bytes, 0 = unlimited
+	RootSize        int64  // bytes, 0 = unlimited
+	Shell           string // default shell for console, empty = /bin/sh
 	RestartPolicy   RestartPolicy
 	RestartStrategy RestartStrategy
 }
