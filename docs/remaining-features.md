@@ -86,6 +86,12 @@ Add tagging support for VMs (was present in the Rust version, missed in the Go
 port). Tags replace the `role` field as the way to organize and categorize VMs
 (e.g. `agent`, `ci-runner`, `dev`). Once tags exist, `role` becomes redundant.
 
+## 11. Shell Sync from VM Rootfs
+
+Add an endpoint/operation to sync the system-set default shell from the VM
+rootfs (e.g. probe `/etc/shells` or `/etc/passwd`) into the VM's `shell` field
+in the DB.
+
 ---
 
 ## Investigate
@@ -102,9 +108,7 @@ Things to look into — not yet committed features.
 - **Noop pattern for optional subsystems** — `VMService` nil-checks `driveStore`,
   `deviceStore`, and `dns` throughout its methods. The noop adapter pattern
   already exists for some infra packages (`dns/noop.go`, `storage/noop.go`).
-  Investigate whether always injecting noop implementations instead of `nil`
-  would clean up the service code without adding unnecessary abstraction.
-
-- **Shell sync from VM rootfs** — Add an endpoint/operation to sync the
-  system-set default shell from the VM rootfs (e.g. probe `/etc/shells` or
-  `/etc/passwd`) into the VM's `shell` field in the DB.
+  Investigated: only ~11 of 23 nil-checks can be eliminated by noops. The 7
+  "gate" checks (`== nil` returning `ErrValidation`) must stay regardless. Not
+  worth the added abstraction. One small win: wire `dns.NoopManager` by default
+  in the constructor to eliminate 5 dns nil-checks with zero new code.
