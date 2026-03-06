@@ -92,18 +92,19 @@ Add an endpoint/operation to sync the system-set default shell from the VM
 rootfs (e.g. probe `/etc/shells` or `/etc/passwd`) into the VM's `shell` field
 in the DB.
 
+## 12. VM Observability
+
+Nexus needs to observe in-VM events (e.g. disk quota `ENOSPC`, resource
+pressure) and notify callers. Two angles: outbound webhooks so Nexus can push
+lifecycle/resource events to callers, and a Prometheus/k8s observability stack
+inside VMs for metrics collection. Came up during VM root size design — callers
+need to know when a VM hits its quota so they can expand or take action.
+
 ---
 
 ## Investigate
 
 Things to look into — not yet committed features.
-
-- **Outbound webhooks / VM observability** — Nexus needs to observe in-VM events
-  (e.g. disk quota `ENOSPC`, resource pressure) and notify callers. Two angles:
-  outbound webhooks so Nexus can push lifecycle/resource events to callers, and
-  a Prometheus/k8s observability stack inside VMs for metrics collection. Came up
-  during VM root size design — callers need to know when a VM hits its quota so
-  they can expand or take action.
 
 - **Noop pattern for optional subsystems** — `VMService` nil-checks `driveStore`,
   `deviceStore`, and `dns` throughout its methods. The noop adapter pattern
