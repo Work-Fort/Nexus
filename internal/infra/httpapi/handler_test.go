@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -102,6 +103,15 @@ func (m *mockStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+func (m *mockStore) UpdateShell(_ context.Context, id, shell string) error {
+	vm, ok := m.vms[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	vm.Shell = shell
+	return nil
+}
+
 func (m *mockStore) Resolve(_ context.Context, ref string) (*domain.VM, error) {
 	if vm, ok := m.vms[ref]; ok {
 		return vm, nil
@@ -165,6 +175,10 @@ func (m *mockRuntime) ExportImage(_ context.Context, _ string, w io.Writer) erro
 func (m *mockRuntime) ImportImage(_ context.Context, r io.Reader) (string, error) {
 	io.ReadAll(r) //nolint:errcheck
 	return "imported:latest", nil
+}
+
+func (m *mockRuntime) ExecConsole(_ context.Context, _ string, _ []string, _, _ uint16) (*domain.ConsoleSession, error) {
+	return nil, errors.New("not supported in mock")
 }
 
 func (m *mockRuntime) WatchExits(_ context.Context, _ func(string, uint32)) error {
