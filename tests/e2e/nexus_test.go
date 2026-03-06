@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Work-Fort/nexus-e2e/harness"
+	"github.com/gorilla/websocket"
 )
 
 var (
@@ -855,6 +856,129 @@ func TestExecStream(t *testing.T) {
 	}
 	if !strings.Contains(exitEvent.Data, `"exit_code":42`) && !strings.Contains(exitEvent.Data, `"exit_code": 42`) {
 		t.Fatalf("expected exit_code 42, got: %s", exitEvent.Data)
+	}
+}
+
+func TestConsole(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVM("console-test", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Open console session.
+	sess, err := c.ConsoleVM(vm.ID, 80, 24)
+	if err != nil {
+		t.Fatalf("ConsoleVM: %v", err)
+	}
+	defer sess.Close()
+
+	// Send a command and exit.
+	if err := sess.Send("echo hello-console\n"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if err := sess.Send("exit\n"); err != nil {
+		t.Fatalf("send exit: %v", err)
+	}
+
+	output, exitCode, err := sess.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+
+	if exitCode != 0 {
+		t.Errorf("exit code = %d, want 0", exitCode)
+	}
+	if !strings.Contains(output, "hello-console") {
+		t.Errorf("output missing 'hello-console', got: %q", output)
+	}
+}
+
+func TestConsoleResize(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVM("console-resize", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	sess, err := c.ConsoleVM(vm.ID, 80, 24)
+	if err != nil {
+		t.Fatalf("ConsoleVM: %v", err)
+	}
+	defer sess.Close()
+
+	// Resize should not error.
+	if err := sess.Resize(120, 40); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+
+	// Verify the terminal still works after resize.
+	if err := sess.Send("echo resize-ok\n"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if err := sess.Send("exit\n"); err != nil {
+		t.Fatalf("send exit: %v", err)
+	}
+
+	output, exitCode, err := sess.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+
+	if exitCode != 0 {
+		t.Errorf("exit code = %d, want 0", exitCode)
+	}
+	if !strings.Contains(output, "resize-ok") {
+		t.Errorf("output missing 'resize-ok', got: %q", output)
+	}
+}
+
+func TestConsoleCustomShell(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVM("console-shell", "agent")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Open console with explicit command override via raw WebSocket.
+	wsURL := "ws" + strings.TrimPrefix(c.BaseURL(), "http") +
+		fmt.Sprintf("/v1/vms/%s/console?cmd=/bin/sh&cols=80&rows=24", vm.ID)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer ws.Close()
+
+	ws.WriteMessage(websocket.TextMessage, []byte("echo cmd-override\n")) //nolint:errcheck
+	ws.WriteMessage(websocket.TextMessage, []byte("exit\n"))              //nolint:errcheck
+
+	// Read until exit or timeout.
+	var output string
+	for {
+		_, data, err := ws.ReadMessage()
+		if err != nil {
+			break
+		}
+		output += string(data)
+		if strings.Contains(output, "cmd-override") {
+			break
+		}
+	}
+
+	if !strings.Contains(output, "cmd-override") {
+		t.Errorf("output missing 'cmd-override', got: %q", output)
 	}
 }
 
