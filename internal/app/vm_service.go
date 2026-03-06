@@ -129,6 +129,7 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		Image:     params.Image,
 		Runtime:   params.Runtime,
 		RootSize:        params.RootSize,
+		Shell:           params.Shell,
 		RestartPolicy:   params.RestartPolicy,
 		RestartStrategy: params.RestartStrategy,
 		CreatedAt:       time.Now().UTC(),
@@ -326,6 +327,28 @@ func (s *VMService) ExecStreamVM(ctx context.Context, ref string, cmd []string, 
 	return s.runtime.ExecStream(ctx, vm.ID, cmd, stdout, stderr)
 }
 
+// ExecConsoleVM opens an interactive TTY console in the VM.
+func (s *VMService) ExecConsoleVM(ctx context.Context, ref string, cmd []string, cols, rows uint16) (*domain.ConsoleSession, error) {
+	vm, err := s.store.Resolve(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if vm.State != domain.VMStateRunning {
+		return nil, domain.ErrInvalidState
+	}
+
+	// Shell resolution: explicit cmd > VM shell field > /bin/sh
+	if len(cmd) == 0 {
+		shell := vm.Shell
+		if shell == "" {
+			shell = "/bin/sh"
+		}
+		cmd = []string{shell}
+	}
+
+	return s.runtime.ExecConsole(ctx, vm.ID, cmd, cols, rows)
+}
+
 // ExpandRootSize increases the root size quota for a VM.
 func (s *VMService) ExpandRootSize(ctx context.Context, ref string, newSize int64) error {
 	vm, err := s.store.Resolve(ctx, ref)
@@ -349,6 +372,18 @@ func (s *VMService) ExpandRootSize(ctx context.Context, ref string, newSize int6
 
 	log.Info("root size expanded", "id", vm.ID, "old", vm.RootSize, "new", newSize)
 	return nil
+}
+
+// UpdateShell sets the default shell for console sessions.
+func (s *VMService) UpdateShell(ctx context.Context, ref, shell string) (*domain.VM, error) {
+	vm, err := s.store.Resolve(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.UpdateShell(ctx, vm.ID, shell); err != nil {
+		return nil, fmt.Errorf("update shell: %w", err)
+	}
+	return s.store.Get(ctx, vm.ID)
 }
 
 // UpdateRestartPolicy changes the restart policy and strategy for a VM.
