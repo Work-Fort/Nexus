@@ -333,6 +333,9 @@ func NewHandler(svc *app.VMService) http.Handler {
 	registerNetworkRoutes(api, svc)
 	registerBackupRoutes(api, svc)
 
+	// WebSocket endpoints (not supported by huma).
+	mux.HandleFunc("GET /v1/vms/{id}/console", handleConsole(svc))
+
 	return mux
 }
 
