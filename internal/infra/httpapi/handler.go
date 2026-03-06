@@ -34,6 +34,7 @@ type CreateVMInput struct {
 		RootSize        string         `json:"root_size,omitempty" doc:"Root filesystem size limit (e.g. 1G, 500M)"`
 		RestartPolicy   string         `json:"restart_policy,omitempty" doc:"Restart policy (none, on-boot, always)" default:"none"`
 		RestartStrategy string         `json:"restart_strategy,omitempty" doc:"Restart strategy (immediate, backoff, fixed)" default:"backoff"`
+		Shell           string         `json:"shell,omitempty" doc:"Default shell for console sessions"`
 	}
 }
 
@@ -48,7 +49,8 @@ type VMPathInput struct {
 type PatchVMInput struct {
 	ID   string `path:"id" doc:"VM ID or name"`
 	Body struct {
-		RootSize string `json:"root_size" doc:"New root size (must be larger than current)"`
+		RootSize string  `json:"root_size" doc:"New root size (must be larger than current)"`
+		Shell    *string `json:"shell,omitempty" doc:"Default shell for console sessions"`
 	}
 }
 
@@ -165,6 +167,7 @@ type vmResponse struct {
 	RootSize        *string        `json:"root_size,omitempty" doc:"Root filesystem size limit"`
 	RestartPolicy   string         `json:"restart_policy" doc:"Restart policy"`
 	RestartStrategy string         `json:"restart_strategy" doc:"Restart strategy"`
+	Shell           string         `json:"shell,omitempty" doc:"Default shell for console sessions"`
 	CreatedAt       string         `json:"created_at" doc:"Creation timestamp"`
 	StartedAt *string        `json:"started_at,omitempty" doc:"Start timestamp"`
 	StoppedAt *string        `json:"stopped_at,omitempty" doc:"Stop timestamp"`
@@ -241,6 +244,7 @@ func vmToResponse(vm *domain.VM) vmResponse {
 	}
 	r.RestartPolicy = string(vm.RestartPolicy)
 	r.RestartStrategy = string(vm.RestartStrategy)
+	r.Shell = vm.Shell
 	if vm.DNSConfig != nil {
 		r.DNS = &dnsConfigBody{
 			Servers: vm.DNSConfig.Servers,
@@ -369,6 +373,7 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 			RootSize:        rootSize,
 			RestartPolicy:   domain.RestartPolicy(input.Body.RestartPolicy),
 			RestartStrategy: domain.RestartStrategy(input.Body.RestartStrategy),
+			Shell:           input.Body.Shell,
 		})
 		if err != nil {
 			return nil, mapDomainError(err)
@@ -492,6 +497,11 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 				return nil, huma.NewError(http.StatusBadRequest, err.Error())
 			}
 			if err := svc.ExpandRootSize(ctx, input.ID, int64(sizeBytes)); err != nil {
+				return nil, mapDomainError(err)
+			}
+		}
+		if input.Body.Shell != nil {
+			if _, err := svc.UpdateShell(ctx, input.ID, *input.Body.Shell); err != nil {
 				return nil, mapDomainError(err)
 			}
 		}
