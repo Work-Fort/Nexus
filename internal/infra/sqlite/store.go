@@ -115,6 +115,7 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 		RootSize:        vm.RootSize,
 		RestartPolicy:   string(vm.RestartPolicy),
 		RestartStrategy: string(vm.RestartStrategy),
+		Shell:           vm.Shell,
 	})
 }
 
@@ -200,6 +201,13 @@ func (s *Store) UpdateRestartPolicy(ctx context.Context, id string, policy domai
 		RestartPolicy:   string(policy),
 		RestartStrategy: string(strategy),
 		ID:              id,
+	})
+}
+
+func (s *Store) UpdateShell(ctx context.Context, id, shell string) error {
+	return s.q.UpdateVMShell(ctx, UpdateVMShellParams{
+		Shell: shell,
+		ID:    id,
 	})
 }
 
@@ -481,6 +489,7 @@ func vmFromRow(row Vm) (*domain.VM, error) {
 		RootSize:        row.RootSize,
 		RestartPolicy:   domain.RestartPolicy(row.RestartPolicy),
 		RestartStrategy: domain.RestartStrategy(row.RestartStrategy),
+		Shell:           row.Shell,
 	}
 	var err error
 	vm.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)

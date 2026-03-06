@@ -18,6 +18,7 @@ type VMStore interface {
 	UpdateState(ctx context.Context, id string, state VMState, now time.Time) error
 	UpdateRootSize(ctx context.Context, id string, rootSize int64) error
 	UpdateRestartPolicy(ctx context.Context, id string, policy RestartPolicy, strategy RestartStrategy) error
+	UpdateShell(ctx context.Context, id, shell string) error
 	Delete(ctx context.Context, id string) error
 }
 
