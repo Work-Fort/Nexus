@@ -3,7 +3,7 @@
 Tracking document for features needed before Nexus is called by other services
 (Sharkfin, Combine, cloud provisioner).
 
-## 1. Webhook Cleanup
+## 1. Webhook Cleanup ✅
 
 Remove Sharkfin-specific code (`SharkfinWebhook`, `HandleWebhook`,
 `POST /webhooks/sharkfin`). Nexus doesn't know or care who's calling — it offers
@@ -16,12 +16,12 @@ interaction patterns:
 Sharkfin, Combine, and the cloud provisioner are all regular API clients.
 Produce API documentation for the Sharkfin team lead.
 
-## 2. VM Root Size
+## 2. VM Root Size ✅
 
 VM creation needs a `size` argument for root filesystem size. May already be
 implemented — needs verification and test coverage.
 
-## 3. E2E Test Suite
+## 3. E2E Test Suite ✅
 
 Separate binary following Sharkfin's test harness pattern:
 
@@ -33,7 +33,7 @@ Separate binary following Sharkfin's test harness pattern:
 - HTTP client wrapping the REST API
 - `mise.toml` `e2e` task depends on `build`
 
-## 4. Backup/Restore
+## 4. Backup/Restore ✅
 
 Self-contained portable export package:
 
@@ -45,13 +45,13 @@ Self-contained portable export package:
 - VM must be stopped for consistent snapshot
 - Designed for cloud provisioner use case (upload to another Nexus instance)
 
-## 5. Auto-Start on Boot
+## 5. Auto-Start on Boot ✅
 
 - On daemon startup, restore previously-running VMs to running state
 - Optional "always run" flag — Nexus ensures the VM is running (restart on
   crash, start on boot)
 
-## 6. Basic Exec Streaming
+## 6. Basic Exec Streaming ✅
 
 Simple command output from a running VM. Debug/convenience — not a full CI
 pipeline. Combine uses an in-VM agent for CI orchestration; Nexus doesn't need
