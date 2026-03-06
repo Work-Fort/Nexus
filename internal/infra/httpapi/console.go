@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/charmbracelet/log"
 	"github.com/gorilla/websocket"
@@ -60,6 +61,8 @@ func handleConsole(svc *app.VMService) http.HandlerFunc {
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 
+		var wsMu sync.Mutex // protects ws.WriteMessage (gorilla requires serialized writes)
+
 		// Goroutine: read from PTY stdout → write to WebSocket.
 		go func() {
 			buf := make([]byte, 4096)
@@ -69,7 +72,10 @@ func handleConsole(svc *app.VMService) http.HandlerFunc {
 					cancel()
 					return
 				}
-				if err := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+				wsMu.Lock()
+				werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n])
+				wsMu.Unlock()
+				if werr != nil {
 					cancel()
 					return
 				}
@@ -80,7 +86,9 @@ func handleConsole(svc *app.VMService) http.HandlerFunc {
 		go func() {
 			exitCode, _ := sess.Wait()
 			exitMsg, _ := json.Marshal(map[string]any{"type": "exit", "exit_code": exitCode})
+			wsMu.Lock()
 			ws.WriteMessage(websocket.TextMessage, exitMsg) //nolint:errcheck
+			wsMu.Unlock()
 			cancel()
 		}()
 

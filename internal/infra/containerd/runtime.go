@@ -508,11 +508,14 @@ func (r *Runtime) ExecConsole(ctx context.Context, id string, cmd []string, cols
 		return nil, fmt.Errorf("start console exec %s: %w", id, err)
 	}
 
+	// Build a namespace-aware context that outlives the request for cleanup.
+	cleanupCtx := namespaces.WithNamespace(context.Background(), r.namespace)
+
 	return &domain.ConsoleSession{
 		Stdin:  stdinW,
 		Stdout: stdoutR,
 		Wait: func() (int, error) {
-			ch, err := proc.Wait(ctx)
+			ch, err := proc.Wait(cleanupCtx)
 			if err != nil {
 				return -1, err
 			}
@@ -524,8 +527,8 @@ func (r *Runtime) ExecConsole(ctx context.Context, id string, cmd []string, cols
 			return proc.Resize(rctx, w, h)
 		},
 		Close: func() {
-			proc.Kill(ctx, syscall.SIGKILL) //nolint:errcheck
-			proc.Delete(ctx)                //nolint:errcheck
+			proc.Kill(cleanupCtx, syscall.SIGKILL) //nolint:errcheck
+			proc.Delete(cleanupCtx)                //nolint:errcheck
 			stdinR.Close()
 			stdinW.Close()
 			stdoutR.Close()
