@@ -22,6 +22,8 @@ func newVMCmd() *cobra.Command {
 		newVMDeleteCmd(),
 		newVMStartCmd(),
 		newVMStopCmd(),
+		newVMExportCmd(),
+		newVMImportCmd(),
 	)
 	return cmd
 }

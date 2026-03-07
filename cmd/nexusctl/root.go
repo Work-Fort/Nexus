@@ -54,6 +54,10 @@ func init() {
 	viper.BindPFlag("addr", rootCmd.PersistentFlags().Lookup("addr")) //nolint:errcheck
 
 	rootCmd.AddCommand(newVMCmd())
+	rootCmd.AddCommand(newExecCmd())
+	rootCmd.AddCommand(newDriveCmd())
+	rootCmd.AddCommand(newDeviceCmd())
+	rootCmd.AddCommand(newNetworkCmd())
 	rootCmd.AddCommand(newVersionCmd())
 }
 
