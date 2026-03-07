@@ -33,6 +33,9 @@ type VM struct {
 	RestartPolicy   string     `json:"restart_policy"`
 	RestartStrategy string     `json:"restart_strategy"`
 	Shell           string     `json:"shell,omitempty"`
+	Init            bool       `json:"init"`
+	TemplateID      string     `json:"template_id,omitempty"`
+	ScriptOverride  string     `json:"script_override,omitempty"`
 	CreatedAt       string     `json:"created_at"`
 	StartedAt       *string    `json:"started_at,omitempty"`
 	StoppedAt       *string    `json:"stopped_at,omitempty"`
@@ -49,6 +52,8 @@ type CreateVMParams struct {
 	RestartPolicy   string     `json:"restart_policy,omitempty"`
 	RestartStrategy string     `json:"restart_strategy,omitempty"`
 	Shell           string     `json:"shell,omitempty"`
+	Init            bool       `json:"init,omitempty"`
+	Template        string     `json:"template,omitempty"`
 }
 
 // ExecResult holds command output from a VM.

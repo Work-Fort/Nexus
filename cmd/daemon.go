@@ -164,6 +164,7 @@ func newDaemonCmd() *cobra.Command {
 			}
 			svcOpts = append(svcOpts, app.WithStorage(store, storageBackend))
 			svcOpts = append(svcOpts, app.WithDeviceStore(store))
+			svcOpts = append(svcOpts, app.WithTemplateStore(store))
 
 			svc := app.NewVMService(store, runtime, network, svcOpts...)
 

@@ -103,6 +103,8 @@ func newVMCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&params.Image, "image", "", "OCI image")
 	cmd.Flags().StringVar(&params.RootSize, "root-size", "", "Root filesystem size limit")
 	cmd.Flags().StringVar(&params.RestartPolicy, "restart-policy", "", "Restart policy")
+	cmd.Flags().BoolVar(&params.Init, "init", false, "Enable init system provisioning")
+	cmd.Flags().StringVar(&params.Template, "template", "", "Provisioning template name (implies --init)")
 	return cmd
 }
 
