@@ -34,6 +34,7 @@ type Runtime interface {
 	ExecStream(ctx context.Context, id string, cmd []string, stdout, stderr io.Writer) (int, error)
 	ExecConsole(ctx context.Context, id string, cmd []string, cols, rows uint16) (*ConsoleSession, error)
 	SetSnapshotQuota(ctx context.Context, snapName string, sizeBytes int64) error
+	DetectDistro(ctx context.Context, image string) (string, error)
 	ExportImage(ctx context.Context, imageRef string, w io.Writer) error
 	ImportImage(ctx context.Context, reader io.Reader) (string, error)
 	WatchExits(ctx context.Context, onExit func(containerID string, exitCode uint32)) error
@@ -45,7 +46,8 @@ type CreateConfig struct {
 	Mounts         []Mount
 	Devices        []DeviceInfo
 	ResolvConfPath string
-	RootSize       int64 // bytes, 0 = no quota
+	RootSize       int64  // bytes, 0 = no quota
+	InitScriptPath string // host path to init bootstrap script
 }
 
 // CreateOpt is a functional option for Runtime.Create.
@@ -80,6 +82,9 @@ var ErrDriveAttached = errors.New("drive is attached to a VM")
 
 // ErrDeviceAttached is returned when deleting a device that is attached to a VM.
 var ErrDeviceAttached = errors.New("device is attached to a VM")
+
+// ErrTemplateInUse is returned when deleting a template referenced by VMs.
+var ErrTemplateInUse = errors.New("template is referenced by VMs")
 
 // Mount describes a bind mount from host into the container.
 type Mount struct {
@@ -123,6 +128,14 @@ func WithRootSize(size int64) CreateOpt {
 	}
 }
 
+// WithInitScript bind-mounts an init bootstrap script into the container
+// and overrides the entrypoint to run it.
+func WithInitScript(path string) CreateOpt {
+	return func(c *CreateConfig) {
+		c.InitScriptPath = path
+	}
+}
+
 // DriveStore persists drive metadata.
 type DriveStore interface {
 	CreateDrive(ctx context.Context, d *Drive) error
@@ -149,6 +162,19 @@ type DeviceStore interface {
 	DetachAllDevices(ctx context.Context, vmID string) error
 	GetDevicesByVM(ctx context.Context, vmID string) ([]*Device, error)
 	DeleteDevice(ctx context.Context, id string) error
+}
+
+// TemplateStore persists provisioning template metadata.
+type TemplateStore interface {
+	CreateTemplate(ctx context.Context, t *Template) error
+	GetTemplate(ctx context.Context, id string) (*Template, error)
+	GetTemplateByName(ctx context.Context, name string) (*Template, error)
+	GetTemplateByDistro(ctx context.Context, distro string) (*Template, error)
+	ResolveTemplate(ctx context.Context, ref string) (*Template, error)
+	ListTemplates(ctx context.Context) ([]*Template, error)
+	UpdateTemplate(ctx context.Context, id string, name, distro, script string) error
+	DeleteTemplate(ctx context.Context, id string) error
+	CountTemplateRefs(ctx context.Context, templateID string) (int, error)
 }
 
 // Storage manages the underlying volume backend (e.g. btrfs subvolumes).

@@ -162,9 +162,12 @@ func (m *mockStore) Delete(_ context.Context, id string) error {
 // --- mock Runtime ---
 
 type mockRuntime struct {
-	containers map[string]bool // id -> running
-	execResult *domain.ExecResult
-	execErr    error
+	containers   map[string]bool // id -> running
+	execResult   *domain.ExecResult
+	execErr      error
+	detectDistro string
+	lastMounts   []domain.Mount
+	initScript   string // last InitScriptPath passed to Create
 }
 
 func newMockRuntime() *mockRuntime {
@@ -174,7 +177,13 @@ func newMockRuntime() *mockRuntime {
 	}
 }
 
-func (m *mockRuntime) Create(_ context.Context, id, image, runtime string, _ ...domain.CreateOpt) error {
+func (m *mockRuntime) Create(_ context.Context, id, image, runtime string, opts ...domain.CreateOpt) error {
+	cfg := &domain.CreateConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	m.lastMounts = cfg.Mounts
+	m.initScript = cfg.InitScriptPath
 	m.containers[id] = false
 	return nil
 }
@@ -212,6 +221,13 @@ func (m *mockRuntime) ExecConsole(_ context.Context, id string, cmd []string, co
 
 func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) error {
 	return nil
+}
+
+func (m *mockRuntime) DetectDistro(_ context.Context, _ string) (string, error) {
+	if m.detectDistro != "" {
+		return m.detectDistro, nil
+	}
+	return "alpine", nil
 }
 
 func (m *mockRuntime) ExportImage(_ context.Context, _ string, w io.Writer) error {

@@ -189,6 +189,10 @@ func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) err
 	return nil
 }
 
+func (m *mockRuntime) DetectDistro(_ context.Context, _ string) (string, error) {
+	return "alpine", nil
+}
+
 func (m *mockRuntime) ExportImage(_ context.Context, _ string, w io.Writer) error {
 	_, err := w.Write([]byte("mock-image-data"))
 	return err

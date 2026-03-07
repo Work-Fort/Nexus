@@ -63,6 +63,9 @@ type VM struct {
 	Shell           string // default shell for console, empty = /bin/sh
 	RestartPolicy   RestartPolicy
 	RestartStrategy RestartStrategy
+	Init           bool   // whether init injection is enabled
+	TemplateID     string // reference to provisioning template
+	ScriptOverride string // per-VM script override, empty = use template
 	CreatedAt       time.Time
 	StartedAt *time.Time
 	StoppedAt *time.Time
@@ -79,6 +82,8 @@ type CreateVMParams struct {
 	Shell           string // default shell for console, empty = /bin/sh
 	RestartPolicy   RestartPolicy
 	RestartStrategy RestartStrategy
+	Init         bool   // opt-in init injection
+	TemplateName string // optional explicit template, empty = auto-detect
 }
 
 // ExecResult holds the output of a command executed inside a VM.

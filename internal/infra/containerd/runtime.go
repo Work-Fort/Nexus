@@ -254,6 +254,13 @@ func (r *Runtime) SetSnapshotQuota(ctx context.Context, snapName string, sizeByt
 	return r.setSnapshotQuota(r.nsCtx(ctx), snapName, sizeBytes)
 }
 
+// DetectDistro reads /etc/os-release from the image filesystem and returns
+// the distro ID. Falls back to checking for known package managers.
+func (r *Runtime) DetectDistro(ctx context.Context, image string) (string, error) {
+	// TODO(task5): implement real image inspection
+	return "", fmt.Errorf("DetectDistro not yet implemented")
+}
+
 // setSnapshotQuota sets a btrfs qgroup limit on the snapshot's subvolume.
 func (r *Runtime) setSnapshotQuota(ctx context.Context, snapName string, sizeBytes int64) error {
 	if r.quotaHelper == "" {
