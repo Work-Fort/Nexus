@@ -98,7 +98,7 @@ Command-line utility for interacting with Nexus instances:
 - VM TTY access (depends on terminal access research)
 - stdio-to-HTTP MCP bridge (same pattern as Sharkfin's `mcp-bridge`)
 
-## 10. VM Tags
+## 10. VM Tags ✅
 
 [Design](vm-tags-design.md) · [Plan](plans/2026-03-06-vm-tags.md)
 
@@ -123,6 +123,20 @@ pressure) and notify callers. Two angles: outbound webhooks so Nexus can push
 lifecycle/resource events to callers, and a Prometheus/k8s observability stack
 inside VMs for metrics collection. Came up during VM root size design — callers
 need to know when a VM hits its quota so they can expand or take action.
+
+## 13. Provisioning Templates
+
+[Design](provisioning-templates-design.md) · [Plan](plans/2026-03-07-provisioning-templates.md)
+
+Reusable shell scripts stored in the database that bootstrap init systems
+(OpenRC, systemd) into container images. Templates are a first-class CRUD
+resource with full REST and MCP API surface.
+
+- Auto-detect distro from image filesystem (`/etc/os-release`)
+- Built-in defaults seeded on first run: Alpine/OpenRC, Ubuntu/systemd, Arch/systemd
+- VM creation with `init: true` auto-selects matching template
+- Per-VM script override without forking the shared template
+- E2E tests with real images (no mocks)
 
 ---
 

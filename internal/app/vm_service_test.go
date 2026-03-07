@@ -67,12 +67,48 @@ func (m *mockStore) Resolve(_ context.Context, ref string) (*domain.VM, error) {
 func (m *mockStore) List(_ context.Context, filter domain.VMFilter) ([]*domain.VM, error) {
 	var result []*domain.VM
 	for _, vm := range m.vms {
-		if filter.Role != nil && vm.Role != *filter.Role {
+		if len(filter.Tags) > 0 && !matchTags(vm.Tags, filter.Tags, filter.TagMatch) {
 			continue
 		}
 		result = append(result, vm)
 	}
 	return result, nil
+}
+
+func matchTags(vmTags, filterTags []string, mode string) bool {
+	if mode == "any" {
+		for _, ft := range filterTags {
+			for _, vt := range vmTags {
+				if vt == ft {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	// Default: AND — all filter tags must be present
+	for _, ft := range filterTags {
+		found := false
+		for _, vt := range vmTags {
+			if vt == ft {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *mockStore) SetTags(_ context.Context, vmID string, tags []string) error {
+	vm, ok := m.vms[vmID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	vm.Tags = tags
+	return nil
 }
 
 func (m *mockStore) UpdateState(_ context.Context, id string, state domain.VMState, now time.Time) error {
@@ -496,7 +532,7 @@ func TestCreateVM(t *testing.T) {
 
 	vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
 		Name:    "test-agent",
-		Role:    domain.VMRoleAgent,
+		Tags:    []string{"agent"},
 		Image:   "alpine:latest",
 		Runtime: "io.containerd.runc.v2",
 	})
@@ -531,7 +567,7 @@ func TestCreateVMWithRootSize(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "sized-vm", Role: domain.VMRoleAgent, Image: "alpine:latest",
+		Name: "sized-vm", Tags: []string{"agent"}, Image: "alpine:latest",
 		Runtime: "runc", RootSize: 1_000_000_000, // 1G
 	})
 	if err != nil {
@@ -548,7 +584,7 @@ func TestCreateVMRootSizeTooSmall(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "tiny-vm", Role: domain.VMRoleAgent, Image: "alpine:latest",
+		Name: "tiny-vm", Tags: []string{"agent"}, Image: "alpine:latest",
 		Runtime: "runc", RootSize: 1_000_000, // 1M — below 64M minimum
 	})
 	if err == nil {
@@ -565,7 +601,7 @@ func TestExpandRootSize(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "expand-vm", Role: domain.VMRoleAgent, Image: "alpine:latest",
+		Name: "expand-vm", Tags: []string{"agent"}, Image: "alpine:latest",
 		Runtime: "runc", RootSize: 1_000_000_000,
 	})
 
@@ -586,7 +622,7 @@ func TestExpandRootSizeShrinkFails(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "shrink-vm", Role: domain.VMRoleAgent, Image: "alpine:latest",
+		Name: "shrink-vm", Tags: []string{"agent"}, Image: "alpine:latest",
 		Runtime: "runc", RootSize: 2_000_000_000,
 	})
 
@@ -596,13 +632,13 @@ func TestExpandRootSizeShrinkFails(t *testing.T) {
 	}
 }
 
-func TestCreateVMInvalidRole(t *testing.T) {
+func TestCreateVMInvalidTag(t *testing.T) {
 	svc := app.NewVMService(newMockStore(), newMockRuntime(), &cni.NoopNetwork{})
 	_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "bad", Role: "invalid", Image: "alpine:latest", Runtime: "runc",
+		Name: "bad", Tags: []string{"INVALID"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	if err == nil {
-		t.Fatal("expected error for invalid role")
+		t.Fatal("expected error for invalid tag")
 	}
 }
 
@@ -612,7 +648,7 @@ func TestStartVM(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "start-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "start-me", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	if err := svc.StartVM(context.Background(), vm.ID); err != nil {
@@ -631,7 +667,7 @@ func TestStartVMAlreadyRunning(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "running", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "running", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.StartVM(context.Background(), vm.ID)
 
@@ -647,7 +683,7 @@ func TestStopVM(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "stop-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "stop-me", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.StartVM(context.Background(), vm.ID)
 
@@ -667,7 +703,7 @@ func TestDeleteVM(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "delete-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "delete-me", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	if err := svc.DeleteVM(context.Background(), vm.ID); err != nil {
@@ -687,8 +723,8 @@ func TestListVMs(t *testing.T) {
 	store := newMockStore()
 	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
 
-	svc.CreateVM(context.Background(), domain.CreateVMParams{Name: "a1", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc"})
-	svc.CreateVM(context.Background(), domain.CreateVMParams{Name: "s1", Role: domain.VMRoleService, Image: "alpine:latest", Runtime: "runc"})
+	svc.CreateVM(context.Background(), domain.CreateVMParams{Name: "a1", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc"})
+	svc.CreateVM(context.Background(), domain.CreateVMParams{Name: "s1", Tags: []string{"service"}, Image: "alpine:latest", Runtime: "runc"})
 
 	vms, err := svc.ListVMs(context.Background(), domain.VMFilter{})
 	if err != nil {
@@ -704,7 +740,7 @@ func TestGetVM(t *testing.T) {
 	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
 
 	created, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "get-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "get-me", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	got, err := svc.GetVM(context.Background(), created.ID)
@@ -722,7 +758,7 @@ func TestExecVMEmptyCmd(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "exec-empty", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "exec-empty", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.StartVM(context.Background(), vm.ID)
 
@@ -738,7 +774,7 @@ func TestExecStreamVMRejectsStopped(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "stream-stopped", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "stream-stopped", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	var stdout, stderr bytes.Buffer
@@ -754,7 +790,7 @@ func TestExecStreamVMEmptyCmd(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "stream-empty", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "stream-empty", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.StartVM(context.Background(), vm.ID)
 
@@ -771,7 +807,7 @@ func TestExecStreamVMSuccess(t *testing.T) {
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "stream-ok", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "stream-ok", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.StartVM(context.Background(), vm.ID)
 
@@ -801,7 +837,7 @@ func TestResetNetworkWithVMs(t *testing.T) {
 	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
 
 	svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "blocker", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "blocker", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	err := svc.ResetNetwork(context.Background())
@@ -888,7 +924,7 @@ func TestDeleteDriveAttached(t *testing.T) {
 		Name: "attached", Size: "1G", MountPath: "/data",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "vm1", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "vm1", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.AttachDrive(context.Background(), d.ID, vm.ID)
 
@@ -905,7 +941,7 @@ func TestAttachDetachDrive(t *testing.T) {
 		Name: "workspace", Size: "2G", MountPath: "/workspace",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "worker", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "worker", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	// Attach
@@ -944,7 +980,7 @@ func TestAttachDriveRunningVMFails(t *testing.T) {
 		Name: "data", Size: "1G", MountPath: "/data",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "running-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "running-vm", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.StartVM(context.Background(), vm.ID)
 
@@ -961,7 +997,7 @@ func TestDeleteVMAutoDetachesDrives(t *testing.T) {
 		Name: "persistent", Size: "1G", MountPath: "/data",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "ephemeral-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "ephemeral-vm", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.AttachDrive(context.Background(), d.ID, vm.ID)
 
@@ -1091,7 +1127,7 @@ func TestDeleteDeviceAttached(t *testing.T) {
 		Name: "attached-dev", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "vm1", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "vm1", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.AttachDevice(context.Background(), d.ID, vm.ID)
 
@@ -1108,7 +1144,7 @@ func TestAttachDetachDevice(t *testing.T) {
 		Name: "attach-dev", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "worker", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "worker", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	// Attach
@@ -1146,7 +1182,7 @@ func TestAttachDeviceRunningVMFails(t *testing.T) {
 		Name: "run-dev", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "running-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "running-vm", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.StartVM(context.Background(), vm.ID)
 
@@ -1163,7 +1199,7 @@ func TestDeleteVMAutoDetachesDevices(t *testing.T) {
 		Name: "auto-detach", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "ephemeral-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "ephemeral-vm", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.AttachDevice(context.Background(), d.ID, vm.ID)
 
@@ -1225,7 +1261,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 
 	// Create a VM with a drive attached.
 	vm, err := svc.CreateVM(ctx, domain.CreateVMParams{
-		Name: "export-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "export-me", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	if err != nil {
 		t.Fatalf("create VM: %v", err)
@@ -1270,8 +1306,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if result.VM.Name != "export-me" {
 		t.Errorf("imported name = %q, want %q", result.VM.Name, "export-me")
 	}
-	if result.VM.Role != domain.VMRoleAgent {
-		t.Errorf("imported role = %q, want agent", result.VM.Role)
+	if len(result.VM.Tags) != 1 || result.VM.Tags[0] != "agent" {
+		t.Errorf("imported tags = %v, want [agent]", result.VM.Tags)
 	}
 	if result.VM.State != domain.VMStateCreated {
 		t.Errorf("imported state = %q, want created", result.VM.State)
@@ -1315,7 +1351,7 @@ func TestExportRunningVMFails(t *testing.T) {
 	ctx := context.Background()
 
 	vm, _ := svc.CreateVM(ctx, domain.CreateVMParams{
-		Name: "running-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "running-vm", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.StartVM(ctx, vm.ID)
 
@@ -1335,7 +1371,7 @@ func TestImportNameConflict(t *testing.T) {
 
 	// Create a VM and export it.
 	vm, _ := svc.CreateVM(ctx, domain.CreateVMParams{
-		Name: "conflict-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "conflict-vm", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	var archive bytes.Buffer
 	if err := svc.ExportVM(ctx, vm.ID, false, &archive); err != nil {
@@ -1357,7 +1393,7 @@ func TestExportWithDNS(t *testing.T) {
 	ctx := context.Background()
 
 	vm, _ := svc.CreateVM(ctx, domain.CreateVMParams{
-		Name: "dns-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "dns-vm", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 		DNSConfig: &domain.DNSConfig{
 			Servers: []string{"8.8.8.8"},
 			Search:  []string{"test.local"},
@@ -1404,10 +1440,10 @@ func TestAttachDeviceAlreadyAttached(t *testing.T) {
 		Name: "double-attach", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vmA, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "vm-a", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "vm-a", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	vmB, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "vm-b", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "vm-b", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.AttachDevice(context.Background(), d.ID, vmA.ID)
 
@@ -1439,7 +1475,7 @@ func TestDetachDeviceRunningVMFails(t *testing.T) {
 		Name: "detach-run", HostPath: "/dev/null", ContainerPath: "/dev/null", Permissions: "rw",
 	})
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "running-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "running-vm", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	svc.AttachDevice(context.Background(), d.ID, vm.ID)
 	svc.StartVM(context.Background(), vm.ID)
@@ -1482,7 +1518,7 @@ func TestCreateVMInvalidName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
-				Name: tt.vmName, Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+				Name: tt.vmName, Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 			})
 			if !errors.Is(err, domain.ErrValidation) {
 				t.Errorf("err = %v, want ErrValidation", err)
@@ -1543,7 +1579,7 @@ func TestGetVMByName(t *testing.T) {
 	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
 
 	created, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "find-me", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "find-me", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	got, err := svc.GetVM(context.Background(), "find-me")
@@ -1560,7 +1596,7 @@ func TestDeleteVMByName(t *testing.T) {
 	svc := app.NewVMService(store, newMockRuntime(), &cni.NoopNetwork{})
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "delete-by-name", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "delete-by-name", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	if err := svc.DeleteVM(context.Background(), "delete-by-name"); err != nil {
@@ -1586,7 +1622,7 @@ func TestCreateVMAddsDNSRecord(t *testing.T) {
 	svc, _, _, dns := newSvcWithDNS()
 
 	vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "web-server", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "web-server", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1607,7 +1643,7 @@ func TestDeleteVMRemovesDNSRecord(t *testing.T) {
 	svc, _, _, dns := newSvcWithDNS()
 
 	vm, _ := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "cleanup-vm", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "cleanup-vm", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 	})
 
 	if err := svc.DeleteVM(context.Background(), vm.ID); err != nil {
@@ -1626,7 +1662,7 @@ func TestCreateVMWithDNSConfig(t *testing.T) {
 	svc, _, _, _ := newSvcWithDNS()
 
 	vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
-		Name: "custom-dns", Role: domain.VMRoleAgent, Image: "alpine:latest", Runtime: "runc",
+		Name: "custom-dns", Tags: []string{"agent"}, Image: "alpine:latest", Runtime: "runc",
 		DNSConfig: &domain.DNSConfig{
 			Servers: []string{"8.8.8.8"},
 			Search:  []string{"example.com"},

@@ -1,24 +1,20 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- name: InsertVM :exec
-INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
 FROM vms WHERE id = ?;
 
 -- name: GetVMByName :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
 FROM vms WHERE name = ?;
 
 -- name: ListVMs :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
 FROM vms ORDER BY created_at DESC;
-
--- name: ListVMsByRole :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
-FROM vms WHERE role = ? ORDER BY created_at DESC;
 
 -- name: UpdateVMStateCreated :exec
 UPDATE vms SET state = 'created', started_at = NULL, stopped_at = NULL WHERE id = ?;
@@ -40,6 +36,15 @@ DELETE FROM vms WHERE id = ?;
 
 -- name: CountVMs :one
 SELECT COUNT(*) FROM vms;
+
+-- name: InsertTag :exec
+INSERT OR IGNORE INTO vm_tags (vm_id, tag) VALUES (?, ?);
+
+-- name: DeleteTagsByVM :exec
+DELETE FROM vm_tags WHERE vm_id = ?;
+
+-- name: GetTagsByVM :many
+SELECT tag FROM vm_tags WHERE vm_id = ? ORDER BY tag;
 
 -- name: InsertDrive :exec
 INSERT INTO drives (id, name, size_bytes, mount_path, vm_id, created_at)
@@ -106,7 +111,7 @@ FROM devices WHERE vm_id = ? ORDER BY host_path;
 DELETE FROM devices WHERE id = ?;
 
 -- name: ResolveVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
 FROM vms WHERE id = ? OR name = ?;
 
 -- name: UpdateVMRestartPolicy :exec

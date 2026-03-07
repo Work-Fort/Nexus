@@ -32,7 +32,7 @@ type ExportManifest struct {
 
 type ManifestVM struct {
 	Name            string       `json:"name"`
-	Role            string       `json:"role"`
+	Tags            []string     `json:"tags,omitempty"`
 	Image           string       `json:"image"`
 	Runtime         string       `json:"runtime"`
 	RootSize        string       `json:"root_size,omitempty"`
@@ -68,9 +68,6 @@ func (m *ExportManifest) Validate() error {
 	if m.VM.Name == "" {
 		return fmt.Errorf("manifest: vm.name is required")
 	}
-	if m.VM.Role == "" {
-		return fmt.Errorf("manifest: vm.role is required")
-	}
 	if m.VM.Image == "" {
 		return fmt.Errorf("manifest: vm.image is required")
 	}
@@ -96,7 +93,7 @@ func (s *VMService) ExportVM(ctx context.Context, ref string, includeDevices boo
 		Version: manifestVersion,
 		VM: ManifestVM{
 			Name:            vm.Name,
-			Role:            string(vm.Role),
+			Tags:            vm.Tags,
 			Image:           vm.Image,
 			Runtime:         vm.Runtime,
 			RestartPolicy:   string(vm.RestartPolicy),
@@ -343,7 +340,7 @@ func (s *VMService) ImportVM(ctx context.Context, r io.Reader, strictDevices boo
 	vm := &domain.VM{
 		ID:              nxid.New(),
 		Name:            manifest.VM.Name,
-		Role:            domain.VMRole(manifest.VM.Role),
+		Tags:            manifest.VM.Tags,
 		State:           domain.VMStateCreated,
 		Image:           manifest.VM.Image,
 		Runtime:         manifest.VM.Runtime,

@@ -27,7 +27,7 @@ func TestStoreCreateAndGet(t *testing.T) {
 	vm := &domain.VM{
 		ID:              "vm-001",
 		Name:            "test-agent",
-		Role:            domain.VMRoleAgent,
+		Tags:            []string{"agent"},
 		State:           domain.VMStateCreated,
 		Image:           "alpine:latest",
 		Runtime:         "io.containerd.runc.v2",
@@ -48,8 +48,8 @@ func TestStoreCreateAndGet(t *testing.T) {
 	if got.Name != "test-agent" {
 		t.Errorf("name = %q, want %q", got.Name, "test-agent")
 	}
-	if got.Role != domain.VMRoleAgent {
-		t.Errorf("role = %q, want %q", got.Role, domain.VMRoleAgent)
+	if len(got.Tags) != 1 || got.Tags[0] != "agent" {
+		t.Errorf("tags = %v, want [agent]", got.Tags)
 	}
 	if got.State != domain.VMStateCreated {
 		t.Errorf("state = %q, want %q", got.State, domain.VMStateCreated)
@@ -73,7 +73,7 @@ func TestStoreGetByName(t *testing.T) {
 	vm := &domain.VM{
 		ID:              "vm-002",
 		Name:            "deploy-agent",
-		Role:            domain.VMRoleAgent,
+		Tags:            []string{"agent"},
 		State:           domain.VMStateCreated,
 		Image:           "alpine:latest",
 		Runtime:         "io.containerd.runc.v2",
@@ -97,8 +97,8 @@ func TestStoreList(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	store.Create(ctx, &domain.VM{ID: "a1", Name: "agent-1", Role: domain.VMRoleAgent, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
-	store.Create(ctx, &domain.VM{ID: "s1", Name: "svc-1", Role: domain.VMRoleService, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
+	store.Create(ctx, &domain.VM{ID: "a1", Name: "agent-1", Tags: []string{"agent"}, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
+	store.Create(ctx, &domain.VM{ID: "s1", Name: "svc-1", Tags: []string{"service"}, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
 
 	// List all
 	vms, err := store.List(ctx, domain.VMFilter{})
@@ -109,9 +109,8 @@ func TestStoreList(t *testing.T) {
 		t.Fatalf("list count = %d, want 2", len(vms))
 	}
 
-	// List by role
-	agentRole := domain.VMRoleAgent
-	vms, err = store.List(ctx, domain.VMFilter{Role: &agentRole})
+	// List by tag
+	vms, err = store.List(ctx, domain.VMFilter{Tags: []string{"agent"}})
 	if err != nil {
 		t.Fatalf("list agents: %v", err)
 	}
@@ -128,7 +127,7 @@ func TestStoreUpdateState(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	store.Create(ctx, &domain.VM{ID: "vm-1", Name: "test", Role: domain.VMRoleAgent, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
+	store.Create(ctx, &domain.VM{ID: "vm-1", Name: "test", Tags: []string{"agent"}, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
 
 	// Start
 	startTime := now.Add(time.Second)
@@ -162,7 +161,7 @@ func TestStoreDelete(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	store.Create(ctx, &domain.VM{ID: "vm-del", Name: "deleteme", Role: domain.VMRoleAgent, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
+	store.Create(ctx, &domain.VM{ID: "vm-del", Name: "deleteme", Tags: []string{"agent"}, State: domain.VMStateCreated, Image: "alpine:latest", Runtime: "runc", RestartPolicy: domain.RestartPolicyNone, RestartStrategy: domain.RestartStrategyBackoff, CreatedAt: now})
 
 	if err := store.Delete(ctx, "vm-del"); err != nil {
 		t.Fatalf("delete: %v", err)

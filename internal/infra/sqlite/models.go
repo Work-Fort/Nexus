@@ -31,7 +31,6 @@ type Drive struct {
 type Vm struct {
 	ID              string         `json:"id"`
 	Name            string         `json:"name"`
-	Role            string         `json:"role"`
 	Image           string         `json:"image"`
 	Runtime         string         `json:"runtime"`
 	State           string         `json:"state"`
@@ -47,4 +46,9 @@ type Vm struct {
 	RestartPolicy   string         `json:"restart_policy"`
 	RestartStrategy string         `json:"restart_strategy"`
 	Shell           string         `json:"shell"`
+}
+
+type VmTag struct {
+	VmID string `json:"vm_id"`
+	Tag  string `json:"tag"`
 }

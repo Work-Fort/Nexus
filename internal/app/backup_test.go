@@ -11,7 +11,7 @@ func TestManifestRoundTrip(t *testing.T) {
 		Version: 1,
 		VM: ManifestVM{
 			Name:     "worker",
-			Role:     "agent",
+			Tags:     []string{"agent"},
 			Image:    "docker.io/library/alpine:latest",
 			Runtime:  "io.containerd.kata.v2",
 			RootSize: "10G",
@@ -58,11 +58,10 @@ func TestManifestValidation(t *testing.T) {
 		m       ExportManifest
 		wantErr bool
 	}{
-		{"valid", ExportManifest{Version: 1, VM: ManifestVM{Name: "x", Role: "agent", Image: "img", Runtime: "rt"}}, false},
-		{"version 0", ExportManifest{Version: 0, VM: ManifestVM{Name: "x", Role: "agent", Image: "img", Runtime: "rt"}}, true},
-		{"missing name", ExportManifest{Version: 1, VM: ManifestVM{Role: "agent", Image: "img", Runtime: "rt"}}, true},
-		{"missing role", ExportManifest{Version: 1, VM: ManifestVM{Name: "x", Image: "img", Runtime: "rt"}}, true},
-		{"missing image", ExportManifest{Version: 1, VM: ManifestVM{Name: "x", Role: "agent", Runtime: "rt"}}, true},
+		{"valid", ExportManifest{Version: 1, VM: ManifestVM{Name: "x", Tags: []string{"agent"}, Image: "img", Runtime: "rt"}}, false},
+		{"version 0", ExportManifest{Version: 0, VM: ManifestVM{Name: "x", Tags: []string{"agent"}, Image: "img", Runtime: "rt"}}, true},
+		{"missing name", ExportManifest{Version: 1, VM: ManifestVM{Tags: []string{"agent"}, Image: "img", Runtime: "rt"}}, true},
+		{"missing image", ExportManifest{Version: 1, VM: ManifestVM{Name: "x", Tags: []string{"agent"}, Runtime: "rt"}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

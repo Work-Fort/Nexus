@@ -22,7 +22,7 @@ type DNSConfig struct {
 type VM struct {
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
-	Role            string     `json:"role"`
+	Tags            []string   `json:"tags"`
 	State           string     `json:"state"`
 	Image           string     `json:"image"`
 	Runtime         string     `json:"runtime"`
@@ -41,7 +41,7 @@ type VM struct {
 // CreateVMParams holds parameters for creating a VM.
 type CreateVMParams struct {
 	Name            string     `json:"name"`
-	Role            string     `json:"role"`
+	Tags            []string   `json:"tags,omitempty"`
 	Image           string     `json:"image,omitempty"`
 	Runtime         string     `json:"runtime,omitempty"`
 	DNS             *DNSConfig `json:"dns,omitempty"`
@@ -60,7 +60,8 @@ type ExecResult struct {
 
 // ListVMsFilter constrains VM listing.
 type ListVMsFilter struct {
-	Role string
+	Tags     []string
+	TagMatch string
 }
 
 // CreateVM creates a new virtual machine.
@@ -76,11 +77,18 @@ func (c *Client) CreateVM(ctx context.Context, params CreateVMParams) (*VM, erro
 	return decodeJSON[VM](resp)
 }
 
-// ListVMs returns all VMs, optionally filtered by role.
+// ListVMs returns all VMs, optionally filtered by tags.
 func (c *Client) ListVMs(ctx context.Context, filter ListVMsFilter) ([]VM, error) {
 	path := "/v1/vms"
-	if filter.Role != "" {
-		path += "?role=" + filter.Role
+	if len(filter.Tags) > 0 {
+		q := url.Values{}
+		for _, t := range filter.Tags {
+			q.Add("tag", t)
+		}
+		if filter.TagMatch != "" {
+			q.Set("tag_match", filter.TagMatch)
+		}
+		path += "?" + q.Encode()
 	}
 	resp, err := c.get(ctx, path)
 	if err != nil {
@@ -201,6 +209,19 @@ func (c *Client) ExecStreamVM(ctx context.Context, ref string, cmd []string, std
 		return exitCode, fmt.Errorf("reading SSE stream: %w", err)
 	}
 	return exitCode, nil
+}
+
+// SetTags replaces all tags on a VM.
+func (c *Client) SetTags(ctx context.Context, ref string, tags []string) (*VM, error) {
+	resp, err := c.put(ctx, "/v1/vms/"+url.PathEscape(ref)+"/tags", map[string]any{"tags": tags})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := handleResponse(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	return decodeJSON[VM](resp)
 }
 
 // UpdateShell updates the default shell for a VM.

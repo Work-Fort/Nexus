@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -29,12 +30,12 @@ func newVMCmd() *cobra.Command {
 }
 
 func newVMListCmd() *cobra.Command {
-	var role string
+	var tags []string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List VMs",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			vms, err := apiClient.ListVMs(cmd.Context(), client.ListVMsFilter{Role: role})
+			vms, err := apiClient.ListVMs(cmd.Context(), client.ListVMsFilter{Tags: tags})
 			if err != nil {
 				return err
 			}
@@ -43,15 +44,15 @@ func newVMListCmd() *cobra.Command {
 				return nil
 			}
 			w := newTabWriter()
-			fmt.Fprintln(w, "ID\tNAME\tROLE\tSTATE\tIP")
+			fmt.Fprintln(w, "ID\tNAME\tTAGS\tSTATE\tIP")
 			for _, vm := range vms {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", vm.ID, vm.Name, vm.Role, vm.State, vm.IP)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", vm.ID, vm.Name, strings.Join(vm.Tags, ","), vm.State, vm.IP)
 			}
 			flushTabWriter(w)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&role, "role", "", "Filter by role")
+	cmd.Flags().StringSliceVar(&tags, "tag", nil, "Filter by tag (can be repeated)")
 	return cmd
 }
 
@@ -97,11 +98,10 @@ func newVMCreateCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&params.Role, "role", "", "VM role (agent or service)")
+	cmd.Flags().StringSliceVar(&params.Tags, "tag", nil, "VM tag (can be repeated)")
 	cmd.Flags().StringVar(&params.Image, "image", "", "OCI image")
 	cmd.Flags().StringVar(&params.RootSize, "root-size", "", "Root filesystem size limit")
 	cmd.Flags().StringVar(&params.RestartPolicy, "restart-policy", "", "Restart policy")
-	cmd.MarkFlagRequired("role") //nolint:errcheck
 	return cmd
 }
 
@@ -153,7 +153,7 @@ func newVMStopCmd() *cobra.Command {
 func printVMDetail(w *tabwriter.Writer, vm *client.VM) {
 	fmt.Fprintf(w, "ID:\t%s\n", vm.ID)
 	fmt.Fprintf(w, "Name:\t%s\n", vm.Name)
-	fmt.Fprintf(w, "Role:\t%s\n", vm.Role)
+	fmt.Fprintf(w, "Tags:\t%s\n", strings.Join(vm.Tags, ", "))
 	fmt.Fprintf(w, "State:\t%s\n", vm.State)
 	fmt.Fprintf(w, "Image:\t%s\n", vm.Image)
 	fmt.Fprintf(w, "IP:\t%s\n", vm.IP)

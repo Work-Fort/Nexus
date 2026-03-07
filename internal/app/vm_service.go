@@ -87,8 +87,13 @@ const minRootSize = 64 * 1_000_000 // 64M
 // CreateVM validates parameters, creates a container via the runtime, and
 // persists the VM record.
 func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) (*domain.VM, error) {
-	if !domain.ValidRole(params.Role) {
-		return nil, fmt.Errorf("invalid role %q: %w", params.Role, domain.ErrValidation)
+	for _, tag := range params.Tags {
+		if err := nxid.ValidateName(tag); err != nil {
+			return nil, fmt.Errorf("invalid tag %q: %v: %w", tag, err, domain.ErrValidation)
+		}
+	}
+	if len(params.Tags) > 20 {
+		return nil, fmt.Errorf("too many tags (max 20): %w", domain.ErrValidation)
 	}
 	if params.Name == "" {
 		return nil, fmt.Errorf("name is required: %w", domain.ErrValidation)
@@ -124,7 +129,7 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	vm := &domain.VM{
 		ID:        nxid.New(),
 		Name:      params.Name,
-		Role:      params.Role,
+		Tags:      params.Tags,
 		State:     domain.VMStateCreated,
 		Image:     params.Image,
 		Runtime:   params.Runtime,
@@ -186,7 +191,7 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		return nil, fmt.Errorf("store create: %w", err)
 	}
 
-	log.Info("vm created", "id", vm.ID, "name", vm.Name, "role", vm.Role, "ip", vm.IP)
+	log.Info("vm created", "id", vm.ID, "name", vm.Name, "tags", vm.Tags, "ip", vm.IP)
 	return vm, nil
 }
 
@@ -407,6 +412,31 @@ func (s *VMService) UpdateRestartPolicy(ctx context.Context, ref string, policy 
 	vm.RestartPolicy = policy
 	vm.RestartStrategy = strategy
 	log.Info("restart policy updated", "id", vm.ID, "policy", policy, "strategy", strategy)
+	return vm, nil
+}
+
+// SetTags replaces all tags on a VM.
+func (s *VMService) SetTags(ctx context.Context, ref string, tags []string) (*domain.VM, error) {
+	for _, tag := range tags {
+		if err := nxid.ValidateName(tag); err != nil {
+			return nil, fmt.Errorf("invalid tag %q: %v: %w", tag, err, domain.ErrValidation)
+		}
+	}
+	if len(tags) > 20 {
+		return nil, fmt.Errorf("too many tags (max 20): %w", domain.ErrValidation)
+	}
+
+	vm, err := s.store.Resolve(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.store.SetTags(ctx, vm.ID, tags); err != nil {
+		return nil, fmt.Errorf("set tags: %w", err)
+	}
+
+	vm.Tags = tags
+	log.Info("tags updated", "id", vm.ID, "tags", tags)
 	return vm, nil
 }
 

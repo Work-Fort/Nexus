@@ -297,14 +297,14 @@ func (c *Client) BaseURL() string {
 // --- Response types ---
 
 type VM struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	Role      string  `json:"role"`
-	State     string  `json:"state"`
-	Image     string  `json:"image"`
-	Runtime   string  `json:"runtime"`
-	IP        string  `json:"ip,omitempty"`
-	Gateway   string  `json:"gateway,omitempty"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Tags      []string `json:"tags"`
+	State     string   `json:"state"`
+	Image     string   `json:"image"`
+	Runtime   string   `json:"runtime"`
+	IP        string   `json:"ip,omitempty"`
+	Gateway   string   `json:"gateway,omitempty"`
 	CreatedAt       string  `json:"created_at"`
 	StartedAt       *string `json:"started_at,omitempty"`
 	StoppedAt       *string `json:"stopped_at,omitempty"`
@@ -355,8 +355,9 @@ func (e *APIError) Error() string { return fmt.Sprintf("%d: %s", e.Status, e.Tit
 
 // --- VM operations ---
 
-func (c *Client) CreateVM(name, role string) (*VM, error) {
-	body := fmt.Sprintf(`{"name":%q,"role":%q}`, name, role)
+func (c *Client) CreateVM(name, tag string) (*VM, error) {
+	tagsJSON, _ := json.Marshal([]string{tag})
+	body := fmt.Sprintf(`{"name":%q,"tags":%s}`, name, tagsJSON)
 	resp, err := c.post("/v1/vms", body)
 	if err != nil {
 		return nil, err
@@ -369,8 +370,9 @@ func (c *Client) CreateVM(name, role string) (*VM, error) {
 	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
 }
 
-func (c *Client) CreateVMWithImage(name, role, image string) (*VM, error) {
-	body := fmt.Sprintf(`{"name":%q,"role":%q,"image":%q}`, name, role, image)
+func (c *Client) CreateVMWithImage(name, tag, image string) (*VM, error) {
+	tagsJSON, _ := json.Marshal([]string{tag})
+	body := fmt.Sprintf(`{"name":%q,"tags":%s,"image":%q}`, name, tagsJSON, image)
 	resp, err := c.post("/v1/vms", body)
 	if err != nil {
 		return nil, err
@@ -383,9 +385,10 @@ func (c *Client) CreateVMWithImage(name, role, image string) (*VM, error) {
 	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
 }
 
-func (c *Client) CreateVMWithRestartPolicy(name, role, policy, strategy string) (*VM, error) {
-	body := fmt.Sprintf(`{"name":%q,"role":%q,"restart_policy":%q,"restart_strategy":%q}`,
-		name, role, policy, strategy)
+func (c *Client) CreateVMWithRestartPolicy(name, tag, policy, strategy string) (*VM, error) {
+	tagsJSON, _ := json.Marshal([]string{tag})
+	body := fmt.Sprintf(`{"name":%q,"tags":%s,"restart_policy":%q,"restart_strategy":%q}`,
+		name, tagsJSON, policy, strategy)
 	resp, err := c.post("/v1/vms", body)
 	if err != nil {
 		return nil, err

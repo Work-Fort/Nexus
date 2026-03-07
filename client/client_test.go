@@ -15,7 +15,7 @@ func TestCreateVM(t *testing.T) {
 	want := VM{
 		ID:              "vm-abc123",
 		Name:            "test-vm",
-		Role:            "worker",
+		Tags:            []string{"worker"},
 		State:           "created",
 		Image:           "ubuntu:22.04",
 		Runtime:         "kata-fc",
@@ -42,8 +42,8 @@ func TestCreateVM(t *testing.T) {
 		if params.Name != "test-vm" {
 			t.Errorf("expected name test-vm, got %s", params.Name)
 		}
-		if params.Role != "worker" {
-			t.Errorf("expected role worker, got %s", params.Role)
+		if len(params.Tags) != 1 || params.Tags[0] != "worker" {
+			t.Errorf("expected tags [worker], got %v", params.Tags)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -55,7 +55,7 @@ func TestCreateVM(t *testing.T) {
 	c := New(srv.URL)
 	got, err := c.CreateVM(context.Background(), CreateVMParams{
 		Name:  "test-vm",
-		Role:  "worker",
+		Tags:  []string{"worker"},
 		Image: "ubuntu:22.04",
 	})
 	if err != nil {
@@ -80,8 +80,8 @@ func TestCreateVM(t *testing.T) {
 
 func TestListVMs(t *testing.T) {
 	vms := []VM{
-		{ID: "vm-1", Name: "alpha", Role: "worker", State: "running", CreatedAt: "2026-03-06T10:00:00Z"},
-		{ID: "vm-2", Name: "beta", Role: "manager", State: "stopped", CreatedAt: "2026-03-06T11:00:00Z"},
+		{ID: "vm-1", Name: "alpha", Tags: []string{"worker"}, State: "running", CreatedAt: "2026-03-06T10:00:00Z"},
+		{ID: "vm-2", Name: "beta", Tags: []string{"manager"}, State: "stopped", CreatedAt: "2026-03-06T11:00:00Z"},
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,8 +109,8 @@ func TestListVMs(t *testing.T) {
 	if got[0].Name != "alpha" {
 		t.Errorf("first VM name = %q, want %q", got[0].Name, "alpha")
 	}
-	if got[1].Role != "manager" {
-		t.Errorf("second VM role = %q, want %q", got[1].Role, "manager")
+	if len(got[1].Tags) != 1 || got[1].Tags[0] != "manager" {
+		t.Errorf("second VM tags = %v, want [manager]", got[1].Tags)
 	}
 }
 
@@ -118,7 +118,7 @@ func TestGetVM(t *testing.T) {
 	want := VM{
 		ID:        "vm-abc123",
 		Name:      "my-vm",
-		Role:      "worker",
+		Tags:      []string{"worker"},
 		State:     "running",
 		IP:        "10.0.0.5",
 		Gateway:   "10.0.0.1",

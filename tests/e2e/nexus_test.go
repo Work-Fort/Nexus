@@ -546,7 +546,7 @@ func TestInvalidCreatePayload(t *testing.T) {
 	_, c := startDaemon(t)
 
 	// Missing name — should fail validation.
-	resp, err := c.RawRequest("POST", "/v1/vms", strings.NewReader(`{"role":"agent"}`))
+	resp, err := c.RawRequest("POST", "/v1/vms", strings.NewReader(`{"tags":["agent"]}`))
 	if err != nil {
 		t.Fatalf("raw request: %v", err)
 	}
@@ -555,14 +555,14 @@ func TestInvalidCreatePayload(t *testing.T) {
 		t.Error("expected non-201 for missing name")
 	}
 
-	// Invalid role.
-	resp, err = c.RawRequest("POST", "/v1/vms", strings.NewReader(`{"name":"bad","role":"invalid"}`))
+	// Invalid tag name.
+	resp, err = c.RawRequest("POST", "/v1/vms", strings.NewReader(`{"name":"bad","tags":["inv@lid!"]}`))
 	if err != nil {
 		t.Fatalf("raw request: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode == 201 {
-		t.Error("expected non-201 for invalid role")
+		t.Error("expected non-201 for invalid tag")
 	}
 }
 
@@ -989,7 +989,6 @@ func TestMCPVMLifecycle(t *testing.T) {
 	// 1. vm_create via MCP.
 	createResult, err := c.MCPCall("vm_create", map[string]any{
 		"name": "mcp-test",
-		"role": "agent",
 	})
 	if err != nil {
 		t.Fatalf("MCP vm_create: %v", err)

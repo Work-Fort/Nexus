@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -99,10 +100,9 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 			dnsSearch = sql.NullString{String: string(b), Valid: true}
 		}
 	}
-	return s.q.InsertVM(ctx, InsertVMParams{
+	if err := s.q.InsertVM(ctx, InsertVMParams{
 		ID:              vm.ID,
 		Name:            vm.Name,
-		Role:            string(vm.Role),
 		Image:           vm.Image,
 		Runtime:         vm.Runtime,
 		State:           string(vm.State),
@@ -116,7 +116,15 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 		RestartPolicy:   string(vm.RestartPolicy),
 		RestartStrategy: string(vm.RestartStrategy),
 		Shell:           vm.Shell,
-	})
+	}); err != nil {
+		return err
+	}
+	for _, tag := range vm.Tags {
+		if err := s.q.InsertTag(ctx, InsertTagParams{VmID: vm.ID, Tag: tag}); err != nil {
+			return fmt.Errorf("insert tag %q: %w", tag, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) Get(ctx context.Context, id string) (*domain.VM, error) {
@@ -127,7 +135,15 @@ func (s *Store) Get(ctx context.Context, id string) (*domain.VM, error) {
 		}
 		return nil, fmt.Errorf("get vm: %w", err)
 	}
-	return vmFromRow(row)
+	vm, err := vmFromRow(row)
+	if err != nil {
+		return nil, err
+	}
+	vm.Tags, err = s.loadTags(ctx, vm.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load tags: %w", err)
+	}
+	return vm, nil
 }
 
 func (s *Store) GetByName(ctx context.Context, name string) (*domain.VM, error) {
@@ -138,24 +154,20 @@ func (s *Store) GetByName(ctx context.Context, name string) (*domain.VM, error) 
 		}
 		return nil, fmt.Errorf("get vm by name: %w", err)
 	}
-	return vmFromRow(row)
+	vm, err := vmFromRow(row)
+	if err != nil {
+		return nil, err
+	}
+	vm.Tags, err = s.loadTags(ctx, vm.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load tags: %w", err)
+	}
+	return vm, nil
 }
 
 func (s *Store) List(ctx context.Context, filter domain.VMFilter) ([]*domain.VM, error) {
-	if filter.Role != nil {
-		rows, err := s.q.ListVMsByRole(ctx, string(*filter.Role))
-		if err != nil {
-			return nil, fmt.Errorf("list vms by role: %w", err)
-		}
-		vms := make([]*domain.VM, len(rows))
-		for i, r := range rows {
-			vm, err := vmFromRow(r)
-			if err != nil {
-				return nil, err
-			}
-			vms[i] = vm
-		}
-		return vms, nil
+	if len(filter.Tags) > 0 {
+		return s.listByTags(ctx, filter.Tags, filter.TagMatch)
 	}
 	rows, err := s.q.ListVMs(ctx)
 	if err != nil {
@@ -167,7 +179,76 @@ func (s *Store) List(ctx context.Context, filter domain.VMFilter) ([]*domain.VM,
 		if err != nil {
 			return nil, err
 		}
+		vm.Tags, err = s.loadTags(ctx, vm.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load tags: %w", err)
+		}
 		vms[i] = vm
+	}
+	return vms, nil
+}
+
+func (s *Store) listByTags(ctx context.Context, tags []string, matchMode string) ([]*domain.VM, error) {
+	placeholders := make([]string, len(tags))
+	args := make([]any, len(tags))
+	for i, t := range tags {
+		placeholders[i] = "?"
+		args[i] = t
+	}
+	inClause := strings.Join(placeholders, ",")
+
+	var query string
+	if matchMode == "any" {
+		query = `SELECT DISTINCT v.id, v.name, v.image, v.runtime, v.state,
+			v.created_at, v.started_at, v.stopped_at, v.ip, v.gateway, v.netns_path,
+			v.dns_servers, v.dns_search, v.root_size, v.restart_policy, v.restart_strategy, v.shell
+			FROM vms v JOIN vm_tags t ON v.id = t.vm_id
+			WHERE t.tag IN (` + inClause + `) ORDER BY v.created_at DESC`
+	} else {
+		query = `SELECT v.id, v.name, v.image, v.runtime, v.state,
+			v.created_at, v.started_at, v.stopped_at, v.ip, v.gateway, v.netns_path,
+			v.dns_servers, v.dns_search, v.root_size, v.restart_policy, v.restart_strategy, v.shell
+			FROM vms v JOIN vm_tags t ON v.id = t.vm_id
+			WHERE t.tag IN (` + inClause + `)
+			GROUP BY v.id HAVING COUNT(DISTINCT t.tag) = ?
+			ORDER BY v.created_at DESC`
+		args = append(args, len(tags))
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list vms by tags: %w", err)
+	}
+	defer rows.Close()
+
+	// Collect all rows first so we close the cursor before calling loadTags
+	// (SQLite allows only one active statement per connection).
+	var scanned []Vm
+	for rows.Next() {
+		var row Vm
+		if err := rows.Scan(&row.ID, &row.Name, &row.Image, &row.Runtime,
+			&row.State, &row.CreatedAt, &row.StartedAt, &row.StoppedAt,
+			&row.Ip, &row.Gateway, &row.NetnsPath, &row.DnsServers,
+			&row.DnsSearch, &row.RootSize, &row.RestartPolicy, &row.RestartStrategy, &row.Shell); err != nil {
+			return nil, fmt.Errorf("scan vm: %w", err)
+		}
+		scanned = append(scanned, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	vms := make([]*domain.VM, 0, len(scanned))
+	for _, row := range scanned {
+		vm, err := vmFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		vm.Tags, err = s.loadTags(ctx, vm.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load tags: %w", err)
+		}
+		vms = append(vms, vm)
 	}
 	return vms, nil
 }
@@ -209,6 +290,22 @@ func (s *Store) UpdateShell(ctx context.Context, id, shell string) error {
 		Shell: shell,
 		ID:    id,
 	})
+}
+
+func (s *Store) SetTags(ctx context.Context, vmID string, tags []string) error {
+	if err := s.q.DeleteTagsByVM(ctx, vmID); err != nil {
+		return fmt.Errorf("delete tags: %w", err)
+	}
+	for _, tag := range tags {
+		if err := s.q.InsertTag(ctx, InsertTagParams{VmID: vmID, Tag: tag}); err != nil {
+			return fmt.Errorf("insert tag %q: %w", tag, err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) loadTags(ctx context.Context, vmID string) ([]string, error) {
+	return s.q.GetTagsByVM(ctx, vmID)
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
@@ -407,7 +504,15 @@ func (s *Store) Resolve(ctx context.Context, ref string) (*domain.VM, error) {
 		}
 		return nil, fmt.Errorf("resolve vm: %w", err)
 	}
-	return vmFromRow(row)
+	vm, err := vmFromRow(row)
+	if err != nil {
+		return nil, err
+	}
+	vm.Tags, err = s.loadTags(ctx, vm.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load tags: %w", err)
+	}
+	return vm, nil
 }
 
 func (s *Store) ResolveDrive(ctx context.Context, ref string) (*domain.Drive, error) {
@@ -479,7 +584,6 @@ func vmFromRow(row Vm) (*domain.VM, error) {
 	vm := &domain.VM{
 		ID:        row.ID,
 		Name:      row.Name,
-		Role:      domain.VMRole(row.Role),
 		State:     domain.VMState(row.State),
 		Image:     row.Image,
 		Runtime:   row.Runtime,

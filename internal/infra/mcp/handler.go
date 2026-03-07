@@ -69,7 +69,6 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 	s.AddTool(mcp.NewTool("vm_create",
 		mcp.WithDescription("Create a new VM"),
 		mcp.WithString("name", mcp.Description("VM name"), mcp.Required()),
-		mcp.WithString("role", mcp.Description("VM role (agent or service)"), mcp.Required()),
 		mcp.WithString("image", mcp.Description("OCI image")),
 		mcp.WithString("runtime", mcp.Description("Container runtime handler")),
 		mcp.WithString("root_size", mcp.Description("Root filesystem size limit (e.g. 1G, 500M)")),
@@ -81,14 +80,9 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 		if errRes != nil {
 			return errRes, nil
 		}
-		role, errRes := requireString(req, "role")
-		if errRes != nil {
-			return errRes, nil
-		}
 
 		params := domain.CreateVMParams{
 			Name:            name,
-			Role:            domain.VMRole(role),
 			Image:           mcp.ParseString(req, "image", ""),
 			Runtime:         mcp.ParseString(req, "runtime", ""),
 			Shell:           mcp.ParseString(req, "shell", ""),
@@ -119,8 +113,7 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		filter := domain.VMFilter{}
 		if role := mcp.ParseString(req, "role", ""); role != "" {
-			r := domain.VMRole(role)
-			filter.Role = &r
+			filter.Tags = []string{role}
 		}
 		vms, err := svc.ListVMs(ctx, filter)
 		if err != nil {

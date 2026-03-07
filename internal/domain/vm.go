@@ -10,19 +10,6 @@ import (
 	"time"
 )
 
-// VMRole identifies what kind of workload runs in the VM.
-type VMRole string
-
-const (
-	VMRoleAgent   VMRole = "agent"
-	VMRoleService VMRole = "service"
-)
-
-// ValidRole returns true if r is a recognized VM role.
-func ValidRole(r VMRole) bool {
-	return r == VMRoleAgent || r == VMRoleService
-}
-
 // VMState represents the lifecycle state of a VM.
 type VMState string
 
@@ -64,7 +51,7 @@ func ValidRestartStrategy(s RestartStrategy) bool {
 type VM struct {
 	ID        string
 	Name      string
-	Role      VMRole
+	Tags      []string
 	State     VMState
 	Image     string
 	Runtime   string
@@ -84,7 +71,7 @@ type VM struct {
 // CreateVMParams holds parameters for creating a new VM.
 type CreateVMParams struct {
 	Name      string
-	Role      VMRole
+	Tags      []string
 	Image     string
 	Runtime   string
 	DNSConfig *DNSConfig
@@ -103,7 +90,8 @@ type ExecResult struct {
 
 // VMFilter constrains VM list queries.
 type VMFilter struct {
-	Role *VMRole
+	Tags     []string // tags to match
+	TagMatch string   // "all" (default, AND) or "any" (OR)
 }
 
 // Sentinel errors.

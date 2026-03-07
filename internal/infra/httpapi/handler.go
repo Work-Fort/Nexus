@@ -27,7 +27,7 @@ const timeFormatJSON = "2006-01-02T15:04:05.000Z"
 type CreateVMInput struct {
 	Body struct {
 		Name     string         `json:"name" doc:"VM name"`
-		Role     string         `json:"role" doc:"VM role (agent or service)"`
+		Tags     []string       `json:"tags,omitempty" doc:"VM tags (e.g. agent, dev)"`
 		Image    string         `json:"image,omitempty" doc:"OCI image"`
 		Runtime  string         `json:"runtime,omitempty" doc:"Container runtime handler"`
 		DNS      *dnsConfigBody `json:"dns,omitempty" doc:"DNS configuration"`
@@ -39,7 +39,15 @@ type CreateVMInput struct {
 }
 
 type ListVMsInput struct {
-	Role string `query:"role" doc:"Filter by VM role"`
+	Tag      []string `query:"tag" doc:"Filter by tag (AND by default)"`
+	TagMatch string   `query:"tag_match" doc:"Tag match mode: all (default) or any"`
+}
+
+type UpdateTagsInput struct {
+	ID   string `path:"id" doc:"VM ID or name"`
+	Body struct {
+		Tags []string `json:"tags" doc:"New tags for the VM"`
+	}
 }
 
 type VMPathInput struct {
@@ -157,7 +165,7 @@ type statusBody struct {
 type vmResponse struct {
 	ID        string         `json:"id" doc:"VM ID"`
 	Name      string         `json:"name" doc:"VM name"`
-	Role      string         `json:"role" doc:"VM role"`
+	Tags      []string       `json:"tags" doc:"VM tags"`
 	State     string         `json:"state" doc:"Current state"`
 	Image     string         `json:"image" doc:"OCI image"`
 	Runtime   string         `json:"runtime" doc:"Runtime handler"`
@@ -231,10 +239,14 @@ func (w *sseWriter) Write(p []byte) (int, error) {
 // --- helpers ---
 
 func vmToResponse(vm *domain.VM) vmResponse {
+	tags := vm.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 	r := vmResponse{
 		ID:        vm.ID,
 		Name:      vm.Name,
-		Role:      string(vm.Role),
+		Tags:      tags,
 		State:     string(vm.State),
 		Image:     vm.Image,
 		Runtime:   vm.Runtime,
@@ -369,7 +381,7 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 
 		vm, err := svc.CreateVM(ctx, domain.CreateVMParams{
 			Name:            input.Body.Name,
-			Role:            domain.VMRole(input.Body.Role),
+			Tags:            input.Body.Tags,
 			Image:           input.Body.Image,
 			Runtime:         input.Body.Runtime,
 			DNSConfig:       dnsCfg,
@@ -392,13 +404,9 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 		Summary:     "List VMs",
 		Tags:        []string{"VMs"},
 	}, func(ctx context.Context, input *ListVMsInput) (*VMListOutput, error) {
-		var filter domain.VMFilter
-		if input.Role != "" {
-			vmRole := domain.VMRole(input.Role)
-			if !domain.ValidRole(vmRole) {
-				return nil, huma.NewError(http.StatusBadRequest, "invalid role filter")
-			}
-			filter.Role = &vmRole
+		filter := domain.VMFilter{
+			Tags:     input.Tag,
+			TagMatch: input.TagMatch,
 		}
 
 		vms, err := svc.ListVMs(ctx, filter)
@@ -525,6 +533,20 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 		vm, err := svc.UpdateRestartPolicy(ctx, input.ID,
 			domain.RestartPolicy(input.Body.RestartPolicy),
 			domain.RestartStrategy(input.Body.RestartStrategy))
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &VMOutput{Body: vmToResponse(vm)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "update-tags",
+		Method:      http.MethodPut,
+		Path:        "/v1/vms/{id}/tags",
+		Summary:     "Update VM tags",
+		Tags:        []string{"VMs"},
+	}, func(ctx context.Context, input *UpdateTagsInput) (*VMOutput, error) {
+		vm, err := svc.SetTags(ctx, input.ID, input.Body.Tags)
 		if err != nil {
 			return nil, mapDomainError(err)
 		}

@@ -56,12 +56,25 @@ func (m *mockStore) GetByName(_ context.Context, name string) (*domain.VM, error
 func (m *mockStore) List(_ context.Context, filter domain.VMFilter) ([]*domain.VM, error) {
 	var result []*domain.VM
 	for _, vm := range m.vms {
-		if filter.Role != nil && vm.Role != *filter.Role {
+		if len(filter.Tags) > 0 && !matchTags(vm.Tags, filter.Tags) {
 			continue
 		}
 		result = append(result, vm)
 	}
 	return result, nil
+}
+
+func matchTags(vmTags, filterTags []string) bool {
+	tagSet := make(map[string]bool, len(vmTags))
+	for _, t := range vmTags {
+		tagSet[t] = true
+	}
+	for _, t := range filterTags {
+		if tagSet[t] {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *mockStore) UpdateState(_ context.Context, id string, state domain.VMState, now time.Time) error {
@@ -109,6 +122,15 @@ func (m *mockStore) UpdateShell(_ context.Context, id, shell string) error {
 		return domain.ErrNotFound
 	}
 	vm.Shell = shell
+	return nil
+}
+
+func (m *mockStore) SetTags(_ context.Context, vmID string, tags []string) error {
+	vm, ok := m.vms[vmID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	vm.Tags = tags
 	return nil
 }
 
@@ -221,9 +243,9 @@ func decodeJSON(t *testing.T, rec *httptest.ResponseRecorder, v any) {
 func TestCreateVM(t *testing.T) {
 	h := setupHandler()
 
-	rec := doRequest(h, "POST", "/v1/vms", map[string]string{
+	rec := doRequest(h, "POST", "/v1/vms", map[string]any{
 		"name":    "test-agent",
-		"role":    "agent",
+		"tags":    []string{"agent"},
 		"image":   "alpine:latest",
 		"runtime": "io.containerd.runc.v2",
 	})
@@ -241,8 +263,9 @@ func TestCreateVM(t *testing.T) {
 	if resp["name"] != "test-agent" {
 		t.Errorf("name = %v, want test-agent", resp["name"])
 	}
-	if resp["role"] != "agent" {
-		t.Errorf("role = %v, want agent", resp["role"])
+	tags, ok := resp["tags"].([]any)
+	if !ok || len(tags) != 1 || tags[0] != "agent" {
+		t.Errorf("tags = %v, want [agent]", resp["tags"])
 	}
 	if resp["state"] != "created" {
 		t.Errorf("state = %v, want created", resp["state"])
@@ -253,7 +276,7 @@ func TestCreateVMWithRootSize(t *testing.T) {
 	h := setupHandler()
 
 	rec := doRequest(h, "POST", "/v1/vms", map[string]any{
-		"name": "sized", "role": "agent", "root_size": "1G",
+		"name": "sized", "tags": []string{"agent"}, "root_size": "1G",
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
@@ -278,15 +301,15 @@ func TestCreateVMBadJSON(t *testing.T) {
 	}
 }
 
-func TestCreateVMInvalidRole(t *testing.T) {
+func TestCreateVMInvalidTag(t *testing.T) {
 	h := setupHandler()
 
-	rec := doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "bad", "role": "invalid", "image": "alpine:latest", "runtime": "runc",
+	rec := doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "bad", "tags": []string{"inv@lid!"}, "image": "alpine:latest", "runtime": "runc",
 	})
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
 
@@ -310,11 +333,11 @@ func TestListVMsEmpty(t *testing.T) {
 func TestListVMsWithResults(t *testing.T) {
 	h := setupHandler()
 
-	doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "vm1", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "vm1", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
-	doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "vm2", "role": "service", "image": "alpine:latest", "runtime": "runc",
+	doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "vm2", "tags": []string{"service"}, "image": "alpine:latest", "runtime": "runc",
 	})
 
 	rec := doRequest(h, "GET", "/v1/vms", nil)
@@ -331,17 +354,17 @@ func TestListVMsWithResults(t *testing.T) {
 	}
 }
 
-func TestListVMsWithRoleFilter(t *testing.T) {
+func TestListVMsWithTagFilter(t *testing.T) {
 	h := setupHandler()
 
-	doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "a1", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "a1", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
-	doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "s1", "role": "service", "image": "alpine:latest", "runtime": "runc",
+	doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "s1", "tags": []string{"service"}, "image": "alpine:latest", "runtime": "runc",
 	})
 
-	rec := doRequest(h, "GET", "/v1/vms?role=agent", nil)
+	rec := doRequest(h, "GET", "/v1/vms?tag=agent", nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -353,8 +376,11 @@ func TestListVMsWithRoleFilter(t *testing.T) {
 	if len(resp) != 1 {
 		t.Errorf("count = %d, want 1", len(resp))
 	}
-	if len(resp) > 0 && resp[0]["role"] != "agent" {
-		t.Errorf("role = %v, want agent", resp[0]["role"])
+	if len(resp) > 0 {
+		tags, ok := resp[0]["tags"].([]any)
+		if !ok || len(tags) == 0 || tags[0] != "agent" {
+			t.Errorf("tags = %v, want [agent]", resp[0]["tags"])
+		}
 	}
 }
 
@@ -371,8 +397,8 @@ func TestGetVMNotFound(t *testing.T) {
 func TestGetVMFound(t *testing.T) {
 	h := setupHandler()
 
-	createRec := doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "get-me", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	createRec := doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "get-me", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
 	var created map[string]any
 	decodeJSON(t, createRec, &created)
@@ -395,8 +421,8 @@ func TestStartStopLifecycle(t *testing.T) {
 	h := setupHandler()
 
 	// Create
-	createRec := doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "lifecycle", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	createRec := doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "lifecycle", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
 	var created map[string]any
 	decodeJSON(t, createRec, &created)
@@ -444,8 +470,8 @@ func TestStartNonexistentVM(t *testing.T) {
 func TestStopNotRunningVM(t *testing.T) {
 	h := setupHandler()
 
-	createRec := doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "created-only", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	createRec := doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "created-only", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
 	var created map[string]any
 	decodeJSON(t, createRec, &created)
@@ -461,8 +487,8 @@ func TestStopNotRunningVM(t *testing.T) {
 func TestDeleteVM(t *testing.T) {
 	h := setupHandler()
 
-	createRec := doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "delete-me", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	createRec := doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "delete-me", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
 	var created map[string]any
 	decodeJSON(t, createRec, &created)
@@ -485,8 +511,8 @@ func TestExecVM(t *testing.T) {
 	h := setupHandler()
 
 	// Create and start
-	createRec := doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "exec-me", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	createRec := doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "exec-me", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
 	var created map[string]any
 	decodeJSON(t, createRec, &created)
@@ -517,8 +543,8 @@ func TestExecVM(t *testing.T) {
 func TestExecVMNotRunning(t *testing.T) {
 	h := setupHandler()
 
-	createRec := doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "exec-not-running", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	createRec := doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "exec-not-running", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
 	var created map[string]any
 	decodeJSON(t, createRec, &created)
@@ -536,8 +562,8 @@ func TestExecVMNotRunning(t *testing.T) {
 func TestExecVMEmptyCmd(t *testing.T) {
 	h := setupHandler()
 
-	createRec := doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "exec-empty", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	createRec := doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "exec-empty", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
 	var created map[string]any
 	decodeJSON(t, createRec, &created)
@@ -550,16 +576,6 @@ func TestExecVMEmptyCmd(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
-	}
-}
-
-func TestListVMsInvalidRoleFilter(t *testing.T) {
-	h := setupHandler()
-
-	rec := doRequest(h, "GET", "/v1/vms?role=invalid", nil)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 
@@ -583,8 +599,8 @@ func TestResetNetworkWithVMs(t *testing.T) {
 	h := setupHandler()
 
 	// Create a VM first
-	doRequest(h, "POST", "/v1/vms", map[string]string{
-		"name": "blocker", "role": "agent", "image": "alpine:latest", "runtime": "runc",
+	doRequest(h, "POST", "/v1/vms", map[string]any{
+		"name": "blocker", "tags": []string{"agent"}, "image": "alpine:latest", "runtime": "runc",
 	})
 
 	rec := doRequest(h, "POST", "/v1/network/reset", nil)
