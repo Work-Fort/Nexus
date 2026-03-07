@@ -224,6 +224,17 @@ func (s *VMService) StartVM(ctx context.Context, ref string) error {
 	}
 
 	log.Info("vm started", "id", vm.ID)
+
+	if vm.Shell == "" {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, err := s.SyncShell(ctx, vm.ID); err != nil {
+				log.Warn("auto shell sync failed", "vm", vm.ID, "err", err)
+			}
+		}()
+	}
+
 	return nil
 }
 
@@ -858,4 +869,57 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 		return fmt.Errorf("runtime create: %w", err)
 	}
 	return nil
+}
+
+// SyncShell detects the root user's default shell from inside a running VM
+// and persists it to the shell field. Returns the updated VM.
+func (s *VMService) SyncShell(ctx context.Context, ref string) (*domain.VM, error) {
+	vm, err := s.store.Resolve(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if vm.State != domain.VMStateRunning {
+		return nil, domain.ErrInvalidState
+	}
+
+	result, err := s.runtime.Exec(ctx, vm.ID, []string{"getent", "passwd", "root"})
+	if err != nil {
+		return nil, fmt.Errorf("exec getent: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return nil, fmt.Errorf("getent exited %d: %s", result.ExitCode, result.Stderr)
+	}
+
+	shell, err := parseShellFromPasswd(result.Stdout)
+	if err != nil {
+		return nil, err
+	}
+
+	if shell != vm.Shell {
+		if err := s.store.UpdateShell(ctx, vm.ID, shell); err != nil {
+			return nil, fmt.Errorf("update shell: %w", err)
+		}
+	}
+
+	return s.store.Get(ctx, vm.ID)
+}
+
+// parseShellFromPasswd extracts the shell (field 7) from a passwd-format line.
+func parseShellFromPasswd(output string) (string, error) {
+	line := strings.TrimSpace(strings.SplitN(output, "\n", 2)[0])
+	if line == "" {
+		return "", fmt.Errorf("empty passwd output: %w", domain.ErrValidation)
+	}
+	fields := strings.Split(line, ":")
+	if len(fields) < 7 {
+		return "", fmt.Errorf("malformed passwd line (%d fields): %w", len(fields), domain.ErrValidation)
+	}
+	shell := fields[6]
+	if shell == "" {
+		return "", fmt.Errorf("empty shell in passwd: %w", domain.ErrValidation)
+	}
+	if !strings.HasPrefix(shell, "/") {
+		return "", fmt.Errorf("shell %q is not an absolute path: %w", shell, domain.ErrValidation)
+	}
+	return shell, nil
 }

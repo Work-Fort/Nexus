@@ -592,6 +592,21 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 		send(sse.Message{Data: exitData{ExitCode: exitCode}}) //nolint:errcheck
 		mu.Unlock()
 	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "sync-vm-shell",
+		Method:      http.MethodPost,
+		Path:        "/v1/vms/{id}/sync-shell",
+		Summary:     "Detect and sync VM shell",
+		Description: "Detects the root user's default shell inside the running VM and persists it.",
+		Tags:        []string{"VMs"},
+	}, func(ctx context.Context, input *VMPathInput) (*VMOutput, error) {
+		vm, err := svc.SyncShell(ctx, input.ID)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &VMOutput{Body: vmToResponse(vm)}, nil
+	})
 }
 
 // --- Drive routes ---

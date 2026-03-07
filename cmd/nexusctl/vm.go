@@ -25,6 +25,7 @@ func newVMCmd() *cobra.Command {
 		newVMStopCmd(),
 		newVMExportCmd(),
 		newVMImportCmd(),
+		newVMSyncShellCmd(),
 	)
 	return cmd
 }
@@ -145,6 +146,22 @@ func newVMStopCmd() *cobra.Command {
 				return err
 			}
 			fmt.Println("Stopped")
+			return nil
+		},
+	}
+}
+
+func newVMSyncShellCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sync-shell <id>",
+		Short: "Detect and sync VM shell",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			vm, err := apiClient.SyncShell(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Shell: %s\n", vm.Shell)
 			return nil
 		},
 	}

@@ -163,10 +163,15 @@ func (m *mockStore) Delete(_ context.Context, id string) error {
 
 type mockRuntime struct {
 	containers map[string]bool // id -> running
+	execResult *domain.ExecResult
+	execErr    error
 }
 
 func newMockRuntime() *mockRuntime {
-	return &mockRuntime{containers: make(map[string]bool)}
+	return &mockRuntime{
+		containers: make(map[string]bool),
+		execResult: &domain.ExecResult{ExitCode: 0, Stdout: "ok\n"},
+	}
 }
 
 func (m *mockRuntime) Create(_ context.Context, id, image, runtime string, _ ...domain.CreateOpt) error {
@@ -190,7 +195,10 @@ func (m *mockRuntime) Delete(_ context.Context, id string) error {
 }
 
 func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.ExecResult, error) {
-	return &domain.ExecResult{ExitCode: 0, Stdout: "ok\n"}, nil
+	if m.execErr != nil {
+		return nil, m.execErr
+	}
+	return m.execResult, nil
 }
 
 func (m *mockRuntime) ExecStream(_ context.Context, id string, cmd []string, stdout, stderr io.Writer) (int, error) {
@@ -1677,4 +1685,179 @@ func TestCreateVMWithDNSConfig(t *testing.T) {
 	if vm.DNSConfig.Servers[0] != "8.8.8.8" {
 		t.Errorf("dns server = %q, want 8.8.8.8", vm.DNSConfig.Servers[0])
 	}
+}
+
+func TestSyncShell(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		rt.execResult = &domain.ExecResult{
+			ExitCode: 0,
+			Stdout:   "root:x:0:0:root:/root:/bin/bash\n",
+		}
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+		vm := &domain.VM{
+			ID: "vm-1", Name: "test", State: domain.VMStateRunning,
+		}
+		store.vms[vm.ID] = vm
+
+		got, err := svc.SyncShell(context.Background(), "vm-1")
+		if err != nil {
+			t.Fatalf("SyncShell: %v", err)
+		}
+		if got.Shell != "/bin/bash" {
+			t.Errorf("Shell = %q, want /bin/bash", got.Shell)
+		}
+	})
+
+	t.Run("no-op when shell unchanged", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		rt.execResult = &domain.ExecResult{
+			ExitCode: 0,
+			Stdout:   "root:x:0:0:root:/root:/bin/bash\n",
+		}
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+		vm := &domain.VM{
+			ID: "vm-1", Name: "test", State: domain.VMStateRunning,
+			Shell: "/bin/bash",
+		}
+		store.vms[vm.ID] = vm
+
+		got, err := svc.SyncShell(context.Background(), "vm-1")
+		if err != nil {
+			t.Fatalf("SyncShell: %v", err)
+		}
+		if got.Shell != "/bin/bash" {
+			t.Errorf("Shell = %q, want /bin/bash", got.Shell)
+		}
+	})
+
+	t.Run("not running", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+		vm := &domain.VM{
+			ID: "vm-1", Name: "test", State: domain.VMStateStopped,
+		}
+		store.vms[vm.ID] = vm
+
+		_, err := svc.SyncShell(context.Background(), "vm-1")
+		if !errors.Is(err, domain.ErrInvalidState) {
+			t.Errorf("err = %v, want ErrInvalidState", err)
+		}
+	})
+
+	t.Run("exec failure", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		rt.execErr = fmt.Errorf("exec failed")
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+		vm := &domain.VM{
+			ID: "vm-1", Name: "test", State: domain.VMStateRunning,
+		}
+		store.vms[vm.ID] = vm
+
+		_, err := svc.SyncShell(context.Background(), "vm-1")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("malformed output", func(t *testing.T) {
+		cases := []struct {
+			name     string
+			stdout   string
+			exitCode int
+		}{
+			{"too few fields", "root:x:0:0\n", 0},
+			{"empty shell", "root:x:0:0:root:/root:\n", 0},
+			{"relative path", "root:x:0:0:root:/root:bash\n", 0},
+			{"empty output", "", 0},
+			{"non-zero exit", "", 1},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				store := newMockStore()
+				rt := newMockRuntime()
+				rt.execResult = &domain.ExecResult{
+					ExitCode: tc.exitCode,
+					Stdout:   tc.stdout,
+				}
+				svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+				vm := &domain.VM{
+					ID: "vm-1", Name: "test", State: domain.VMStateRunning,
+				}
+				store.vms[vm.ID] = vm
+
+				_, err := svc.SyncShell(context.Background(), "vm-1")
+				if err == nil {
+					t.Fatal("expected error for malformed output")
+				}
+			})
+		}
+	})
+}
+
+func TestStartVM_AutoSyncShell(t *testing.T) {
+	t.Run("syncs shell when empty", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		rt.execResult = &domain.ExecResult{
+			ExitCode: 0,
+			Stdout:   "root:x:0:0:root:/root:/bin/bash\n",
+		}
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+		vm := &domain.VM{
+			ID: "vm-1", Name: "test", State: domain.VMStateStopped,
+		}
+		store.vms[vm.ID] = vm
+		rt.containers[vm.ID] = false
+
+		if err := svc.StartVM(context.Background(), "vm-1"); err != nil {
+			t.Fatalf("StartVM: %v", err)
+		}
+
+		// Auto-sync runs in a goroutine; give it a moment.
+		time.Sleep(100 * time.Millisecond)
+
+		got := store.vms["vm-1"]
+		if got.Shell != "/bin/bash" {
+			t.Errorf("Shell = %q, want /bin/bash", got.Shell)
+		}
+	})
+
+	t.Run("skips sync when shell already set", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		rt.execResult = &domain.ExecResult{
+			ExitCode: 0,
+			Stdout:   "root:x:0:0:root:/root:/bin/zsh\n",
+		}
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+		vm := &domain.VM{
+			ID: "vm-1", Name: "test", State: domain.VMStateStopped,
+			Shell: "/bin/bash",
+		}
+		store.vms[vm.ID] = vm
+		rt.containers[vm.ID] = false
+
+		if err := svc.StartVM(context.Background(), "vm-1"); err != nil {
+			t.Fatalf("StartVM: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		got := store.vms["vm-1"]
+		if got.Shell != "/bin/bash" {
+			t.Errorf("Shell = %q, want /bin/bash (unchanged)", got.Shell)
+		}
+	})
 }

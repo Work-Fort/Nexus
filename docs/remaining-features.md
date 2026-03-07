@@ -106,7 +106,7 @@ Add tagging support for VMs (was present in the Rust version, missed in the Go
 port). Tags replace the `role` field as the way to organize and categorize VMs
 (e.g. `agent`, `ci-runner`, `dev`). Once tags exist, `role` becomes redundant.
 
-## 11. Shell Sync from VM Rootfs
+## 11. Shell Sync from VM Rootfs ✅
 
 [Design](shell-sync-design.md) · [Plan](plans/2026-03-06-shell-sync.md)
 

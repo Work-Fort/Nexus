@@ -499,6 +499,20 @@ func (c *Client) ExecStreamVM(id string, cmd []string) ([]SSEEvent, error) {
 	return parseSSEStream(resp.Body)
 }
 
+// SyncShell detects and persists the VM's root shell.
+func (c *Client) SyncShell(id string) (*VM, error) {
+	resp, err := c.post("/v1/vms/"+id+"/sync-shell", "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
+}
+
 func parseSSEStream(r io.Reader) ([]SSEEvent, error) {
 	var events []SSEEvent
 	var currentType, currentData string

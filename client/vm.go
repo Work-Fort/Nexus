@@ -251,6 +251,19 @@ func (c *Client) ExpandRootSize(ctx context.Context, ref string, size string) (*
 	return decodeJSON[VM](resp)
 }
 
+// SyncShell detects and persists the VM's root shell from inside the running VM.
+func (c *Client) SyncShell(ctx context.Context, ref string) (*VM, error) {
+	resp, err := c.post(ctx, "/v1/vms/"+url.PathEscape(ref)+"/sync-shell", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := handleResponse(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	return decodeJSON[VM](resp)
+}
+
 // UpdateRestartPolicy updates the restart policy and strategy for a VM.
 func (c *Client) UpdateRestartPolicy(ctx context.Context, ref, policy, strategy string) (*VM, error) {
 	resp, err := c.put(ctx, "/v1/vms/"+url.PathEscape(ref)+"/restart-policy", map[string]string{

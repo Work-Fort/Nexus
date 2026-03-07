@@ -309,6 +309,22 @@ func registerVMManagementTools(s *server.MCPServer, svc *app.VMService) {
 		}
 		return jsonResult(vm)
 	})
+
+	// vm_sync_shell
+	s.AddTool(mcp.NewTool("vm_sync_shell",
+		mcp.WithDescription("Detect and sync the root user's default shell from a running VM"),
+		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		vm, err := svc.SyncShell(ctx, id)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(vm)
+	})
 }
 
 // registerBackupTools registers vm_export and vm_import tools.
