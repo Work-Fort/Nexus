@@ -203,6 +203,26 @@ func (d *Daemon) Kill() {
 	}
 }
 
+// GracefulStop sends SIGTERM and waits for the daemon to exit, but does NOT
+// clean up the namespace or XDG dir. Use this to test graceful shutdown
+// behavior across daemon restarts.
+func (d *Daemon) GracefulStop() error {
+	if d.cmd.Process == nil {
+		return nil
+	}
+	d.cmd.Process.Signal(syscall.SIGTERM)
+	done := make(chan error, 1)
+	go func() { done <- d.cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(15 * time.Second):
+		d.cmd.Process.Kill()
+		<-done
+		return fmt.Errorf("daemon did not exit after SIGTERM")
+	}
+}
+
 // XDGDir returns the XDG temp directory used by this daemon.
 func (d *Daemon) XDGDir() string { return d.xdgDir }
 
