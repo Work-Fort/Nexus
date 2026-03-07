@@ -55,6 +55,7 @@ func init() {
 
 	rootCmd.AddCommand(newVMCmd())
 	rootCmd.AddCommand(newExecCmd())
+	rootCmd.AddCommand(newConsoleCmd())
 	rootCmd.AddCommand(newDriveCmd())
 	rootCmd.AddCommand(newDeviceCmd())
 	rootCmd.AddCommand(newNetworkCmd())

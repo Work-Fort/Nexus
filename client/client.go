@@ -38,6 +38,9 @@ func New(addr string, opts ...Option) *Client {
 	return c
 }
 
+// BaseURL returns the base URL of the Nexus daemon (e.g. "http://localhost:9600").
+func (c *Client) BaseURL() string { return c.base }
+
 func (c *Client) get(ctx context.Context, path string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
