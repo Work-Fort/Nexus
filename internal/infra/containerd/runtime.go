@@ -366,13 +366,21 @@ func (r *Runtime) setSnapshotQuota(ctx context.Context, snapName string, sizeByt
 	return nil
 }
 
-// Start creates and starts a task for the given container.
+// Start creates and starts a task for the given container. If a stale task
+// exists from a previous daemon lifecycle, it is cleaned up first.
 func (r *Runtime) Start(ctx context.Context, id string) error {
 	ctx = r.nsCtx(ctx)
 
 	container, err := r.client.LoadContainer(ctx, id)
 	if err != nil {
 		return fmt.Errorf("load container %s: %w", id, err)
+	}
+
+	// Clean up any stale task left behind by a previous daemon lifecycle.
+	// This can happen when the daemon exits without gracefully stopping VMs.
+	if oldTask, err := container.Task(ctx, nil); err == nil {
+		oldTask.Kill(ctx, syscall.SIGKILL) //nolint:errcheck // best-effort
+		oldTask.Delete(ctx)                //nolint:errcheck // best-effort
 	}
 
 	task, err := container.NewTask(ctx, cio.NullIO)

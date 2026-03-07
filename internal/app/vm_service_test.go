@@ -172,6 +172,7 @@ type mockRuntime struct {
 	initScript   string // last InitScriptPath passed to Create
 	execCalled   bool
 	lastExecCmd  []string
+	stopCalls    []string // IDs passed to Stop
 }
 
 func newMockRuntime() *mockRuntime {
@@ -199,6 +200,7 @@ func (m *mockRuntime) Start(_ context.Context, id string) error {
 
 func (m *mockRuntime) Stop(_ context.Context, id string) error {
 	m.containers[id] = false
+	m.stopCalls = append(m.stopCalls, id)
 	return nil
 }
 
@@ -2349,5 +2351,37 @@ func TestInjectMetricsService(t *testing.T) {
 	}
 	if !strings.Contains(script, "--collector.cpu") {
 		t.Error("expected collector flags in init script")
+	}
+}
+
+func TestShutdown_StopsRunningVMs(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+	ctx := context.Background()
+
+	// Create two VMs: one running, one stopped.
+	vm1, err := svc.CreateVM(ctx, domain.CreateVMParams{Name: "running-vm", Tags: []string{"agent"}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := svc.StartVM(ctx, vm1.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if _, err := svc.CreateVM(ctx, domain.CreateVMParams{Name: "stopped-vm", Tags: []string{"agent"}}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	rt.stopCalls = nil // reset after StartVM's implicit stop
+
+	svc.Shutdown(ctx)
+
+	// Should have stopped the running VM only.
+	if len(rt.stopCalls) != 1 {
+		t.Fatalf("expected 1 stop call, got %d: %v", len(rt.stopCalls), rt.stopCalls)
+	}
+	if rt.stopCalls[0] != vm1.ID {
+		t.Errorf("stopped wrong VM: got %s, want %s", rt.stopCalls[0], vm1.ID)
 	}
 }

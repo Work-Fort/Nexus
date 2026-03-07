@@ -227,8 +227,12 @@ func newDaemonCmd() *cobra.Command {
 				return err
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			monitorCancel()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
+
+			svc.Shutdown(ctx)
 
 			if err := httpServer.Shutdown(ctx); err != nil {
 				log.Error("http shutdown", "err", err)

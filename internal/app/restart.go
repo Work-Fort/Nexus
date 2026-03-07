@@ -63,6 +63,31 @@ func (s *VMService) RestoreVMs(ctx context.Context) {
 	}
 }
 
+// Shutdown gracefully stops all running VMs so containerd tasks are cleaned up.
+// Called during daemon shutdown to prevent orphaned tasks.
+func (s *VMService) Shutdown(ctx context.Context) {
+	vms, err := s.store.List(ctx, domain.VMFilter{})
+	if err != nil {
+		log.Error("shutdown: list vms", "err", err)
+		return
+	}
+
+	var stopped int
+	for _, vm := range vms {
+		if vm.State != domain.VMStateRunning {
+			continue
+		}
+		if err := s.runtime.Stop(ctx, vm.ID); err != nil {
+			log.Warn("shutdown: stop vm", "id", vm.ID, "name", vm.Name, "err", err)
+		} else {
+			stopped++
+		}
+	}
+	if stopped > 0 {
+		log.Info("shutdown: stopped running vms", "count", stopped)
+	}
+}
+
 // backoffState tracks per-VM restart backoff.
 type backoffState struct {
 	lastFailure time.Time
