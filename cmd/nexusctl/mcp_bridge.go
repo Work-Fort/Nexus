@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -35,10 +36,31 @@ func runMCPBridge() error {
 			fmt.Fprintf(os.Stderr, "mcp-bridge: POST error: %v\n", err)
 			continue
 		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		os.Stdout.Write(body)                //nolint:errcheck
-		os.Stdout.Write([]byte{'\n'})        //nolint:errcheck
+
+		ct := resp.Header.Get("Content-Type")
+		if strings.HasPrefix(ct, "text/event-stream") {
+			// SSE response — extract JSON-RPC messages from event stream.
+			// mcp-go's StreamableHTTP wraps responses as:
+			//   event: message
+			//   data: {"jsonrpc":"2.0",...}
+			sseScanner := bufio.NewScanner(resp.Body)
+			sseScanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+			for sseScanner.Scan() {
+				sseLine := sseScanner.Text()
+				if strings.HasPrefix(sseLine, "data: ") {
+					payload := sseLine[len("data: "):]
+					os.Stdout.WriteString(payload)  //nolint:errcheck
+					os.Stdout.Write([]byte{'\n'})   //nolint:errcheck
+				}
+			}
+			resp.Body.Close()
+		} else {
+			// Direct JSON response — pass through as-is.
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			os.Stdout.Write(body)         //nolint:errcheck
+			os.Stdout.Write([]byte{'\n'}) //nolint:errcheck
+		}
 	}
 	return scanner.Err()
 }
