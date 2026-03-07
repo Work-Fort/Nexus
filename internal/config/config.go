@@ -27,8 +27,10 @@ const (
 	DefaultDrivesDir    = "" // empty = auto-detect ($XDG_STATE_HOME/nexus/drives)
 	DefaultQuotaHelper  = "nexus-quota"
 	DefaultSnapshotter  = "" // empty = containerd default (overlayfs)
-	DefaultCoreDNSBin   = "coredns"
-	DefaultDNSHelper    = "nexus-dns"
+	DefaultCoreDNSBin       = "coredns"
+	DefaultDNSHelper        = "nexus-dns"
+	DefaultNodeExporterPath = "/opt/nexus/bin/node_exporter"
+	DefaultMetricsPort      = 9100
 )
 
 // Paths holds XDG-compliant directory paths.
@@ -104,6 +106,11 @@ func InitViper() {
 	viper.SetDefault("dns-enabled", true)
 	viper.SetDefault("coredns-bin", DefaultCoreDNSBin)
 	viper.SetDefault("dns-helper", DefaultDNSHelper)
+	viper.SetDefault("metrics.node-exporter-path", DefaultNodeExporterPath)
+	viper.SetDefault("metrics.listen-port", DefaultMetricsPort)
+	viper.SetDefault("metrics.collectors", []string{
+		"cpu", "meminfo", "diskstats", "filesystem", "loadavg", "netdev",
+	})
 
 	viper.SetConfigName(ConfigFileName)
 	viper.SetConfigType(ConfigType)

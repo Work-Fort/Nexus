@@ -133,10 +133,23 @@ func newDaemonCmd() *cobra.Command {
 				defer logFile.Close()
 			}
 
+			nodeExporterPath := viper.GetString("metrics.node-exporter-path")
+			if nodeExporterPath != "" {
+				if _, err := os.Stat(nodeExporterPath); err != nil {
+					log.Warn("node_exporter not found, metrics disabled", "path", nodeExporterPath)
+					nodeExporterPath = ""
+				}
+			}
+
 			var svcOpts []func(*app.VMService)
 			svcOpts = append(svcOpts, app.WithConfig(app.VMServiceConfig{
 				DefaultImage:   viper.GetString("agent-image"),
 				DefaultRuntime: viper.GetString("runtime"),
+				Metrics: app.MetricsConfig{
+					NodeExporterPath: nodeExporterPath,
+					ListenPort:       viper.GetInt("metrics.listen-port"),
+					Collectors:       viper.GetStringSlice("metrics.collectors"),
+				},
 			}))
 
 			svcOpts = append(svcOpts, app.WithDNS(dnsManager))

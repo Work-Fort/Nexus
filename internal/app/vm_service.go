@@ -22,6 +22,14 @@ import (
 type VMServiceConfig struct {
 	DefaultImage   string
 	DefaultRuntime string
+	Metrics        MetricsConfig
+}
+
+// MetricsConfig controls in-VM node_exporter provisioning.
+type MetricsConfig struct {
+	NodeExporterPath string   // host path to node_exporter binary, empty = disabled
+	ListenPort       int      // port node_exporter listens on inside VMs
+	Collectors       []string // enabled collector names
 }
 
 // VMService orchestrates VM lifecycle operations.
@@ -88,6 +96,14 @@ func WithDNS(dns domain.DNSManager) func(*VMService) {
 	return func(s *VMService) {
 		s.dns = dns
 	}
+}
+
+// MetricsPort returns the configured node_exporter listen port.
+func (s *VMService) MetricsPort() int {
+	if s.config.Metrics.ListenPort == 0 {
+		return 9100
+	}
+	return s.config.Metrics.ListenPort
 }
 
 const minRootSize = 64 * 1_000_000 // 64M
