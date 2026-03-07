@@ -155,6 +155,16 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 		}}))
 	}
 
+	if createCfg.InitScriptPath != "" {
+		specOpts = append(specOpts, oci.WithMounts([]specs.Mount{{
+			Destination: "/nexus-init.sh",
+			Type:        "bind",
+			Source:      createCfg.InitScriptPath,
+			Options:     []string{"rbind", "ro"},
+		}}))
+		specOpts = append(specOpts, oci.WithProcessArgs("/bin/sh", "/nexus-init.sh"))
+	}
+
 	_, err = r.client.NewContainer(ctx, id,
 		client.WithImage(img),
 		client.WithSnapshotter(r.snapshotter),
@@ -255,10 +265,79 @@ func (r *Runtime) SetSnapshotQuota(ctx context.Context, snapName string, sizeByt
 }
 
 // DetectDistro reads /etc/os-release from the image filesystem and returns
-// the distro ID. Falls back to checking for known package managers.
+// the distro ID. It pulls the image if needed, creates a temporary snapshot
+// to inspect the filesystem, then cleans up.
 func (r *Runtime) DetectDistro(ctx context.Context, image string) (string, error) {
-	// TODO(task5): implement real image inspection
-	return "", fmt.Errorf("DetectDistro not yet implemented")
+	ctx = r.nsCtx(ctx)
+
+	img, err := r.client.Pull(ctx, image, client.WithPullUnpack)
+	if err != nil {
+		return "", fmt.Errorf("pull image %s: %w", image, err)
+	}
+
+	// Create a temporary view (read-only snapshot) of the image.
+	snapName := "distro-detect-" + nxid.New()
+	diffIDs, err := img.RootFS(ctx)
+	if err != nil {
+		return "", fmt.Errorf("rootfs: %w", err)
+	}
+	chainID := diffIDs[len(diffIDs)-1]
+	parent := chainID.String()
+
+	snapshotter := r.client.SnapshotService(r.snapshotter)
+	mounts, err := snapshotter.View(ctx, snapName, parent)
+	if err != nil {
+		return "", fmt.Errorf("snapshot view: %w", err)
+	}
+	defer snapshotter.Remove(ctx, snapName) //nolint:errcheck
+
+	// Mount the snapshot to a temp dir.
+	tmpDir, err := os.MkdirTemp("", "nexus-distro-*")
+	if err != nil {
+		return "", fmt.Errorf("tmpdir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	for _, m := range mounts {
+		if err := syscall.Mount(m.Source, tmpDir, m.Type, 0, strings.Join(m.Options, ",")); err != nil {
+			return "", fmt.Errorf("mount: %w", err)
+		}
+		defer syscall.Unmount(tmpDir, 0) //nolint:errcheck
+		break // only need first mount
+	}
+
+	// Try /etc/os-release first.
+	data, err := os.ReadFile(tmpDir + "/etc/os-release")
+	if err == nil {
+		if id := parseOSReleaseID(string(data)); id != "" {
+			return id, nil
+		}
+	}
+
+	// Fallback: check for known package managers.
+	if _, err := os.Stat(tmpDir + "/sbin/apk"); err == nil {
+		return "alpine", nil
+	}
+	if _, err := os.Stat(tmpDir + "/usr/bin/apt"); err == nil {
+		return "ubuntu", nil
+	}
+	if _, err := os.Stat(tmpDir + "/usr/bin/pacman"); err == nil {
+		return "arch", nil
+	}
+
+	return "", fmt.Errorf("unable to detect distro from image %s", image)
+}
+
+// parseOSReleaseID extracts the ID= field from /etc/os-release content.
+func parseOSReleaseID(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ID=") {
+			val := strings.TrimPrefix(line, "ID=")
+			return strings.Trim(val, "\"'")
+		}
+	}
+	return ""
 }
 
 // setSnapshotQuota sets a btrfs qgroup limit on the snapshot's subvolume.
