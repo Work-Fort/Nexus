@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -25,12 +24,13 @@ func newMCPBridgeCmd() *cobra.Command {
 
 func runMCPBridge() error {
 	endpoint := apiClient.BaseURL() + "/mcp"
+	hc := apiClient.HTTPClient()
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB max line
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		resp, err := http.Post(endpoint, "application/json", bytes.NewReader(line)) //nolint:gosec
+		resp, err := hc.Post(endpoint, "application/json", bytes.NewReader(line))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "mcp-bridge: POST error: %v\n", err)
 			continue

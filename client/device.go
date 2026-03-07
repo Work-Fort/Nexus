@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // Device represents a host device mapping.
@@ -61,7 +62,7 @@ func (c *Client) ListDevices(ctx context.Context) ([]Device, error) {
 
 // GetDevice retrieves a single device mapping by ID or name.
 func (c *Client) GetDevice(ctx context.Context, ref string) (*Device, error) {
-	resp, err := c.get(ctx, "/v1/devices/"+ref)
+	resp, err := c.get(ctx, "/v1/devices/"+url.PathEscape(ref))
 	if err != nil {
 		return nil, err
 	}
@@ -74,21 +75,21 @@ func (c *Client) GetDevice(ctx context.Context, ref string) (*Device, error) {
 
 // DeleteDevice deletes a device mapping by ID or name.
 func (c *Client) DeleteDevice(ctx context.Context, ref string) error {
-	resp, err := c.del(ctx, "/v1/devices/"+ref)
+	resp, err := c.del(ctx, "/v1/devices/"+url.PathEscape(ref))
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	return handleResponse(resp, http.StatusNoContent)
 }
 
 // AttachDevice attaches a device to a VM.
 func (c *Client) AttachDevice(ctx context.Context, deviceRef, vmRef string) error {
-	return c.postExpectStatus(ctx, "/v1/devices/"+deviceRef+"/attach",
+	return c.postExpectStatus(ctx, "/v1/devices/"+url.PathEscape(deviceRef)+"/attach",
 		map[string]string{"vm_id": vmRef}, http.StatusOK)
 }
 
 // DetachDevice detaches a device from its VM.
 func (c *Client) DetachDevice(ctx context.Context, ref string) error {
-	return c.postExpectStatus(ctx, "/v1/devices/"+ref+"/detach", nil, http.StatusOK)
+	return c.postExpectStatus(ctx, "/v1/devices/"+url.PathEscape(ref)+"/detach", nil, http.StatusOK)
 }

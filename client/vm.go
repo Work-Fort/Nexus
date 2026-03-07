@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -98,7 +99,7 @@ func (c *Client) ListVMs(ctx context.Context, filter ListVMsFilter) ([]VM, error
 
 // GetVM retrieves a single VM by ID or name.
 func (c *Client) GetVM(ctx context.Context, ref string) (*VM, error) {
-	resp, err := c.get(ctx, "/v1/vms/"+ref)
+	resp, err := c.get(ctx, "/v1/vms/"+url.PathEscape(ref))
 	if err != nil {
 		return nil, err
 	}
@@ -111,27 +112,27 @@ func (c *Client) GetVM(ctx context.Context, ref string) (*VM, error) {
 
 // DeleteVM deletes a VM by ID or name.
 func (c *Client) DeleteVM(ctx context.Context, ref string) error {
-	resp, err := c.del(ctx, "/v1/vms/"+ref)
+	resp, err := c.del(ctx, "/v1/vms/"+url.PathEscape(ref))
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	return handleResponse(resp, http.StatusNoContent)
 }
 
 // StartVM starts a stopped or created VM.
 func (c *Client) StartVM(ctx context.Context, ref string) error {
-	return c.postExpectStatus(ctx, "/v1/vms/"+ref+"/start", nil, http.StatusNoContent)
+	return c.postExpectStatus(ctx, "/v1/vms/"+url.PathEscape(ref)+"/start", nil, http.StatusNoContent)
 }
 
 // StopVM stops a running VM.
 func (c *Client) StopVM(ctx context.Context, ref string) error {
-	return c.postExpectStatus(ctx, "/v1/vms/"+ref+"/stop", nil, http.StatusNoContent)
+	return c.postExpectStatus(ctx, "/v1/vms/"+url.PathEscape(ref)+"/stop", nil, http.StatusNoContent)
 }
 
 // ExecVM executes a command in a VM and returns the buffered result.
 func (c *Client) ExecVM(ctx context.Context, ref string, cmd []string) (*ExecResult, error) {
-	resp, err := c.post(ctx, "/v1/vms/"+ref+"/exec", map[string]any{"cmd": cmd})
+	resp, err := c.post(ctx, "/v1/vms/"+url.PathEscape(ref)+"/exec", map[string]any{"cmd": cmd})
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +147,7 @@ func (c *Client) ExecVM(ctx context.Context, ref string, cmd []string) (*ExecRes
 // It returns the process exit code. stdout and stderr writers receive the
 // respective output chunks as they arrive.
 func (c *Client) ExecStreamVM(ctx context.Context, ref string, cmd []string, stdout, stderr io.Writer) (int, error) {
-	resp, err := c.post(ctx, "/v1/vms/"+ref+"/exec/stream", map[string]any{"cmd": cmd})
+	resp, err := c.post(ctx, "/v1/vms/"+url.PathEscape(ref)+"/exec/stream", map[string]any{"cmd": cmd})
 	if err != nil {
 		return -1, err
 	}
@@ -204,7 +205,7 @@ func (c *Client) ExecStreamVM(ctx context.Context, ref string, cmd []string, std
 
 // UpdateShell updates the default shell for a VM.
 func (c *Client) UpdateShell(ctx context.Context, ref string, shell string) (*VM, error) {
-	resp, err := c.patch(ctx, "/v1/vms/"+ref, map[string]any{"shell": &shell})
+	resp, err := c.patch(ctx, "/v1/vms/"+url.PathEscape(ref), map[string]any{"shell": &shell})
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +219,7 @@ func (c *Client) UpdateShell(ctx context.Context, ref string, shell string) (*VM
 // ExpandRootSize expands the root filesystem size of a VM.
 // size is a human-readable size string like "2G" or "500M".
 func (c *Client) ExpandRootSize(ctx context.Context, ref string, size string) (*VM, error) {
-	resp, err := c.patch(ctx, "/v1/vms/"+ref, map[string]string{"root_size": size})
+	resp, err := c.patch(ctx, "/v1/vms/"+url.PathEscape(ref), map[string]string{"root_size": size})
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +232,7 @@ func (c *Client) ExpandRootSize(ctx context.Context, ref string, size string) (*
 
 // UpdateRestartPolicy updates the restart policy and strategy for a VM.
 func (c *Client) UpdateRestartPolicy(ctx context.Context, ref, policy, strategy string) (*VM, error) {
-	resp, err := c.put(ctx, "/v1/vms/"+ref+"/restart-policy", map[string]string{
+	resp, err := c.put(ctx, "/v1/vms/"+url.PathEscape(ref)+"/restart-policy", map[string]string{
 		"restart_policy":   policy,
 		"restart_strategy": strategy,
 	})

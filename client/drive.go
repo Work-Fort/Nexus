@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // Drive represents a persistent data volume.
@@ -57,7 +58,7 @@ func (c *Client) ListDrives(ctx context.Context) ([]Drive, error) {
 
 // GetDrive retrieves a single drive by ID or name.
 func (c *Client) GetDrive(ctx context.Context, ref string) (*Drive, error) {
-	resp, err := c.get(ctx, "/v1/drives/"+ref)
+	resp, err := c.get(ctx, "/v1/drives/"+url.PathEscape(ref))
 	if err != nil {
 		return nil, err
 	}
@@ -70,21 +71,21 @@ func (c *Client) GetDrive(ctx context.Context, ref string) (*Drive, error) {
 
 // DeleteDrive deletes a drive by ID or name.
 func (c *Client) DeleteDrive(ctx context.Context, ref string) error {
-	resp, err := c.del(ctx, "/v1/drives/"+ref)
+	resp, err := c.del(ctx, "/v1/drives/"+url.PathEscape(ref))
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	return handleResponse(resp, http.StatusNoContent)
 }
 
 // AttachDrive attaches a drive to a VM.
 func (c *Client) AttachDrive(ctx context.Context, driveRef, vmRef string) error {
-	return c.postExpectStatus(ctx, "/v1/drives/"+driveRef+"/attach",
+	return c.postExpectStatus(ctx, "/v1/drives/"+url.PathEscape(driveRef)+"/attach",
 		map[string]string{"vm_id": vmRef}, http.StatusOK)
 }
 
 // DetachDrive detaches a drive from its VM.
 func (c *Client) DetachDrive(ctx context.Context, ref string) error {
-	return c.postExpectStatus(ctx, "/v1/drives/"+ref+"/detach", nil, http.StatusOK)
+	return c.postExpectStatus(ctx, "/v1/drives/"+url.PathEscape(ref)+"/detach", nil, http.StatusOK)
 }

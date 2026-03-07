@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 )
 
 // ImportResult holds the result of importing a VM backup.
@@ -16,7 +17,7 @@ type ImportResult struct {
 
 // ExportVM streams a VM backup archive to the provided writer.
 func (c *Client) ExportVM(ctx context.Context, ref string, includeDevices bool, w io.Writer) error {
-	path := fmt.Sprintf("/v1/vms/%s/export?include_devices=%t", ref, includeDevices)
+	path := fmt.Sprintf("/v1/vms/%s/export?include_devices=%t", url.PathEscape(ref), includeDevices)
 	resp, err := c.post(ctx, path, nil)
 	if err != nil {
 		return err

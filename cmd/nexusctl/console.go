@@ -218,10 +218,11 @@ func runConsole(vmID, shell string, cols, rows int) error {
 
 	// Restore terminal before exiting.
 	signal.Stop(sigCh)
+	close(sigCh) // unblock SIGWINCH goroutine
 	term.Restore(fd, oldState) //nolint:errcheck
 
-	if exitCode != 0 {
-		os.Exit(exitCode)
-	}
-	return nil
+	// Always os.Exit to avoid leaking the stdin goroutine (os.Stdin.Read
+	// is not interruptible). Exit code 0 is the success case.
+	os.Exit(exitCode)
+	return nil // unreachable, but keeps the compiler happy
 }

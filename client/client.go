@@ -41,6 +41,9 @@ func New(addr string, opts ...Option) *Client {
 // BaseURL returns the base URL of the Nexus daemon (e.g. "http://localhost:9600").
 func (c *Client) BaseURL() string { return c.base }
 
+// HTTPClient returns the underlying *http.Client used by this client.
+func (c *Client) HTTPClient() *http.Client { return c.http }
+
 func (c *Client) get(ctx context.Context, path string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
@@ -58,7 +61,7 @@ func (c *Client) postExpectStatus(ctx context.Context, path string, body any, st
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	return handleResponse(resp, status)
 }
 
