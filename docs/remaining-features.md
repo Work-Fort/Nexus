@@ -137,3 +137,7 @@ Things to look into — not yet committed features.
   "gate" checks (`== nil` returning `ErrValidation`) must stay regardless. Not
   worth the added abstraction. One small win: wire `dns.NoopManager` by default
   in the constructor to eliminate 5 dns nil-checks with zero new code.
+
+- **Docker/OCI image caching** — Investigate where containerd caches pulled
+  images and how to manage cache size, eviction, and pre-warming. Currently
+  every `vm_create` with a new image triggers a full pull.
