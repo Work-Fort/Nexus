@@ -195,6 +195,36 @@ func TestExecVM(t *testing.T) {
 	t.Logf("guest kernel: %s", result.Stdout)
 }
 
+func TestOutboundConnectivity(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVMWithImage("test-ping", "agent", "docker.io/library/nginx:alpine")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Wait for the container to be ready, then ping an external IP.
+	var result *harness.ExecResult
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"ping", "-c", "1", "-W", "2", "8.8.8.8"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("exec ping: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ping failed (exit %d): stdout=%s stderr=%s", result.ExitCode, result.Stdout, result.Stderr)
+	}
+	t.Logf("ping output: %s", result.Stdout)
+}
+
 func TestDeleteVM(t *testing.T) {
 	_, c := startDaemon(t)
 
