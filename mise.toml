@@ -53,15 +53,29 @@ description = "Remove build artifacts"
 run = "rm -f build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota build/nexus-dns build/nexusctl"
 
 [tasks."install:local"]
-description = "Install nexus to ~/.local/bin + systemd unit"
+description = "Install all binaries to ~/.local/bin, set capabilities, install systemd unit"
 depends = ["build:release"]
 run = """
+#!/usr/bin/env bash
+set -e
+
+echo "Installing Nexus binaries to ~/.local/bin/"
 mkdir -p ~/.local/bin
-cp build/nexus ~/.local/bin/
+cp build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota build/nexus-dns build/nexusctl ~/.local/bin/
+
+# Set capabilities on helper binaries (matches scripts/dev-setcap-loop.sh)
+echo "Setting capabilities (requires sudo)..."
+sudo setcap cap_sys_admin+ep ~/.local/bin/nexus-netns
+sudo setcap cap_net_admin,cap_sys_admin+ep ~/.local/bin/nexus-cni-exec
+sudo setcap cap_sys_admin+ep ~/.local/bin/nexus-quota
+sudo setcap cap_net_bind_service+ep ~/.local/bin/nexus-dns
+
+echo "Installing systemd user service"
 mkdir -p ~/.config/systemd/user
 cp dist/nexus.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-echo "Installed nexus to ~/.local/bin/ and nexus.service"
+
+echo "Done. Enable with: systemctl --user enable --now nexus"
 """
 
 [tasks."openapi:export"]

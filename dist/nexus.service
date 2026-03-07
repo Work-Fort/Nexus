@@ -1,0 +1,14 @@
+[Unit]
+Description=Nexus VM lifecycle daemon
+After=containerd.service
+Wants=containerd.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/nexus daemon
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
