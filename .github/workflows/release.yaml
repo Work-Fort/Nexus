@@ -106,6 +106,7 @@ jobs:
           go build -ldflags "-s -w" -o "nexus-netns-${{ matrix.target }}" ./cmd/nexus-netns/
           go build -ldflags "-s -w" -o "nexus-cni-exec-${{ matrix.target }}" ./cmd/nexus-cni-exec/
           go build -ldflags "-s -w" -o "nexus-quota-${{ matrix.target }}" ./cmd/nexus-quota/
+          go build -ldflags "-s -w" -o "nexus-btrfs-${{ matrix.target }}" ./cmd/nexus-btrfs/
           go build -ldflags "-s -w" -o "nexus-dns-${{ matrix.target }}" ./cmd/nexus-dns/
 
       - name: Create archive
@@ -117,6 +118,7 @@ jobs:
           cp nexus-netns-${TARGET} nexus-${TARGET}/nexus-netns
           cp nexus-cni-exec-${TARGET} nexus-${TARGET}/nexus-cni-exec
           cp nexus-quota-${TARGET} nexus-${TARGET}/nexus-quota
+          cp nexus-btrfs-${TARGET} nexus-${TARGET}/nexus-btrfs
           cp nexus-dns-${TARGET} nexus-${TARGET}/nexus-dns
           cp dist/nexus.service nexus-${TARGET}/
           tar cf - "nexus-${TARGET}" | xz -9 > "nexus-${TARGET}.tar.xz"
@@ -176,6 +178,7 @@ jobs:
           sudo setcap cap_sys_admin+ep /usr/local/bin/nexus-netns
           sudo setcap cap_net_admin,cap_sys_admin+ep /usr/local/bin/nexus-cni-exec
           sudo setcap cap_sys_admin+ep /usr/local/bin/nexus-quota
+          sudo setcap cap_sys_admin,cap_fowner+ep /usr/local/bin/nexus-btrfs
           sudo setcap cap_net_bind_service+ep /usr/local/bin/nexus-dns
           \`\`\`
 
@@ -187,6 +190,7 @@ jobs:
           sudo setcap cap_sys_admin+ep /usr/local/bin/nexus-netns
           sudo setcap cap_net_admin,cap_sys_admin+ep /usr/local/bin/nexus-cni-exec
           sudo setcap cap_sys_admin+ep /usr/local/bin/nexus-quota
+          sudo setcap cap_sys_admin,cap_fowner+ep /usr/local/bin/nexus-btrfs
           sudo setcap cap_net_bind_service+ep /usr/local/bin/nexus-dns
           \`\`\`
 
@@ -262,12 +266,12 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key"
 
           git clone ssh://aur@aur.archlinux.org/nexus-virt.git aur-repo
-          cp aur/PKGBUILD aur/.SRCINFO aur-repo/
+          cp aur/PKGBUILD aur/nexus-virt.install aur/.SRCINFO aur-repo/
 
           cd aur-repo
           git config user.name "Kaz Walker"
           git config user.email "me@kazatron.com"
-          git add PKGBUILD .SRCINFO
+          git add PKGBUILD nexus-virt.install .SRCINFO
           if ! git diff --cached --quiet; then
             VERSION=$(echo "$TAG" | sed 's/^v//')
             git commit -m "Update to v${VERSION}"
