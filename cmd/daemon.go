@@ -60,6 +60,15 @@ func newDaemonCmd() *cobra.Command {
 					quotaHelper = resolved
 				}
 			}
+			btrfsHelper := viper.GetString("btrfs-helper")
+			if btrfsHelper != "" {
+				if resolved, err := exec.LookPath(btrfsHelper); err != nil {
+					log.Warn("btrfs helper not found, export/import will use direct btrfs calls", "helper", btrfsHelper)
+					btrfsHelper = ""
+				} else {
+					btrfsHelper = resolved
+				}
+			}
 
 			runtime, err := ctrd.New(socketPath, namespace, snapshotter, quotaHelper)
 			if err != nil {
@@ -164,12 +173,12 @@ func newDaemonCmd() *cobra.Command {
 			var storageBackend domain.Storage
 			isBtrfs, _ := btrfs.IsBtrfs(filepath.Dir(drivesDir))
 			if isBtrfs {
-				bs, err := storage.NewBtrfsWithQuota(drivesDir, quotaHelper)
+				bs, err := storage.NewBtrfsWithOpts(drivesDir, quotaHelper, btrfsHelper)
 				if err != nil {
 					return fmt.Errorf("init btrfs storage: %w", err)
 				}
 				storageBackend = bs
-				log.Info("drives enabled", "backend", "btrfs", "dir", drivesDir, "quota", quotaHelper != "")
+				log.Info("drives enabled", "backend", "btrfs", "dir", drivesDir, "quota", quotaHelper != "", "btrfs-helper", btrfsHelper != "")
 			} else {
 				ns, err := storage.NewNoop(drivesDir)
 				if err != nil {
@@ -259,11 +268,12 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("snapshotter", config.DefaultSnapshotter, "Containerd snapshotter (default: containerd default)")
 	cmd.Flags().String("drives-dir", config.DefaultDrivesDir, "Directory for drive volumes (default: $XDG_STATE_HOME/nexus/drives)")
 	cmd.Flags().String("quota-helper", config.DefaultQuotaHelper, "Path to nexus-quota helper binary (empty to disable)")
+	cmd.Flags().String("btrfs-helper", config.DefaultBtrfsHelper, "Path to nexus-btrfs helper binary for send/receive (empty to use direct btrfs calls)")
 	cmd.Flags().Bool("dns-enabled", true, "Enable internal DNS for VM name resolution")
 	cmd.Flags().String("coredns-bin", config.DefaultCoreDNSBin, "Path to CoreDNS binary")
 	cmd.Flags().String("dns-helper", config.DefaultDNSHelper, "Path to nexus-dns helper binary (cap_net_bind_service)")
 
-	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "dns-enabled", "coredns-bin", "dns-helper"} {
+	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}

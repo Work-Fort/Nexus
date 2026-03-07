@@ -22,6 +22,7 @@ trap 'echo -e "\nStopping capability auto-setter..."; exit 0' SIGINT SIGTERM
 NETNS_HELPER="$BUILD_DIR/nexus-netns"
 CNI_EXEC="$BUILD_DIR/nexus-cni-exec"
 QUOTA_HELPER="$BUILD_DIR/nexus-quota"
+BTRFS_HELPER="$BUILD_DIR/nexus-btrfs"
 DNS_HELPER="$BUILD_DIR/nexus-dns"
 
 echo "Starting capability auto-setter (Ctrl+C to stop)"
@@ -29,6 +30,7 @@ echo "Watching:"
 echo "  $NETNS_HELPER  → CAP_SYS_ADMIN"
 echo "  $CNI_EXEC      → CAP_NET_ADMIN,CAP_SYS_ADMIN"
 echo "  $QUOTA_HELPER  → CAP_SYS_ADMIN"
+echo "  $BTRFS_HELPER  → CAP_SYS_ADMIN,CAP_FOWNER"
 echo "  $DNS_HELPER    → CAP_NET_BIND_SERVICE"
 
 while true; do
@@ -43,6 +45,9 @@ while true; do
     fi
     if [ -f "$QUOTA_HELPER" ]; then
         setcap cap_sys_admin+ep "$QUOTA_HELPER" 2>/dev/null || true
+    fi
+    if [ -f "$BTRFS_HELPER" ]; then
+        setcap cap_sys_admin,cap_fowner+ep "$BTRFS_HELPER" 2>/dev/null || true
     fi
     if [ -f "$DNS_HELPER" ]; then
         setcap cap_net_bind_service+ep "$DNS_HELPER" 2>/dev/null || true

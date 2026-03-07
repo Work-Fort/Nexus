@@ -32,6 +32,8 @@ type daemonConfig struct {
 	logLevel        string // daemon log level (default: disabled)
 	quotaHelperSet  bool   // true if quotaHelper was explicitly set
 	quotaHelper     string // quota helper binary (empty to disable)
+	btrfsHelperSet  bool
+	btrfsHelper     string
 }
 
 type DaemonOption func(*daemonConfig)
@@ -66,6 +68,10 @@ func WithLogLevel(level string) DaemonOption {
 
 func WithQuotaHelper(helper string) DaemonOption {
 	return func(c *daemonConfig) { c.quotaHelperSet = true; c.quotaHelper = helper }
+}
+
+func WithBtrfsHelper(helper string) DaemonOption {
+	return func(c *daemonConfig) { c.btrfsHelperSet = true; c.btrfsHelper = helper }
 }
 
 type Daemon struct {
@@ -112,6 +118,9 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 	}
 	if cfg.quotaHelperSet {
 		args = append(args, "--quota-helper", cfg.quotaHelper)
+	}
+	if cfg.btrfsHelperSet {
+		args = append(args, "--btrfs-helper", cfg.btrfsHelper)
 	}
 
 	var stderrBuf bytes.Buffer
@@ -176,6 +185,12 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 	}
 	if cfg.snapshotter != "" {
 		args = append(args, "--snapshotter", cfg.snapshotter)
+	}
+	if cfg.quotaHelperSet {
+		args = append(args, "--quota-helper", cfg.quotaHelper)
+	}
+	if cfg.btrfsHelperSet {
+		args = append(args, "--btrfs-helper", cfg.btrfsHelper)
 	}
 
 	var stderrBuf bytes.Buffer

@@ -259,6 +259,8 @@ func CreateSnapshot(source, dest string, readOnly bool) error {
 // Send writes a btrfs send stream for the read-only snapshot at path to w.
 // The snapshot must be read-only (use CreateSnapshot with readOnly=true).
 // Calls `btrfs send` as a subprocess — requires btrfs-progs installed.
+// Requires CAP_SYS_ADMIN (for BTRFS_IOC_SEND) and CAP_FOWNER (btrfs-progs
+// opens the mount point with O_NOATIME, which requires ownership or CAP_FOWNER).
 func Send(path string, w io.Writer) error {
 	cmd := exec.Command("btrfs", "send", path)
 	cmd.Stdout = w
@@ -271,9 +273,11 @@ func Send(path string, w io.Writer) error {
 }
 
 // Receive reads a btrfs send stream from r and applies it under destDir.
-// The received subvolume is created as a child of destDir.
-// Calls `btrfs receive` as a subprocess — requires btrfs-progs and
-// CAP_SYS_ADMIN (or root).
+// The received subvolume is created as a child of destDir with the read-only
+// flag set and a received_uuid. Use SetReadOnly (ioctl) to clear read-only;
+// the btrfs CLI rejects clearing read-only on received subvolumes without -f.
+// Calls `btrfs receive` as a subprocess — requires btrfs-progs,
+// CAP_SYS_ADMIN, and CAP_FOWNER (or root).
 func Receive(destDir string, r io.Reader) error {
 	cmd := exec.Command("btrfs", "receive", destDir)
 	cmd.Stdin = r

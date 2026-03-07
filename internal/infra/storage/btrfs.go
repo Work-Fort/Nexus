@@ -4,6 +4,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -19,16 +20,22 @@ import (
 type BtrfsStorage struct {
 	basePath    string
 	quotaHelper string // path to nexus-quota binary; empty = no enforcement
+	btrfsHelper string // path to nexus-btrfs binary; empty = direct btrfs calls
 }
 
 // NewBtrfs creates a BtrfsStorage without quota enforcement.
 func NewBtrfs(basePath string) (*BtrfsStorage, error) {
-	return NewBtrfsWithQuota(basePath, "")
+	return NewBtrfsWithOpts(basePath, "", "")
 }
 
 // NewBtrfsWithQuota creates a BtrfsStorage with optional quota enforcement.
 // If quotaHelper is non-empty, CreateVolume calls it to set quota limits.
 func NewBtrfsWithQuota(basePath, quotaHelper string) (*BtrfsStorage, error) {
+	return NewBtrfsWithOpts(basePath, quotaHelper, "")
+}
+
+// NewBtrfsWithOpts creates a BtrfsStorage with optional helpers.
+func NewBtrfsWithOpts(basePath, quotaHelper, btrfsHelper string) (*BtrfsStorage, error) {
 	if err := os.MkdirAll(basePath, 0755); err != nil {
 		return nil, fmt.Errorf("create drives dir %s: %w", basePath, err)
 	}
@@ -39,7 +46,7 @@ func NewBtrfsWithQuota(basePath, quotaHelper string) (*BtrfsStorage, error) {
 	if !ok {
 		return nil, fmt.Errorf("drives dir %s is not on a btrfs filesystem", basePath)
 	}
-	return &BtrfsStorage{basePath: basePath, quotaHelper: quotaHelper}, nil
+	return &BtrfsStorage{basePath: basePath, quotaHelper: quotaHelper, btrfsHelper: btrfsHelper}, nil
 }
 
 func (s *BtrfsStorage) CreateVolume(ctx context.Context, name string, sizeBytes uint64) (string, error) {
@@ -74,7 +81,7 @@ func (s *BtrfsStorage) VolumePath(name string) string {
 
 // SendVolume creates a read-only snapshot of the named volume and writes a
 // btrfs send stream to w. The temporary snapshot is cleaned up after sending.
-func (s *BtrfsStorage) SendVolume(_ context.Context, name string, w io.Writer) error {
+func (s *BtrfsStorage) SendVolume(ctx context.Context, name string, w io.Writer) error {
 	srcPath := filepath.Join(s.basePath, name)
 	snapPath := srcPath + ".export-snap"
 
@@ -83,13 +90,13 @@ func (s *BtrfsStorage) SendVolume(_ context.Context, name string, w io.Writer) e
 	}
 	defer btrfs.DeleteSubvolume(snapPath) //nolint:errcheck
 
-	return btrfs.Send(snapPath, w)
+	return s.sendStream(ctx, snapPath, w)
 }
 
 // ReceiveVolume reads a btrfs send stream from r and receives it as a new
 // volume named name. The received subvolume is created under basePath.
-func (s *BtrfsStorage) ReceiveVolume(_ context.Context, name string, r io.Reader) error {
-	if err := btrfs.Receive(s.basePath, r); err != nil {
+func (s *BtrfsStorage) ReceiveVolume(ctx context.Context, name string, r io.Reader) error {
+	if err := s.receiveStream(ctx, s.basePath, r); err != nil {
 		return fmt.Errorf("receive volume %s: %w", name, err)
 	}
 	// btrfs receive creates the subvolume with the original snapshot name.
@@ -101,7 +108,45 @@ func (s *BtrfsStorage) ReceiveVolume(_ context.Context, name string, r io.Reader
 		return fmt.Errorf("rename received volume: %w", err)
 	}
 
-	return btrfs.SetReadOnly(targetPath, false)
+	return s.setReadOnly(ctx, targetPath, false)
+}
+
+// sendStream writes a btrfs send stream, using the helper if configured.
+func (s *BtrfsStorage) sendStream(ctx context.Context, snapPath string, w io.Writer) error {
+	if s.btrfsHelper != "" {
+		cmd := exec.CommandContext(ctx, s.btrfsHelper, "send", snapPath)
+		cmd.Stdout = w
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("btrfs send %s: %w: %s", snapPath, err, stderr.String())
+		}
+		return nil
+	}
+	return btrfs.Send(snapPath, w)
+}
+
+// receiveStream reads a btrfs send stream, using the helper if configured.
+func (s *BtrfsStorage) receiveStream(ctx context.Context, destDir string, r io.Reader) error {
+	if s.btrfsHelper != "" {
+		cmd := exec.CommandContext(ctx, s.btrfsHelper, "receive", destDir)
+		cmd.Stdin = r
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("btrfs receive %s: %w: %s", destDir, err, stderr.String())
+		}
+		return nil
+	}
+	return btrfs.Receive(destDir, r)
+}
+
+// setReadOnly sets the read-only flag using the ioctl interface directly.
+// This does not require the btrfs helper because BTRFS_IOC_SUBVOL_SETFLAGS
+// works for user-owned subvolumes. It also avoids the CLI's safety check
+// that rejects clearing read-only on received subvolumes without -f.
+func (s *BtrfsStorage) setReadOnly(_ context.Context, path string, ro bool) error {
+	return btrfs.SetReadOnly(path, ro)
 }
 
 // SnapshotVolume creates a read-only btrfs snapshot of the named volume.
@@ -142,7 +187,7 @@ func (s *BtrfsStorage) DeleteVolumeSnapshot(_ context.Context, snapshotName stri
 }
 
 // SendVolumeSnapshot writes a btrfs send stream of the named snapshot.
-func (s *BtrfsStorage) SendVolumeSnapshot(_ context.Context, snapshotName string, w io.Writer) error {
+func (s *BtrfsStorage) SendVolumeSnapshot(ctx context.Context, snapshotName string, w io.Writer) error {
 	snapPath := filepath.Join(s.basePath, ".snapshots", snapshotName)
-	return btrfs.Send(snapPath, w)
+	return s.sendStream(ctx, snapPath, w)
 }

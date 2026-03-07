@@ -45,6 +45,7 @@ func TestMain(m *testing.M) {
 		{"nexus-netns", "./cmd/nexus-netns/"},
 		{"nexus-cni-exec", "./cmd/nexus-cni-exec/"},
 		{"nexus-quota", "./cmd/nexus-quota/"},
+		{"nexus-btrfs", "./cmd/nexus-btrfs/"},
 		{"nexus-dns", "./cmd/nexus-dns/"},
 	}
 

@@ -26,6 +26,7 @@ const (
 	DefaultCNIExecBin   = "nexus-cni-exec"
 	DefaultDrivesDir    = "" // empty = auto-detect ($XDG_STATE_HOME/nexus/drives)
 	DefaultQuotaHelper  = "nexus-quota"
+	DefaultBtrfsHelper  = "nexus-btrfs"
 	DefaultSnapshotter  = "" // empty = containerd default (overlayfs)
 	DefaultCoreDNSBin       = "coredns"
 	DefaultDNSHelper        = "nexus-dns"
@@ -103,6 +104,7 @@ func InitViper() {
 	viper.SetDefault("snapshotter", DefaultSnapshotter)
 	viper.SetDefault("drives-dir", DefaultDrivesDir)
 	viper.SetDefault("quota-helper", DefaultQuotaHelper)
+	viper.SetDefault("btrfs-helper", DefaultBtrfsHelper)
 	viper.SetDefault("dns-enabled", true)
 	viper.SetDefault("coredns-bin", DefaultCoreDNSBin)
 	viper.SetDefault("dns-helper", DefaultDNSHelper)

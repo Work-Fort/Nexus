@@ -8,6 +8,7 @@ run = [
     "go build -o build/nexus-netns ./cmd/nexus-netns/",
     "go build -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
     "go build -o build/nexus-quota ./cmd/nexus-quota/",
+    "go build -o build/nexus-btrfs ./cmd/nexus-btrfs/",
     "go build -o build/nexus-dns ./cmd/nexus-dns/",
     "go build -o build/nexusctl ./cmd/nexusctl/",
 ]
@@ -19,6 +20,7 @@ run = [
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-netns ./cmd/nexus-netns/",
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-quota ./cmd/nexus-quota/",
+    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-btrfs ./cmd/nexus-btrfs/",
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-dns ./cmd/nexus-dns/",
     "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexusctl ./cmd/nexusctl/",
 ]
@@ -50,7 +52,7 @@ run = "sqlc generate"
 
 [tasks.clean]
 description = "Remove build artifacts"
-run = "rm -f build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota build/nexus-dns build/nexusctl"
+run = "rm -f build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota build/nexus-btrfs build/nexus-dns build/nexusctl"
 
 [tasks."install:local"]
 description = "Install all binaries to ~/.local/bin, set capabilities, install systemd unit"
@@ -61,13 +63,14 @@ set -e
 
 echo "Installing Nexus binaries to ~/.local/bin/"
 mkdir -p ~/.local/bin
-cp build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota build/nexus-dns build/nexusctl ~/.local/bin/
+cp build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota build/nexus-btrfs build/nexus-dns build/nexusctl ~/.local/bin/
 
 # Set capabilities on helper binaries (matches scripts/dev-setcap-loop.sh)
 echo "Setting capabilities (requires sudo)..."
 sudo setcap cap_sys_admin+ep ~/.local/bin/nexus-netns
 sudo setcap cap_net_admin,cap_sys_admin+ep ~/.local/bin/nexus-cni-exec
 sudo setcap cap_sys_admin+ep ~/.local/bin/nexus-quota
+sudo setcap cap_sys_admin,cap_fowner+ep ~/.local/bin/nexus-btrfs
 sudo setcap cap_net_bind_service+ep ~/.local/bin/nexus-dns
 
 echo "Installing systemd user service"

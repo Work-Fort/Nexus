@@ -54,11 +54,19 @@ func startBtrfsDaemon(t *testing.T, extraOpts ...harness.DaemonOption) *btrfsDae
 		t.Fatal(err)
 	}
 
+	// Use the build/ copy of nexus-btrfs which has CAP_SYS_ADMIN from
+	// the dev-setcap-loop. The temp E2E copies don't have capabilities.
+	btrfsHelper, err := filepath.Abs("../../build/nexus-btrfs")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	opts := []harness.DaemonOption{
 		harness.WithSnapshotter("btrfs"),
 		harness.WithBaseDir(absBase),
 		harness.WithLogLevel("debug"),
 		harness.WithQuotaHelper(""),
+		harness.WithBtrfsHelper(btrfsHelper),
 	}
 	opts = append(opts, extraOpts...)
 
