@@ -38,6 +38,9 @@ type Runtime interface {
 	ExportImage(ctx context.Context, imageRef string, w io.Writer) error
 	ImportImage(ctx context.Context, reader io.Reader) (string, error)
 	WatchExits(ctx context.Context, onExit func(containerID string, exitCode uint32)) error
+	SnapshotRootfs(ctx context.Context, containerID, snapshotName string) error
+	RestoreRootfs(ctx context.Context, snapshotName, containerID string) error
+	DeleteRootfsSnapshot(ctx context.Context, snapshotName string) error
 }
 
 // CreateConfig holds optional configuration for Runtime.Create.
@@ -197,6 +200,10 @@ type Storage interface {
 	VolumePath(name string) string
 	SendVolume(ctx context.Context, name string, w io.Writer) error
 	ReceiveVolume(ctx context.Context, name string, r io.Reader) error
+	SnapshotVolume(ctx context.Context, volumeName, snapshotName string) error
+	RestoreVolume(ctx context.Context, snapshotName, volumeName string) error
+	DeleteVolumeSnapshot(ctx context.Context, snapshotName string) error
+	SendVolumeSnapshot(ctx context.Context, snapshotName string, w io.Writer) error
 }
 
 // DNSConfig holds per-VM DNS resolution settings.
