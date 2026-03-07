@@ -3,7 +3,6 @@ package e2e
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,9 +40,10 @@ func startNetworkedDaemon(t *testing.T, extraOpts ...harness.DaemonOption) (*har
 		harness.WithCNIExecBin(cniExecBin),
 	}
 
-	// Use node_exporter from PATH if available.
-	if path, err := exec.LookPath("node_exporter"); err == nil {
-		opts = append(opts, harness.WithNodeExporterPath(path))
+	// Use node_exporter from build/ if available (downloaded by mise run build).
+	nodeExporter, _ := filepath.Abs("../../build/node_exporter")
+	if _, err := os.Stat(nodeExporter); err == nil {
+		opts = append(opts, harness.WithNodeExporterPath(nodeExporter))
 	}
 
 	opts = append(opts, extraOpts...)
