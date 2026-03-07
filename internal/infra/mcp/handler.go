@@ -34,6 +34,7 @@ func NewHandler(svc *app.VMService) http.Handler {
 	registerBackupTools(s, svc)
 	registerDriveTools(s, svc)
 	registerDeviceTools(s, svc)
+	registerTemplateTools(s, svc)
 
 	return server.NewStreamableHTTPServer(s)
 }
@@ -75,6 +76,8 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 		mcp.WithString("restart_policy", mcp.Description("Restart policy (none, on-boot, always)")),
 		mcp.WithString("restart_strategy", mcp.Description("Restart strategy (immediate, backoff, fixed)")),
 		mcp.WithString("shell", mcp.Description("Default shell for console sessions")),
+		mcp.WithBoolean("init", mcp.Description("Enable init injection")),
+		mcp.WithString("template", mcp.Description("Template name/ID for init (auto-detect if omitted)")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		name, errRes := requireString(req, "name")
 		if errRes != nil {
@@ -88,6 +91,8 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 			Shell:           mcp.ParseString(req, "shell", ""),
 			RestartPolicy:   domain.RestartPolicy(mcp.ParseString(req, "restart_policy", "")),
 			RestartStrategy: domain.RestartStrategy(mcp.ParseString(req, "restart_strategy", "")),
+			Init:            mcp.ParseBoolean(req, "init", false),
+			TemplateName:    mcp.ParseString(req, "template", ""),
 		}
 
 		rootSizeStr := mcp.ParseString(req, "root_size", "")
@@ -609,6 +614,109 @@ func registerDeviceTools(s *server.MCPServer, svc *app.VMService) {
 			return errResult(err)
 		}
 		return mcp.NewToolResultText("detached"), nil
+	})
+}
+
+// registerTemplateTools registers template_create, template_list, template_get,
+// template_update, and template_delete tools.
+func registerTemplateTools(s *server.MCPServer, svc *app.VMService) {
+	// template_create
+	s.AddTool(mcp.NewTool("template_create",
+		mcp.WithDescription("Create a provisioning template"),
+		mcp.WithString("name", mcp.Description("Template name"), mcp.Required()),
+		mcp.WithString("distro", mcp.Description("Distro identifier (matches /etc/os-release ID)"), mcp.Required()),
+		mcp.WithString("script", mcp.Description("Provisioning script content"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name, errRes := requireString(req, "name")
+		if errRes != nil {
+			return errRes, nil
+		}
+		distro, errRes := requireString(req, "distro")
+		if errRes != nil {
+			return errRes, nil
+		}
+		script, errRes := requireString(req, "script")
+		if errRes != nil {
+			return errRes, nil
+		}
+
+		tmpl, err := svc.CreateTemplate(ctx, domain.CreateTemplateParams{
+			Name:   name,
+			Distro: distro,
+			Script: script,
+		})
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(tmpl)
+	})
+
+	// template_list
+	s.AddTool(mcp.NewTool("template_list",
+		mcp.WithDescription("List all templates"),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		templates, err := svc.ListTemplates(ctx)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(templates)
+	})
+
+	// template_get
+	s.AddTool(mcp.NewTool("template_get",
+		mcp.WithDescription("Get template by ID or name"),
+		mcp.WithString("ref", mcp.Description("Template ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ref, errRes := requireString(req, "ref")
+		if errRes != nil {
+			return errRes, nil
+		}
+		tmpl, err := svc.GetTemplate(ctx, ref)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(tmpl)
+	})
+
+	// template_update
+	s.AddTool(mcp.NewTool("template_update",
+		mcp.WithDescription("Update a template"),
+		mcp.WithString("ref", mcp.Description("Template ID or name"), mcp.Required()),
+		mcp.WithString("name", mcp.Description("New template name")),
+		mcp.WithString("distro", mcp.Description("New distro identifier")),
+		mcp.WithString("script", mcp.Description("New provisioning script content")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ref, errRes := requireString(req, "ref")
+		if errRes != nil {
+			return errRes, nil
+		}
+
+		params := domain.CreateTemplateParams{
+			Name:   mcp.ParseString(req, "name", ""),
+			Distro: mcp.ParseString(req, "distro", ""),
+			Script: mcp.ParseString(req, "script", ""),
+		}
+
+		tmpl, err := svc.UpdateTemplate(ctx, ref, params)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(tmpl)
+	})
+
+	// template_delete
+	s.AddTool(mcp.NewTool("template_delete",
+		mcp.WithDescription("Delete a template"),
+		mcp.WithString("ref", mcp.Description("Template ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		ref, errRes := requireString(req, "ref")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if err := svc.DeleteTemplate(ctx, ref); err != nil {
+			return errResult(err)
+		}
+		return mcp.NewToolResultText("deleted"), nil
 	})
 }
 

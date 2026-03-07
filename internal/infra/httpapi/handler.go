@@ -35,6 +35,8 @@ type CreateVMInput struct {
 		RestartPolicy   string         `json:"restart_policy,omitempty" doc:"Restart policy (none, on-boot, always)" default:"none"`
 		RestartStrategy string         `json:"restart_strategy,omitempty" doc:"Restart strategy (immediate, backoff, fixed)" default:"backoff"`
 		Shell           string         `json:"shell,omitempty" doc:"Default shell for console sessions"`
+		Init            bool           `json:"init,omitempty" doc:"Enable init injection"`
+		Template        string         `json:"template,omitempty" doc:"Template name for provisioning"`
 	}
 }
 
@@ -117,6 +119,27 @@ type UpdateRestartPolicyInput struct {
 	}
 }
 
+type CreateTemplateInput struct {
+	Body struct {
+		Name   string `json:"name" doc:"Template name"`
+		Distro string `json:"distro" doc:"Target distro (matches /etc/os-release ID)"`
+		Script string `json:"script" doc:"Provisioning script content"`
+	}
+}
+
+type TemplatePathInput struct {
+	ID string `path:"ref" doc:"Template ID or name"`
+}
+
+type UpdateTemplateInput struct {
+	ID   string `path:"ref" doc:"Template ID or name"`
+	Body struct {
+		Name   string `json:"name,omitempty" doc:"Template name"`
+		Distro string `json:"distro,omitempty" doc:"Target distro"`
+		Script string `json:"script,omitempty" doc:"Provisioning script content"`
+	}
+}
+
 // --- huma output types ---
 
 type VMOutput struct {
@@ -145,6 +168,14 @@ type DeviceOutput struct {
 
 type DeviceListOutput struct {
 	Body []deviceResponse
+}
+
+type TemplateOutput struct {
+	Body templateResponse
+}
+
+type TemplateListOutput struct {
+	Body []templateResponse
 }
 
 type StatusOutput struct {
@@ -176,6 +207,9 @@ type vmResponse struct {
 	RestartPolicy   string         `json:"restart_policy" doc:"Restart policy"`
 	RestartStrategy string         `json:"restart_strategy" doc:"Restart strategy"`
 	Shell           string         `json:"shell,omitempty" doc:"Default shell for console sessions"`
+	Init            bool           `json:"init" doc:"Whether init injection is enabled"`
+	TemplateID      string         `json:"template_id,omitempty" doc:"Provisioning template ID"`
+	ScriptOverride  string         `json:"script_override,omitempty" doc:"Per-VM script override"`
 	CreatedAt       string         `json:"created_at" doc:"Creation timestamp"`
 	StartedAt *string        `json:"started_at,omitempty" doc:"Start timestamp"`
 	StoppedAt *string        `json:"stopped_at,omitempty" doc:"Stop timestamp"`
@@ -199,6 +233,15 @@ type deviceResponse struct {
 	GID           uint32  `json:"gid" doc:"Device group ID"`
 	VMID          *string `json:"vm_id,omitempty" doc:"Attached VM ID"`
 	CreatedAt     string  `json:"created_at" doc:"Creation timestamp"`
+}
+
+type templateResponse struct {
+	ID        string `json:"id" doc:"Template ID"`
+	Name      string `json:"name" doc:"Template name"`
+	Distro    string `json:"distro" doc:"Target distro"`
+	Script    string `json:"script" doc:"Provisioning script"`
+	CreatedAt string `json:"created_at" doc:"Creation timestamp"`
+	UpdatedAt string `json:"updated_at" doc:"Last update timestamp"`
 }
 
 type execResponse struct {
@@ -257,6 +300,9 @@ func vmToResponse(vm *domain.VM) vmResponse {
 	r.RestartPolicy = string(vm.RestartPolicy)
 	r.RestartStrategy = string(vm.RestartStrategy)
 	r.Shell = vm.Shell
+	r.Init = vm.Init
+	r.TemplateID = vm.TemplateID
+	r.ScriptOverride = vm.ScriptOverride
 	if vm.DNSConfig != nil {
 		r.DNS = &dnsConfigBody{
 			Servers: vm.DNSConfig.Servers,
@@ -308,6 +354,17 @@ func deviceToResponse(d *domain.Device) deviceResponse {
 	return r
 }
 
+func templateToResponse(t *domain.Template) templateResponse {
+	return templateResponse{
+		ID:        t.ID,
+		Name:      t.Name,
+		Distro:    t.Distro,
+		Script:    t.Script,
+		CreatedAt: t.CreatedAt.UTC().Format(timeFormatJSON),
+		UpdatedAt: t.UpdatedAt.UTC().Format(timeFormatJSON),
+	}
+}
+
 func mapDomainError(err error) error {
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
@@ -342,6 +399,7 @@ func NewHandler(svc *app.VMService) http.Handler {
 	registerVMRoutes(api, svc)
 	registerDriveRoutes(api, svc)
 	registerDeviceRoutes(api, svc)
+	registerTemplateRoutes(api, svc)
 	registerNetworkRoutes(api, svc)
 	registerBackupRoutes(api, svc)
 
@@ -389,6 +447,8 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 			RestartPolicy:   domain.RestartPolicy(input.Body.RestartPolicy),
 			RestartStrategy: domain.RestartStrategy(input.Body.RestartStrategy),
 			Shell:           input.Body.Shell,
+			Init:            input.Body.Init,
+			TemplateName:    input.Body.Template,
 		})
 		if err != nil {
 			return nil, mapDomainError(err)
@@ -798,6 +858,93 @@ func registerDeviceRoutes(api huma.API, svc *app.VMService) {
 			return nil, mapDomainError(err)
 		}
 		return &StatusOutput{Body: statusBody{Status: "ok"}}, nil
+	})
+}
+
+// --- Template routes ---
+
+func registerTemplateRoutes(api huma.API, svc *app.VMService) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "create-template",
+		Method:        http.MethodPost,
+		Path:          "/v1/templates",
+		Summary:       "Create a provisioning template",
+		DefaultStatus: http.StatusCreated,
+		Tags:          []string{"Templates"},
+	}, func(ctx context.Context, input *CreateTemplateInput) (*TemplateOutput, error) {
+		t, err := svc.CreateTemplate(ctx, domain.CreateTemplateParams{
+			Name:   input.Body.Name,
+			Distro: input.Body.Distro,
+			Script: input.Body.Script,
+		})
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &TemplateOutput{Body: templateToResponse(t)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-templates",
+		Method:      http.MethodGet,
+		Path:        "/v1/templates",
+		Summary:     "List provisioning templates",
+		Tags:        []string{"Templates"},
+	}, func(ctx context.Context, input *struct{}) (*TemplateListOutput, error) {
+		templates, err := svc.ListTemplates(ctx)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		resp := make([]templateResponse, len(templates))
+		for i, t := range templates {
+			resp[i] = templateToResponse(t)
+		}
+		return &TemplateListOutput{Body: resp}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-template",
+		Method:      http.MethodGet,
+		Path:        "/v1/templates/{ref}",
+		Summary:     "Get a provisioning template",
+		Tags:        []string{"Templates"},
+	}, func(ctx context.Context, input *TemplatePathInput) (*TemplateOutput, error) {
+		t, err := svc.GetTemplate(ctx, input.ID)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &TemplateOutput{Body: templateToResponse(t)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "update-template",
+		Method:      http.MethodPut,
+		Path:        "/v1/templates/{ref}",
+		Summary:     "Update a provisioning template",
+		Tags:        []string{"Templates"},
+	}, func(ctx context.Context, input *UpdateTemplateInput) (*TemplateOutput, error) {
+		t, err := svc.UpdateTemplate(ctx, input.ID, domain.CreateTemplateParams{
+			Name:   input.Body.Name,
+			Distro: input.Body.Distro,
+			Script: input.Body.Script,
+		})
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &TemplateOutput{Body: templateToResponse(t)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "delete-template",
+		Method:        http.MethodDelete,
+		Path:          "/v1/templates/{ref}",
+		Summary:       "Delete a provisioning template",
+		DefaultStatus: http.StatusNoContent,
+		Tags:          []string{"Templates"},
+	}, func(ctx context.Context, input *TemplatePathInput) (*struct{}, error) {
+		if err := svc.DeleteTemplate(ctx, input.ID); err != nil {
+			return nil, mapDomainError(err)
+		}
+		return nil, nil
 	})
 }
 
