@@ -54,7 +54,7 @@ run = "rm -f build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quot
 
 [tasks."install:local"]
 description = "Install all binaries to ~/.local/bin, set capabilities, install systemd unit"
-depends = ["build:release"]
+depends = ["build"]
 run = """
 #!/usr/bin/env bash
 set -e
