@@ -100,27 +100,23 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           VERSION: ${{ needs.tag.outputs.new_tag }}
         run: |
+          mkdir -p bin
           LDFLAGS="-s -w -X github.com/Work-Fort/Nexus/cmd.Version=${VERSION}"
-          go build -ldflags "${LDFLAGS}" -o "nexus-${{ matrix.target }}"
-          go build -ldflags "${LDFLAGS}" -o "nexusctl-${{ matrix.target }}" ./cmd/nexusctl/
-          go build -ldflags "-s -w" -o "nexus-netns-${{ matrix.target }}" ./cmd/nexus-netns/
-          go build -ldflags "-s -w" -o "nexus-cni-exec-${{ matrix.target }}" ./cmd/nexus-cni-exec/
-          go build -ldflags "-s -w" -o "nexus-quota-${{ matrix.target }}" ./cmd/nexus-quota/
-          go build -ldflags "-s -w" -o "nexus-btrfs-${{ matrix.target }}" ./cmd/nexus-btrfs/
-          go build -ldflags "-s -w" -o "nexus-dns-${{ matrix.target }}" ./cmd/nexus-dns/
+          go build -ldflags "${LDFLAGS}" -o bin/nexus .
+          go build -ldflags "${LDFLAGS}" -o bin/nexusctl ./cmd/nexusctl/
+          go build -ldflags "-s -w" -o bin/nexus-netns ./cmd/nexus-netns/
+          go build -ldflags "-s -w" -o bin/nexus-cni-exec ./cmd/nexus-cni-exec/
+          go build -ldflags "-s -w" -o bin/nexus-quota ./cmd/nexus-quota/
+          go build -ldflags "-s -w" -o bin/nexus-btrfs ./cmd/nexus-btrfs/
+          go build -ldflags "-s -w" -o bin/nexus-dns ./cmd/nexus-dns/
 
       - name: Create archive
         run: |
           TARGET="${{ matrix.target }}"
           mkdir "nexus-${TARGET}"
-          cp nexus-${TARGET} nexus-${TARGET}/nexus
-          cp nexusctl-${TARGET} nexus-${TARGET}/nexusctl
-          cp nexus-netns-${TARGET} nexus-${TARGET}/nexus-netns
-          cp nexus-cni-exec-${TARGET} nexus-${TARGET}/nexus-cni-exec
-          cp nexus-quota-${TARGET} nexus-${TARGET}/nexus-quota
-          cp nexus-btrfs-${TARGET} nexus-${TARGET}/nexus-btrfs
-          cp nexus-dns-${TARGET} nexus-${TARGET}/nexus-dns
-          cp dist/nexus.service nexus-${TARGET}/
+          cp bin/nexus bin/nexusctl bin/nexus-netns bin/nexus-cni-exec \
+             bin/nexus-quota bin/nexus-btrfs bin/nexus-dns "nexus-${TARGET}/"
+          cp dist/nexus.service "nexus-${TARGET}/"
           tar cf - "nexus-${TARGET}" | xz -9 > "nexus-${TARGET}.tar.xz"
           sha256sum "nexus-${TARGET}.tar.xz" > "nexus-${TARGET}.sha256"
 

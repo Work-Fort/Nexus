@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,9 +171,12 @@ type mockRuntime struct {
 	detectDistro string
 	lastMounts   []domain.Mount
 	initScript   string // last InitScriptPath passed to Create
+	mu           sync.Mutex
 	execCalled   bool
 	lastExecCmd  []string
-	stopCalls    []string // IDs passed to Stop
+	allExecCmds  [][]string
+	execSignal   chan struct{} // closed on each exec call
+	stopCalls    []string     // IDs passed to Stop
 }
 
 func newMockRuntime() *mockRuntime {
@@ -210,12 +214,44 @@ func (m *mockRuntime) Delete(_ context.Context, id string) error {
 }
 
 func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.ExecResult, error) {
+	m.mu.Lock()
 	m.execCalled = true
 	m.lastExecCmd = cmd
+	m.allExecCmds = append(m.allExecCmds, cmd)
+	sig := m.execSignal
+	m.mu.Unlock()
+	if sig != nil {
+		sig <- struct{}{} // buffered channel, won't block
+	}
 	if m.execErr != nil {
 		return nil, m.execErr
 	}
 	return m.execResult, nil
+}
+
+// waitForExecs blocks until n exec calls have been received, or returns false on timeout.
+func (m *mockRuntime) waitForExecs(n int, timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	for range n {
+		select {
+		case <-m.execSignal:
+		case <-deadline:
+			return false
+		}
+	}
+	return true
+}
+
+// hasExecCmd returns true if any recorded exec call starts with the given binary.
+func (m *mockRuntime) hasExecCmd(bin string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, cmd := range m.allExecCmds {
+		if len(cmd) > 0 && cmd[0] == bin {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *mockRuntime) hasMount(containerPath string) bool {
@@ -2226,8 +2262,8 @@ func TestStartVM_MetricsExec(t *testing.T) {
 	t.Run("execs node_exporter for non-init VMs when metrics enabled", func(t *testing.T) {
 		store := newMockStore()
 		rt := newMockRuntime()
-		// Set execResult to return "root:..." so SyncShell doesn't fail.
 		rt.execResult = &domain.ExecResult{ExitCode: 0, Stdout: "root:x:0:0:root:/root:/bin/sh\n"}
+		rt.execSignal = make(chan struct{}, 10)
 
 		svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
 			app.WithConfig(app.VMServiceConfig{
@@ -2251,14 +2287,15 @@ func TestStartVM_MetricsExec(t *testing.T) {
 			t.Fatalf("StartVM: %v", err)
 		}
 
-		// Give the background goroutine a moment to fire.
-		time.Sleep(100 * time.Millisecond)
-
-		if !rt.execCalled {
-			t.Error("expected exec to be called for node_exporter")
+		// Wait for both background execs: node_exporter + SyncShell.
+		if !rt.waitForExecs(2, 5*time.Second) {
+			t.Fatal("timed out waiting for background exec calls")
 		}
-		if len(rt.lastExecCmd) == 0 || rt.lastExecCmd[0] != "/usr/local/bin/node_exporter" {
-			t.Errorf("exec cmd = %v, want node_exporter", rt.lastExecCmd)
+
+		if !rt.hasExecCmd("/usr/local/bin/node_exporter") {
+			rt.mu.Lock()
+			t.Errorf("expected node_exporter exec, got: %v", rt.allExecCmds)
+			rt.mu.Unlock()
 		}
 	})
 
@@ -2266,6 +2303,7 @@ func TestStartVM_MetricsExec(t *testing.T) {
 		store := newMockStore()
 		rt := newMockRuntime()
 		rt.execResult = &domain.ExecResult{ExitCode: 0, Stdout: "root:x:0:0:root:/root:/bin/sh\n"}
+		rt.execSignal = make(chan struct{}, 10)
 
 		svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
 			app.WithConfig(app.VMServiceConfig{
@@ -2290,12 +2328,12 @@ func TestStartVM_MetricsExec(t *testing.T) {
 			t.Fatalf("StartVM: %v", err)
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		// Only SyncShell runs (metrics skipped for init VMs).
+		if !rt.waitForExecs(1, 5*time.Second) {
+			t.Fatal("timed out waiting for SyncShell exec")
+		}
 
-		// Exec might be called for SyncShell but NOT for node_exporter.
-		// The exec for init VMs is skipped — node_exporter managed by init.
-		// We can check the last exec cmd isn't node_exporter.
-		if len(rt.lastExecCmd) > 0 && rt.lastExecCmd[0] == "/usr/local/bin/node_exporter" {
+		if rt.hasExecCmd("/usr/local/bin/node_exporter") {
 			t.Error("init VM should not exec-start node_exporter (supervised by init)")
 		}
 	})
@@ -2304,6 +2342,7 @@ func TestStartVM_MetricsExec(t *testing.T) {
 		store := newMockStore()
 		rt := newMockRuntime()
 		rt.execResult = &domain.ExecResult{ExitCode: 0, Stdout: "root:x:0:0:root:/root:/bin/sh\n"}
+		rt.execSignal = make(chan struct{}, 10)
 
 		svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
 
@@ -2317,10 +2356,12 @@ func TestStartVM_MetricsExec(t *testing.T) {
 			t.Fatalf("StartVM: %v", err)
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		// Only SyncShell runs (no metrics config).
+		if !rt.waitForExecs(1, 5*time.Second) {
+			t.Fatal("timed out waiting for SyncShell exec")
+		}
 
-		// Exec is called for SyncShell (getent passwd root), not for node_exporter.
-		if len(rt.lastExecCmd) > 0 && rt.lastExecCmd[0] == "/usr/local/bin/node_exporter" {
+		if rt.hasExecCmd("/usr/local/bin/node_exporter") {
 			t.Error("exec should not start node_exporter when metrics disabled")
 		}
 	})
