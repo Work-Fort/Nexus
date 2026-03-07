@@ -131,7 +131,8 @@ func New(cfg Config) (*Network, error) {
       "ipam": {
         "type": "host-local",
         "subnet": %q,
-        "dataDir": %q
+        "dataDir": %q,
+        "routes": [{"dst": "0.0.0.0/0"}]
       }
     }
   ]
