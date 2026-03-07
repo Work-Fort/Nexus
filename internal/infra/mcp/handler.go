@@ -42,7 +42,7 @@ func NewHandler(svc *app.VMService) http.Handler {
 func jsonResult(v any) (*mcp.CallToolResult, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return nil, err
+		return mcp.NewToolResultErrorf("marshal: %v", err), nil
 	}
 	return mcp.NewToolResultText(string(b)), nil
 }
@@ -338,7 +338,10 @@ func registerBackupTools(s *server.MCPServer, svc *app.VMService) {
 		}
 
 		encoded := base64.StdEncoding.EncodeToString(buf.Bytes())
-		return mcp.NewToolResultText(encoded), nil
+		return jsonResult(map[string]any{
+			"archive_base64": encoded,
+			"size_bytes":     buf.Len(),
+		})
 	})
 
 	// vm_import
