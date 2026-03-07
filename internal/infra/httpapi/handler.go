@@ -410,6 +410,7 @@ func NewHandler(svc *app.VMService) http.Handler {
 	registerDriveRoutes(api, svc)
 	registerDeviceRoutes(api, svc)
 	registerTemplateRoutes(api, svc)
+	registerSnapshotRoutes(api, svc)
 	registerNetworkRoutes(api, svc)
 	registerBackupRoutes(api, svc)
 	registerPrometheusRoutes(api, svc)
@@ -1083,5 +1084,119 @@ func registerPrometheusRoutes(api huma.API, svc *app.VMService) {
 			targets = []prometheusTarget{} // return [] not null
 		}
 		return &PrometheusTargetsOutput{Body: targets}, nil
+	})
+}
+
+// --- Snapshot routes ---
+
+type snapshotResponse struct {
+	ID        string `json:"id"`
+	VMID      string `json:"vm_id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+}
+
+func snapshotToResponse(s *domain.Snapshot) snapshotResponse {
+	return snapshotResponse{
+		ID:        s.ID,
+		VMID:      s.VMID,
+		Name:      s.Name,
+		CreatedAt: s.CreatedAt.Format(timeFormatJSON),
+	}
+}
+
+func registerSnapshotRoutes(api huma.API, svc *app.VMService) {
+	huma.Register(api, huma.Operation{
+		OperationID:   "create-snapshot",
+		Method:        http.MethodPost,
+		Path:          "/v1/vms/{id}/snapshots",
+		Summary:       "Create a snapshot of a VM",
+		DefaultStatus: http.StatusCreated,
+		Tags:          []string{"Snapshots"},
+	}, func(ctx context.Context, input *struct {
+		ID   string `path:"id"`
+		Body struct {
+			Name string `json:"name" minLength:"1"`
+		}
+	}) (*struct{ Body snapshotResponse }, error) {
+		snap, err := svc.CreateSnapshot(ctx, input.ID, input.Body.Name)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &struct{ Body snapshotResponse }{Body: snapshotToResponse(snap)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-snapshots",
+		Method:      http.MethodGet,
+		Path:        "/v1/vms/{id}/snapshots",
+		Summary:     "List VM snapshots",
+		Tags:        []string{"Snapshots"},
+	}, func(ctx context.Context, input *struct {
+		ID string `path:"id"`
+	}) (*struct{ Body []snapshotResponse }, error) {
+		snaps, err := svc.ListSnapshots(ctx, input.ID)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		resp := make([]snapshotResponse, len(snaps))
+		for i, s := range snaps {
+			resp[i] = snapshotToResponse(s)
+		}
+		return &struct{ Body []snapshotResponse }{Body: resp}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "delete-snapshot",
+		Method:        http.MethodDelete,
+		Path:          "/v1/vms/{id}/snapshots/{snap}",
+		Summary:       "Delete a snapshot",
+		DefaultStatus: http.StatusNoContent,
+		Tags:          []string{"Snapshots"},
+	}, func(ctx context.Context, input *struct {
+		ID   string `path:"id"`
+		Snap string `path:"snap"`
+	}) (*struct{}, error) {
+		if err := svc.DeleteSnapshot(ctx, input.ID, input.Snap); err != nil {
+			return nil, mapDomainError(err)
+		}
+		return nil, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "restore-snapshot",
+		Method:      http.MethodPost,
+		Path:        "/v1/vms/{id}/snapshots/{snap}/restore",
+		Summary:     "Restore a VM to a snapshot",
+		Tags:        []string{"Snapshots"},
+	}, func(ctx context.Context, input *struct {
+		ID   string `path:"id"`
+		Snap string `path:"snap"`
+	}) (*struct{}, error) {
+		if err := svc.RestoreSnapshot(ctx, input.ID, input.Snap); err != nil {
+			return nil, mapDomainError(err)
+		}
+		return nil, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "clone-snapshot",
+		Method:        http.MethodPost,
+		Path:          "/v1/vms/{id}/snapshots/{snap}/clone",
+		Summary:       "Clone a VM from a snapshot",
+		DefaultStatus: http.StatusCreated,
+		Tags:          []string{"Snapshots"},
+	}, func(ctx context.Context, input *struct {
+		ID   string `path:"id"`
+		Snap string `path:"snap"`
+		Body struct {
+			Name string `json:"name" minLength:"1"`
+		}
+	}) (*struct{ Body vmResponse }, error) {
+		vm, err := svc.CloneSnapshot(ctx, input.ID, input.Snap, input.Body.Name)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &struct{ Body vmResponse }{Body: vmToResponse(vm)}, nil
 	})
 }
