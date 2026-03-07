@@ -114,7 +114,7 @@ Add an endpoint/operation to sync the system-set default shell from the VM
 rootfs (e.g. probe `/etc/shells` or `/etc/passwd`) into the VM's `shell` field
 in the DB.
 
-## 12. VM Observability
+## 12. VM Observability ✅
 
 [Design](vm-observability-design.md) · [Plan](plans/2026-03-06-vm-observability.md)
 
@@ -124,7 +124,7 @@ lifecycle/resource events to callers, and a Prometheus/k8s observability stack
 inside VMs for metrics collection. Came up during VM root size design — callers
 need to know when a VM hits its quota so they can expand or take action.
 
-## 13. Provisioning Templates
+## 13. Provisioning Templates ✅
 
 [Design](provisioning-templates-design.md) · [Plan](plans/2026-03-07-provisioning-templates.md)
 
