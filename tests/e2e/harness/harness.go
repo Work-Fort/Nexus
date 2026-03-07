@@ -277,8 +277,9 @@ func randomNamespace() string {
 // --- Client ---
 
 type Client struct {
-	base string
-	http *http.Client
+	base       string
+	http       *http.Client
+	mcpSession string // MCP session ID, set after MCPInit
 }
 
 func NewClient(daemonAddr string) *Client {
@@ -741,6 +742,136 @@ func (c *Client) RawRequest(method, path string, body io.Reader) (*http.Response
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return c.http.Do(req)
+}
+
+// --- MCP operations ---
+
+// MCPToolResult holds the parsed content from an MCP tool call.
+type MCPToolResult struct {
+	Content string
+	IsError bool
+}
+
+// MCPInit sends an MCP initialize request to establish a session.
+// It is called automatically by MCPCall if no session exists.
+func (c *Client) MCPInit() error {
+	initReq := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      0,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]any{},
+			"clientInfo": map[string]any{
+				"name":    "nexus-e2e",
+				"version": "1.0.0",
+			},
+		},
+	}
+
+	body, err := json.Marshal(initReq)
+	if err != nil {
+		return fmt.Errorf("marshal init request: %w", err)
+	}
+
+	resp, err := c.http.Post(c.base+"/mcp", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("MCP init request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("MCP init: unexpected status %d", resp.StatusCode)
+	}
+
+	// Capture the session ID from the response header.
+	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
+		c.mcpSession = sid
+	}
+
+	return nil
+}
+
+// MCPCall invokes an MCP tool via JSON-RPC at /mcp.
+// It automatically initializes the session on first call.
+func (c *Client) MCPCall(toolName string, args map[string]any) (*MCPToolResult, error) {
+	// Auto-initialize session if not yet done.
+	if c.mcpSession == "" {
+		if err := c.MCPInit(); err != nil {
+			return nil, fmt.Errorf("MCP auto-init: %w", err)
+		}
+	}
+
+	callReq := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      toolName,
+			"arguments": args,
+		},
+	}
+
+	body, err := json.Marshal(callReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshal call request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.base+"/mcp", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.mcpSession != "" {
+		req.Header.Set("Mcp-Session-Id", c.mcpSession)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("MCP call request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("MCP call %s: status %d: %s", toolName, resp.StatusCode, string(respBody))
+	}
+
+	// Parse JSON-RPC response.
+	var rpcResp struct {
+		Result struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+		return nil, fmt.Errorf("decode MCP response: %w", err)
+	}
+
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("MCP JSON-RPC error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
+	}
+
+	// Extract text content.
+	var content string
+	for _, c := range rpcResp.Result.Content {
+		if c.Type == "text" {
+			content += c.Text
+		}
+	}
+
+	return &MCPToolResult{
+		Content: content,
+		IsError: rpcResp.Result.IsError,
+	}, nil
 }
 
 // --- internal helpers ---

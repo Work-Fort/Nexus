@@ -2,6 +2,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -979,6 +980,144 @@ func TestConsoleCustomShell(t *testing.T) {
 
 	if !strings.Contains(output, "cmd-override") {
 		t.Errorf("output missing 'cmd-override', got: %q", output)
+	}
+}
+
+func TestMCPVMLifecycle(t *testing.T) {
+	_, c := startDaemon(t)
+
+	// 1. vm_create via MCP.
+	createResult, err := c.MCPCall("vm_create", map[string]any{
+		"name": "mcp-test",
+		"role": "agent",
+	})
+	if err != nil {
+		t.Fatalf("MCP vm_create: %v", err)
+	}
+	if createResult.IsError {
+		t.Fatalf("MCP vm_create returned error: %s", createResult.Content)
+	}
+
+	// Parse VM ID from the JSON response content.
+	var createdVM struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(createResult.Content), &createdVM); err != nil {
+		t.Fatalf("parse vm_create result: %v", err)
+	}
+	if createdVM.ID == "" {
+		t.Fatal("expected non-empty VM ID from vm_create")
+	}
+	if createdVM.Name != "mcp-test" {
+		t.Errorf("vm name = %q, want %q", createdVM.Name, "mcp-test")
+	}
+
+	// 2. vm_list via MCP.
+	listResult, err := c.MCPCall("vm_list", map[string]any{})
+	if err != nil {
+		t.Fatalf("MCP vm_list: %v", err)
+	}
+	if listResult.IsError {
+		t.Fatalf("MCP vm_list returned error: %s", listResult.Content)
+	}
+	var vmList []json.RawMessage
+	if err := json.Unmarshal([]byte(listResult.Content), &vmList); err != nil {
+		t.Fatalf("parse vm_list result: %v", err)
+	}
+	if len(vmList) == 0 {
+		t.Fatal("expected non-empty VM list")
+	}
+
+	// 3. vm_get via MCP.
+	getResult, err := c.MCPCall("vm_get", map[string]any{
+		"id": createdVM.ID,
+	})
+	if err != nil {
+		t.Fatalf("MCP vm_get: %v", err)
+	}
+	if getResult.IsError {
+		t.Fatalf("MCP vm_get returned error: %s", getResult.Content)
+	}
+
+	// 4. vm_start via MCP.
+	startResult, err := c.MCPCall("vm_start", map[string]any{
+		"id": createdVM.ID,
+	})
+	if err != nil {
+		t.Fatalf("MCP vm_start: %v", err)
+	}
+	if startResult.IsError {
+		t.Fatalf("MCP vm_start returned error: %s", startResult.Content)
+	}
+
+	// 5. vm_exec via MCP (cmd is a JSON string array).
+	var execResult *harness.MCPToolResult
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		execResult, err = c.MCPCall("vm_exec", map[string]any{
+			"id":  createdVM.ID,
+			"cmd": `["echo","hello from mcp"]`,
+		})
+		if err == nil && !execResult.IsError {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("MCP vm_exec: %v", err)
+	}
+	if execResult.IsError {
+		t.Fatalf("MCP vm_exec returned error: %s", execResult.Content)
+	}
+
+	var execOutput struct {
+		ExitCode int    `json:"exit_code"`
+		Stdout   string `json:"stdout"`
+	}
+	if err := json.Unmarshal([]byte(execResult.Content), &execOutput); err != nil {
+		t.Fatalf("parse vm_exec result: %v", err)
+	}
+	if execOutput.ExitCode != 0 {
+		t.Errorf("exec exit code = %d, want 0", execOutput.ExitCode)
+	}
+	if !strings.Contains(execOutput.Stdout, "hello from mcp") {
+		t.Errorf("exec stdout = %q, want to contain %q", execOutput.Stdout, "hello from mcp")
+	}
+
+	// 6. vm_stop via MCP.
+	stopResult, err := c.MCPCall("vm_stop", map[string]any{
+		"id": createdVM.ID,
+	})
+	if err != nil {
+		t.Fatalf("MCP vm_stop: %v", err)
+	}
+	if stopResult.IsError {
+		t.Fatalf("MCP vm_stop returned error: %s", stopResult.Content)
+	}
+
+	// 7. vm_delete via MCP.
+	deleteResult, err := c.MCPCall("vm_delete", map[string]any{
+		"id": createdVM.ID,
+	})
+	if err != nil {
+		t.Fatalf("MCP vm_delete: %v", err)
+	}
+	if deleteResult.IsError {
+		t.Fatalf("MCP vm_delete returned error: %s", deleteResult.Content)
+	}
+
+	// Verify VM was deleted via vm_list.
+	listResult, err = c.MCPCall("vm_list", map[string]any{})
+	if err != nil {
+		t.Fatalf("MCP vm_list after delete: %v", err)
+	}
+	if err := json.Unmarshal([]byte(listResult.Content), &vmList); err != nil {
+		t.Fatalf("parse vm_list result: %v", err)
+	}
+	if len(vmList) != 0 {
+		t.Errorf("expected 0 VMs after delete, got %d", len(vmList))
 	}
 }
 

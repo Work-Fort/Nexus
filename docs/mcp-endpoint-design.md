@@ -32,7 +32,7 @@ responses.
 
 ## Tool Surface
 
-20 tools with full REST parity:
+24 tools with full REST parity:
 
 | Tool | VMService Method | Notes |
 |------|-----------------|-------|
