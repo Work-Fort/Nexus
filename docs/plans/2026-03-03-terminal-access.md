@@ -20,7 +20,7 @@
 Create `internal/domain/console.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package domain
 
 import (
@@ -580,7 +580,7 @@ git commit -m "feat(httpapi): add shell field to create, patch, and response"
 Create `internal/infra/httpapi/console.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package httpapi
 
 import (

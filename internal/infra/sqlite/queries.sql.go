@@ -579,7 +579,7 @@ type InsertVMParams struct {
 	ScriptOverride  sql.NullString `json:"script_override"`
 }
 
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 func (q *Queries) InsertVM(ctx context.Context, arg InsertVMParams) error {
 	_, err := q.db.ExecContext(ctx, insertVM,
 		arg.ID,

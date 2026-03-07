@@ -195,7 +195,7 @@ Expected: FAIL (types don't exist).
 Create `internal/app/backup.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package app
 
 import "fmt"
@@ -1022,7 +1022,7 @@ git commit -m "feat(api): add POST /v1/vms/:id/export and POST /v1/vms/import en
 Create `cmd/export.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package cmd
 
 import (
@@ -1090,7 +1090,7 @@ func newExportCmd() *cobra.Command {
 Create `cmd/import.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package cmd
 
 import (

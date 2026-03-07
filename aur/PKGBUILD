@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Maintainer: Kaz Walker <me@kazatron.com>
+pkgname=nexus-virt
+pkgver=0.0.0
+pkgrel=1
+pkgdesc='Lightweight VM lifecycle daemon for containerd and Kata Containers'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Work-Fort/Nexus'
+license=('GPL-3.0-or-later')
+depends=('containerd')
+makedepends=('go')
+
+source=("${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "Nexus-v${pkgver}"
+    export CGO_ENABLED=0
+    LDFLAGS="-s -w -X github.com/Work-Fort/Nexus/cmd.Version=v${pkgver}"
+    go build -ldflags "${LDFLAGS}" -o nexus
+    go build -ldflags "${LDFLAGS}" -o nexusctl ./cmd/nexusctl/
+    go build -ldflags "-s -w" -o nexus-netns ./cmd/nexus-netns/
+    go build -ldflags "-s -w" -o nexus-cni-exec ./cmd/nexus-cni-exec/
+    go build -ldflags "-s -w" -o nexus-quota ./cmd/nexus-quota/
+    go build -ldflags "-s -w" -o nexus-dns ./cmd/nexus-dns/
+}
+
+package() {
+    cd "Nexus-v${pkgver}"
+    install -Dm755 nexus "${pkgdir}/usr/bin/nexus"
+    install -Dm755 nexusctl "${pkgdir}/usr/bin/nexusctl"
+    install -Dm755 nexus-netns "${pkgdir}/usr/bin/nexus-netns"
+    install -Dm755 nexus-cni-exec "${pkgdir}/usr/bin/nexus-cni-exec"
+    install -Dm755 nexus-quota "${pkgdir}/usr/bin/nexus-quota"
+    install -Dm755 nexus-dns "${pkgdir}/usr/bin/nexus-dns"
+    install -Dm644 dist/nexus.service "${pkgdir}/usr/lib/systemd/user/nexus.service"
+}

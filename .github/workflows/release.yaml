@@ -1,0 +1,275 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v3
+      - run: mise run ci
+
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: nexus_test
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v3
+      - run: mise run test
+        env:
+          NEXUS_DB: postgres://nexus:nexus@localhost:5432/nexus_test?sslmode=disable
+
+  tag:
+    name: Create Version Tag
+    runs-on: ubuntu-latest
+    needs: [test, test-postgres]
+    outputs:
+      new_tag: ${{ steps.tag_version.outputs.new_tag }}
+      changelog: ${{ steps.tag_version.outputs.changelog }}
+      should_release: ${{ steps.check_tag.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump version and create tag
+        id: tag_version
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
+          release_branches: master
+          tag_prefix: v
+
+      - name: Check if new tag was created
+        id: check_tag
+        run: |
+          if [ -n "${{ steps.tag_version.outputs.new_tag }}" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: tag
+    if: needs.tag.outputs.should_release == 'true'
+    strategy:
+      matrix:
+        include:
+          - target: linux-amd64
+            goarch: amd64
+          - target: linux-arm64
+            goarch: arm64
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.new_tag }}
+      - uses: jdx/mise-action@v3
+
+      - name: Build binaries
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.tag.outputs.new_tag }}
+        run: |
+          LDFLAGS="-s -w -X github.com/Work-Fort/Nexus/cmd.Version=${VERSION}"
+          go build -ldflags "${LDFLAGS}" -o "nexus-${{ matrix.target }}"
+          go build -ldflags "${LDFLAGS}" -o "nexusctl-${{ matrix.target }}" ./cmd/nexusctl/
+          go build -ldflags "-s -w" -o "nexus-netns-${{ matrix.target }}" ./cmd/nexus-netns/
+          go build -ldflags "-s -w" -o "nexus-cni-exec-${{ matrix.target }}" ./cmd/nexus-cni-exec/
+          go build -ldflags "-s -w" -o "nexus-quota-${{ matrix.target }}" ./cmd/nexus-quota/
+          go build -ldflags "-s -w" -o "nexus-dns-${{ matrix.target }}" ./cmd/nexus-dns/
+
+      - name: Create archive
+        run: |
+          TARGET="${{ matrix.target }}"
+          mkdir "nexus-${TARGET}"
+          cp nexus-${TARGET} nexus-${TARGET}/nexus
+          cp nexusctl-${TARGET} nexus-${TARGET}/nexusctl
+          cp nexus-netns-${TARGET} nexus-${TARGET}/nexus-netns
+          cp nexus-cni-exec-${TARGET} nexus-${TARGET}/nexus-cni-exec
+          cp nexus-quota-${TARGET} nexus-${TARGET}/nexus-quota
+          cp nexus-dns-${TARGET} nexus-${TARGET}/nexus-dns
+          cp dist/nexus.service nexus-${TARGET}/
+          tar cf - "nexus-${TARGET}" | xz -9 > "nexus-${TARGET}.tar.xz"
+          sha256sum "nexus-${TARGET}.tar.xz" > "nexus-${TARGET}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-${{ needs.tag.outputs.new_tag }}
+          path: |
+            nexus-${{ matrix.target }}.tar.xz
+            nexus-${{ matrix.target }}.sha256
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [tag, build]
+    if: needs.tag.outputs.should_release == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.new_tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: '*-${{ needs.tag.outputs.new_tag }}'
+          merge-multiple: true
+
+      - name: Create SHA256SUMS
+        working-directory: artifacts
+        run: |
+          cat *.sha256 > SHA256SUMS
+          rm *.sha256
+
+      - name: Create release notes
+        env:
+          TAG: ${{ needs.tag.outputs.new_tag }}
+          CHANGELOG: ${{ needs.tag.outputs.changelog }}
+          REPO: ${{ github.repository }}
+        run: |
+          VERSION=$(echo "$TAG" | sed 's/^v//')
+          cat > release-notes.md << EOF
+          # Nexus v${VERSION}
+
+          ## What's Changed
+
+          ${CHANGELOG}
+
+          ## Installation
+
+          ### Linux (x86_64)
+          \`\`\`bash
+          wget https://github.com/${REPO}/releases/download/${TAG}/nexus-linux-amd64.tar.xz
+          tar xf nexus-linux-amd64.tar.xz
+          sudo cp nexus-linux-amd64/* /usr/local/bin/
+          sudo setcap cap_sys_admin+ep /usr/local/bin/nexus-netns
+          sudo setcap cap_net_admin,cap_sys_admin+ep /usr/local/bin/nexus-cni-exec
+          sudo setcap cap_sys_admin+ep /usr/local/bin/nexus-quota
+          sudo setcap cap_net_bind_service+ep /usr/local/bin/nexus-dns
+          \`\`\`
+
+          ### Linux (ARM64)
+          \`\`\`bash
+          wget https://github.com/${REPO}/releases/download/${TAG}/nexus-linux-arm64.tar.xz
+          tar xf nexus-linux-arm64.tar.xz
+          sudo cp nexus-linux-arm64/* /usr/local/bin/
+          sudo setcap cap_sys_admin+ep /usr/local/bin/nexus-netns
+          sudo setcap cap_net_admin,cap_sys_admin+ep /usr/local/bin/nexus-cni-exec
+          sudo setcap cap_sys_admin+ep /usr/local/bin/nexus-quota
+          sudo setcap cap_net_bind_service+ep /usr/local/bin/nexus-dns
+          \`\`\`
+
+          ### Arch Linux (AUR)
+          \`\`\`bash
+          yay -S nexus-virt
+          \`\`\`
+
+          ## Verification
+
+          \`\`\`bash
+          wget https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS
+          sha256sum -c SHA256SUMS --ignore-missing
+          \`\`\`
+
+          ---
+
+          Built automatically by [Nexus CI](https://github.com/${REPO})
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.tag.outputs.new_tag }}
+          name: Release ${{ needs.tag.outputs.new_tag }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  aur:
+    name: Publish to AUR
+    runs-on: ubuntu-latest
+    needs: [tag, release]
+    if: needs.tag.outputs.should_release == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update PKGBUILD
+        env:
+          TAG: ${{ needs.tag.outputs.new_tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          VERSION=$(echo "$TAG" | sed 's/^v//')
+          wget -q "https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz" -O source.tar.gz
+          SRC_SUM=$(sha256sum source.tar.gz | cut -d' ' -f1)
+
+          cd aur
+          sed -i "s/pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+          sed -i "s/sha256sums=.*/sha256sums=('${SRC_SUM}')/" PKGBUILD
+
+      - name: Generate .SRCINFO
+        run: |
+          docker run --rm -v "$PWD/aur:/pkg" archlinux:latest bash -c '
+            pacman -Sy --noconfirm base-devel >/dev/null 2>&1
+            useradd -m builder
+            chown -R builder:builder /pkg
+            su builder -c "cd /pkg && makepkg --printsrcinfo > .SRCINFO"
+          '
+
+      - name: Push to AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          TAG: ${{ needs.tag.outputs.new_tag }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${AUR_SSH_PRIVATE_KEY}" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key"
+
+          git clone ssh://aur@aur.archlinux.org/nexus-virt.git aur-repo
+          cp aur/PKGBUILD aur/.SRCINFO aur-repo/
+
+          cd aur-repo
+          git config user.name "Kaz Walker"
+          git config user.email "me@kazatron.com"
+          git add PKGBUILD .SRCINFO
+          if ! git diff --cached --quiet; then
+            VERSION=$(echo "$TAG" | sed 's/^v//')
+            git commit -m "Update to v${VERSION}"
+            git push
+          fi

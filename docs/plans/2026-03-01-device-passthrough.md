@@ -20,7 +20,7 @@
 **Step 1: Write `internal/domain/device.go`**
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package domain
 
 import "time"

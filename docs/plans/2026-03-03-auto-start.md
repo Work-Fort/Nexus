@@ -448,7 +448,7 @@ git commit -m "feat(api): add restart_policy fields to create-vm and PUT restart
 Create `internal/app/restart.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package app
 
 import (
@@ -762,7 +762,7 @@ git commit -m "feat(daemon): wire RestoreVMs and StartCrashMonitor into startup"
 Create `internal/domain/vm_test.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package domain
 
 import "testing"

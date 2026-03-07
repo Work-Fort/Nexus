@@ -132,6 +132,10 @@ fi
 echo "Nexus state cleaned"
 """
 
+[tasks.ci]
+description = "Run lint, unit tests, and vet"
+run = ["mise run check", "mise run test:unit"]
+
 [tasks.e2e]
 description = "Run E2E tests (requires root, containerd, btrfs)"
 depends = ["build"]

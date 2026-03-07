@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // nexus-cni-exec is a multi-call wrapper for CNI plugin execution.
 // It is installed as symlinks named after each CNI plugin (e.g., "bridge",

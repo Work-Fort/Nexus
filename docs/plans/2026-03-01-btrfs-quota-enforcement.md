@@ -300,7 +300,7 @@ Minimal privileged binary following the `nexus-netns` pattern. Gets `cap_sys_adm
 **Step 1: Create `cmd/nexus-quota/main.go`**
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // nexus-quota is a minimal helper that sets btrfs quota limits on subvolumes.
 // It requires CAP_SYS_ADMIN (via setcap) so that the main nexus daemon can
@@ -608,7 +608,7 @@ Expected: FAIL — `NewBtrfsWithQuota` undefined.
 Replace the entire file:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package storage implements domain.Storage for persistent data volumes.
 package storage

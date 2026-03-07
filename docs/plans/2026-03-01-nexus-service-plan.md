@@ -76,7 +76,7 @@ Note: The containerd dependency pulls in gRPC, protobuf, OCI specs. This is expe
 ### Step 2: Create main.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package main
 
 import (
@@ -93,7 +93,7 @@ File: `cmd/nexus/main.go`
 ### Step 3: Create root.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package nexus
 
 import (
@@ -190,7 +190,7 @@ File: `cmd/nexus/root.go`
 ### Step 4: Create config.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package config
 
 import (
@@ -335,7 +335,7 @@ git commit -m "feat(nexus): scaffold project with Cobra/Viper and XDG config"
 ### Step 1: Write vm.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package domain defines the core types and port interfaces for Nexus.
 // This package has zero dependencies on infrastructure — it defines
@@ -415,7 +415,7 @@ File: `internal/domain/vm.go`
 ### Step 2: Write ports.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package domain
 
 import "context"
@@ -468,7 +468,7 @@ git commit -m "feat(domain): add VM types and port interfaces"
 ### Step 1: Write the migration
 
 ```sql
--- SPDX-License-Identifier: Apache-2.0
+-- SPDX-License-Identifier: GPL-3.0-or-later
 
 -- +goose Up
 CREATE TABLE vms (
@@ -519,7 +519,7 @@ File: `sqlc.yaml` (project root)
 ### Step 3: Write queries.sql
 
 ```sql
--- SPDX-License-Identifier: Apache-2.0
+-- SPDX-License-Identifier: GPL-3.0-or-later
 
 -- name: InsertVM :exec
 INSERT INTO vms (id, name, role, image, runtime, state, created_at)
@@ -591,7 +591,7 @@ git commit -m "feat(sqlite): add schema migration and sqlc queries"
 ### Step 1: Write failing tests
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package sqlite_test
 
 import (
@@ -774,7 +774,7 @@ Expected: FAIL — `Store` type not defined.
 ### Step 3: Write store.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package sqlite
 
 import (
@@ -1000,7 +1000,7 @@ git commit -m "feat(sqlite): implement VMStore adapter with sqlc"
 ### Step 1: Write runtime.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package containerd implements domain.Runtime using the containerd Go client.
 package containerd
@@ -1179,7 +1179,7 @@ File: `internal/infra/containerd/runtime.go`
 ### Step 2: Write interface compliance test
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package containerd
 
 import (
@@ -1215,7 +1215,7 @@ git commit -m "feat(containerd): implement Runtime adapter"
 ### Step 1: Write failing tests
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package app_test
 
 import (
@@ -1584,7 +1584,7 @@ Expected: FAIL — `app.NewVMService` not defined.
 ### Step 3: Write vm_service.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package app contains application use-cases that orchestrate domain ports.
 package app
@@ -1842,7 +1842,7 @@ POST   /webhooks/sharkfin  — Sharkfin webhook receiver
 ### Step 1: Write handler tests
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package httpapi_test
 
 import (
@@ -2096,7 +2096,7 @@ File: `internal/infra/httpapi/handler_test.go`
 ### Step 2: Write webhook tests
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package httpapi_test
 
 import (
@@ -2154,7 +2154,7 @@ Expected: FAIL — `httpapi.NewHandler` not defined.
 ### Step 4: Write handler.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package httpapi implements the Nexus HTTP API.
 package httpapi
@@ -2391,7 +2391,7 @@ Note: Uses Go 1.22+ path value syntax (`r.PathValue("id")`) and method-aware rou
 ### Step 5: Write webhook.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package httpapi
 
 import (
@@ -2446,7 +2446,7 @@ git commit -m "feat(httpapi): implement REST API and webhook handlers"
 ### Step 1: Write daemon.go
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package nexus
 
 import (

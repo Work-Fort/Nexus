@@ -55,7 +55,7 @@ git commit -m "test(e2e): init separate Go module for E2E tests"
 Create `tests/e2e/harness/harness.go` with these components:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package harness
 
 import (
@@ -622,7 +622,7 @@ git commit -m "test(e2e): add HTTP Client to harness with VM/Drive/Device operat
 Create `tests/e2e/nexus_test.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package e2e
 
 import (

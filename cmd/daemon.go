@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package cmd
 
 import (
@@ -22,9 +22,9 @@ import (
 	"github.com/Work-Fort/Nexus/internal/infra/cni"
 	"github.com/Work-Fort/Nexus/internal/infra/dns"
 	ctrd "github.com/Work-Fort/Nexus/internal/infra/containerd"
+	"github.com/Work-Fort/Nexus/internal/infra"
 	"github.com/Work-Fort/Nexus/internal/infra/httpapi"
 	nexusmcp "github.com/Work-Fort/Nexus/internal/infra/mcp"
-	"github.com/Work-Fort/Nexus/internal/infra/sqlite"
 	"github.com/Work-Fort/Nexus/internal/infra/storage"
 	"github.com/Work-Fort/Nexus/pkg/btrfs"
 )
@@ -36,13 +36,16 @@ func newDaemonCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			addr := viper.GetString("listen")
-			dbPath := filepath.Join(config.GlobalPaths.StateDir, "nexus.db")
+			dsn := viper.GetString("db")
+			if dsn == "" {
+				dsn = filepath.Join(config.GlobalPaths.StateDir, "nexus.db")
+			}
 			socketPath := viper.GetString("containerd-socket")
 			namespace := viper.GetString("namespace")
 
-			store, err := sqlite.Open(dbPath)
+			store, err := infra.Open(dsn)
 			if err != nil {
-				log.Error("failed to open database", "path", dbPath, "err", err)
+				log.Error("failed to open database", "dsn", dsn, "err", err)
 				return fmt.Errorf("open database: %w", err)
 			}
 			defer store.Close()
@@ -127,7 +130,7 @@ func newDaemonCmd() *cobra.Command {
 				dnsManager = &dns.NoopManager{}
 			}
 
-			log.Info("nexus starting", "addr", addr, "db", dbPath, "containerd", socketPath, "namespace", namespace)
+			log.Info("nexus starting", "addr", addr, "db", dsn, "containerd", socketPath, "namespace", namespace)
 
 			if logFile != nil {
 				defer logFile.Close()
@@ -241,6 +244,7 @@ func newDaemonCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().String("db", "", "Database DSN (postgres://... or SQLite path; default: $XDG_STATE_HOME/nexus/nexus.db)")
 	cmd.Flags().String("listen", config.DefaultListenAddr, "HTTP listen address")
 	cmd.Flags().String("containerd-socket", config.DefaultSocketPath, "containerd socket path")
 	cmd.Flags().String("namespace", config.DefaultNamespace, "containerd namespace")
@@ -258,7 +262,7 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("coredns-bin", config.DefaultCoreDNSBin, "Path to CoreDNS binary")
 	cmd.Flags().String("dns-helper", config.DefaultDNSHelper, "Path to nexus-dns helper binary (cap_net_bind_service)")
 
-	for _, name := range []string{"listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "dns-enabled", "coredns-bin", "dns-helper"} {
+	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "dns-enabled", "coredns-bin", "dns-helper"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}

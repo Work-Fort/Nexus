@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package domain defines the core types and port interfaces for Nexus.
 // This package has zero dependencies on infrastructure — it defines

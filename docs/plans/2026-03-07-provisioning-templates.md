@@ -22,7 +22,7 @@
 Create `internal/domain/template.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package domain
 
 import "time"
@@ -123,7 +123,7 @@ git commit -m "feat(domain): add Template type, TemplateStore interface, VM init
 Create `internal/infra/sqlite/migrations/010_add_templates.sql`:
 
 ```sql
--- SPDX-License-Identifier: Apache-2.0
+-- SPDX-License-Identifier: GPL-3.0-or-later
 
 -- +goose Up
 CREATE TABLE templates (
@@ -146,7 +146,7 @@ DROP TABLE IF EXISTS templates;
 Create `internal/infra/sqlite/migrations/011_add_vm_init.sql`:
 
 ```sql
--- SPDX-License-Identifier: Apache-2.0
+-- SPDX-License-Identifier: GPL-3.0-or-later
 
 -- +goose Up
 ALTER TABLE vms ADD COLUMN init INTEGER NOT NULL DEFAULT 0;

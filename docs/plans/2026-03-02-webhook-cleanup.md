@@ -143,7 +143,7 @@ This is the main migration task. Replace the entire `internal/infra/httpapi/hand
 Write the complete file `internal/infra/httpapi/handler.go`:
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package httpapi implements the Nexus HTTP API with OpenAPI 3.1 documentation.
 package httpapi

@@ -56,7 +56,7 @@ mkdir -p /home/kazw/Work/WorkFort/nexus/lead/internal/infra/mcp
 **Step 2: Create `internal/infra/mcp/handler.go`**
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package mcp implements an MCP server adapter for the Nexus API.
 package mcp
@@ -836,7 +836,7 @@ mapping without needing a real Nexus daemon.
 **Step 1: Create `internal/infra/mcp/handler_test.go`**
 
 ```go
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 package mcp_test
 
 import (

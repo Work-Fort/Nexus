@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package bytesize parses human-readable byte size strings (e.g. "1G", "500Mi")
 // into uint64 byte counts. Supports both SI (K, M, G, T) and IEC (Ki, Mi, Gi, Ti)
