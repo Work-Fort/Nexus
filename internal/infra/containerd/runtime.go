@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -30,15 +31,18 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
+	"github.com/Work-Fort/Nexus/internal/config"
 	"github.com/Work-Fort/Nexus/internal/domain"
+	"github.com/Work-Fort/Nexus/pkg/btrfs"
 )
 
 // Runtime implements domain.Runtime backed by containerd.
 type Runtime struct {
-	client      *client.Client
-	namespace   string
-	snapshotter string
-	quotaHelper string // path to nexus-quota binary, empty to skip
+	client       *client.Client
+	namespace    string
+	snapshotter  string
+	quotaHelper  string // path to nexus-quota binary, empty to skip
+	snapshotsDir string // on-disk path for rootfs snapshots
 }
 
 // New connects to containerd at the given socket path and returns a Runtime
@@ -52,10 +56,11 @@ func New(socketPath, namespace, snapshotter, quotaHelper string) (*Runtime, erro
 		snapshotter = "overlayfs"
 	}
 	return &Runtime{
-		client:      c,
-		namespace:   namespace,
-		snapshotter: snapshotter,
-		quotaHelper: quotaHelper,
+		client:       c,
+		namespace:    namespace,
+		snapshotter:  snapshotter,
+		quotaHelper:  quotaHelper,
+		snapshotsDir: filepath.Join(config.GlobalPaths.StateDir, "snapshots"),
 	}, nil
 }
 
@@ -363,6 +368,68 @@ func (r *Runtime) setSnapshotQuota(ctx context.Context, snapName string, sizeByt
 		return fmt.Errorf("%s set-limit %s %d: %s: %w", r.quotaHelper, subvolPath, sizeBytes, string(out), err)
 	}
 
+	return nil
+}
+
+// SnapshotRootfs creates a read-only btrfs snapshot of the container's rootfs
+// writable layer. Works while the VM is running (crash-consistent).
+func (r *Runtime) SnapshotRootfs(ctx context.Context, containerID, snapshotName string) error {
+	ctx = r.nsCtx(ctx)
+	snapshotter := r.client.SnapshotService(r.snapshotter)
+
+	snapKey := containerID + "-snap"
+	mounts, err := snapshotter.Mounts(ctx, snapKey)
+	if err != nil {
+		return fmt.Errorf("get rootfs mounts for %s: %w", containerID, err)
+	}
+	if len(mounts) == 0 {
+		return fmt.Errorf("no mounts for snapshot %s", snapKey)
+	}
+
+	srcPath := mounts[0].Source
+	destPath := filepath.Join(r.snapshotsDir, snapshotName)
+	if err := os.MkdirAll(r.snapshotsDir, 0755); err != nil {
+		return fmt.Errorf("create rootfs snapshots dir: %w", err)
+	}
+	if err := btrfs.CreateSnapshot(srcPath, destPath, true); err != nil {
+		return fmt.Errorf("snapshot rootfs %s: %w", containerID, err)
+	}
+	return nil
+}
+
+// RestoreRootfs replaces the container's rootfs writable layer with a writable
+// copy of the named snapshot. The container must be stopped.
+func (r *Runtime) RestoreRootfs(ctx context.Context, snapshotName, containerID string) error {
+	ctx = r.nsCtx(ctx)
+	snapshotter := r.client.SnapshotService(r.snapshotter)
+
+	snapKey := containerID + "-snap"
+	mounts, err := snapshotter.Mounts(ctx, snapKey)
+	if err != nil {
+		return fmt.Errorf("get rootfs mounts for %s: %w", containerID, err)
+	}
+	if len(mounts) == 0 {
+		return fmt.Errorf("no mounts for snapshot %s", snapKey)
+	}
+
+	volPath := mounts[0].Source
+	srcSnap := filepath.Join(r.snapshotsDir, snapshotName)
+
+	if err := btrfs.DeleteSubvolume(volPath); err != nil {
+		return fmt.Errorf("delete rootfs for restore: %w", err)
+	}
+	if err := btrfs.CreateSnapshot(srcSnap, volPath, false); err != nil {
+		return fmt.Errorf("restore rootfs from snapshot: %w", err)
+	}
+	return nil
+}
+
+// DeleteRootfsSnapshot removes a rootfs snapshot.
+func (r *Runtime) DeleteRootfsSnapshot(_ context.Context, snapshotName string) error {
+	snapPath := filepath.Join(r.snapshotsDir, snapshotName)
+	if err := btrfs.DeleteSubvolume(snapPath); err != nil {
+		return fmt.Errorf("delete rootfs snapshot %s: %w", snapshotName, err)
+	}
 	return nil
 }
 
