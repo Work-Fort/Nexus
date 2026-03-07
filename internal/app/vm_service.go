@@ -200,6 +200,16 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		createOpts = append(createOpts, domain.WithRootSize(params.RootSize))
 	}
 
+	// Bind-mount node_exporter when metrics are configured.
+	if s.config.Metrics.NodeExporterPath != "" {
+		createOpts = append(createOpts, domain.WithMounts([]domain.Mount{
+			{
+				HostPath:      s.config.Metrics.NodeExporterPath,
+				ContainerPath: "/usr/local/bin/node_exporter",
+			},
+		}))
+	}
+
 	// Init injection: detect distro, resolve template, write init script.
 	if params.Init {
 		if s.templateStore == nil {
@@ -267,6 +277,11 @@ func (s *VMService) StartVM(ctx context.Context, ref string) error {
 	}
 
 	log.Info("vm started", "id", vm.ID)
+
+	// Start node_exporter for VMs without init (init VMs use supervised service).
+	if !vm.Init {
+		s.execStartMetrics(vm.ID)
+	}
 
 	if vm.Shell == "" {
 		go func() {
@@ -862,6 +877,13 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 		}
 	}
 
+	if s.config.Metrics.NodeExporterPath != "" {
+		mounts = append(mounts, domain.Mount{
+			HostPath:      s.config.Metrics.NodeExporterPath,
+			ContainerPath: "/usr/local/bin/node_exporter",
+		})
+	}
+
 	var deviceInfos []domain.DeviceInfo
 	if s.deviceStore != nil {
 		devices, err := s.deviceStore.GetDevicesByVM(ctx, vm.ID)
@@ -909,14 +931,19 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 	}
 	if vm.Init {
 		script := vm.ScriptOverride
+		distro := ""
 		if script == "" && s.templateStore != nil && vm.TemplateID != "" {
 			tmpl, err := s.templateStore.GetTemplate(ctx, vm.TemplateID)
 			if err != nil {
 				return fmt.Errorf("get template for init: %w", err)
 			}
 			script = tmpl.Script
+			distro = tmpl.Distro
 		}
 		if script != "" {
+			if distro != "" && s.config.Metrics.NodeExporterPath != "" {
+				script = injectMetricsService(script, distro, s.config.Metrics)
+			}
 			path, err := s.writeInitScript(vm.ID, script)
 			if err != nil {
 				return fmt.Errorf("write init script: %w", err)
@@ -1122,7 +1149,12 @@ func (s *VMService) resolveInitScript(ctx context.Context, vmID, image, template
 		}
 	}
 
-	path, err := s.writeInitScript(vmID, tmpl.Script)
+	script := tmpl.Script
+	if s.config.Metrics.NodeExporterPath != "" {
+		script = injectMetricsService(script, tmpl.Distro, s.config.Metrics)
+	}
+
+	path, err := s.writeInitScript(vmID, script)
 	if err != nil {
 		return "", "", err
 	}
@@ -1141,4 +1173,97 @@ func (s *VMService) writeInitScript(vmID, script string) (string, error) {
 		return "", fmt.Errorf("write init script: %w", err)
 	}
 	return path, nil
+}
+
+// injectMetricsService inserts a node_exporter service definition into an
+// init script, before the final `exec /sbin/init` line. The service is
+// managed by the VM's init system (OpenRC or systemd) so it gets supervised.
+func injectMetricsService(script, distro string, mc MetricsConfig) string {
+	snippet := metricsServiceSnippet(distro, mc)
+	if snippet == "" {
+		return script
+	}
+
+	// Insert before the last `exec` line (typically `exec /sbin/init`).
+	lines := strings.Split(script, "\n")
+	var result []string
+	inserted := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !inserted && strings.HasPrefix(trimmed, "exec ") {
+			result = append(result, "", snippet, "")
+			inserted = true
+		}
+		result = append(result, line)
+	}
+	if !inserted {
+		// No exec line found — append at end.
+		result = append(result, "", snippet)
+	}
+	return strings.Join(result, "\n")
+}
+
+// metricsServiceSnippet returns distro-specific shell commands to install a
+// node_exporter service that the init system will start and supervise.
+func metricsServiceSnippet(distro string, mc MetricsConfig) string {
+	args := fmt.Sprintf("--web.listen-address=:%d --collector.disable-defaults", mc.ListenPort)
+	for _, c := range mc.Collectors {
+		args += " --collector." + c
+	}
+
+	switch distro {
+	case "alpine":
+		return fmt.Sprintf(`# node_exporter service (injected by nexus)
+cat > /etc/init.d/node_exporter << 'NEXUS_NE_EOF'
+#!/sbin/openrc-run
+command="/usr/local/bin/node_exporter"
+command_args="%s"
+command_background=true
+pidfile="/run/node_exporter.pid"
+NEXUS_NE_EOF
+chmod +x /etc/init.d/node_exporter
+rc-update add node_exporter default`, args)
+
+	case "ubuntu", "debian", "arch":
+		return fmt.Sprintf(`# node_exporter service (injected by nexus)
+mkdir -p /etc/systemd/system
+cat > /etc/systemd/system/node_exporter.service << 'NEXUS_NE_EOF'
+[Unit]
+Description=Node Exporter
+[Service]
+ExecStart=/usr/local/bin/node_exporter %s
+[Install]
+WantedBy=multi-user.target
+NEXUS_NE_EOF
+systemctl enable node_exporter`, args)
+
+	default:
+		return ""
+	}
+}
+
+// execStartMetrics fires node_exporter via exec inside a running VM.
+// Used as a fallback for VMs that don't have init enabled.
+func (s *VMService) execStartMetrics(vmID string) {
+	if s.config.Metrics.NodeExporterPath == "" {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		cmd := []string{
+			"/usr/local/bin/node_exporter",
+			fmt.Sprintf("--web.listen-address=:%d", s.config.Metrics.ListenPort),
+			"--collector.disable-defaults",
+		}
+		for _, c := range s.config.Metrics.Collectors {
+			cmd = append(cmd, "--collector."+c)
+		}
+
+		if _, err := s.runtime.Exec(ctx, vmID, cmd); err != nil {
+			log.Warn("metrics exec failed", "vm", vmID, "err", err)
+		}
+	}()
 }

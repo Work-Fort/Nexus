@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +170,8 @@ type mockRuntime struct {
 	detectDistro string
 	lastMounts   []domain.Mount
 	initScript   string // last InitScriptPath passed to Create
+	execCalled   bool
+	lastExecCmd  []string
 }
 
 func newMockRuntime() *mockRuntime {
@@ -204,10 +208,21 @@ func (m *mockRuntime) Delete(_ context.Context, id string) error {
 }
 
 func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.ExecResult, error) {
+	m.execCalled = true
+	m.lastExecCmd = cmd
 	if m.execErr != nil {
 		return nil, m.execErr
 	}
 	return m.execResult, nil
+}
+
+func (m *mockRuntime) hasMount(containerPath string) bool {
+	for _, mount := range m.lastMounts {
+		if mount.ContainerPath == containerPath {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *mockRuntime) ExecStream(_ context.Context, id string, cmd []string, stdout, stderr io.Writer) (int, error) {
@@ -2124,4 +2139,215 @@ func TestCreateVMWithInit(t *testing.T) {
 			t.Errorf("err = %v, want ErrValidation", err)
 		}
 	})
+}
+
+func TestCreateVM_MetricsBindMount(t *testing.T) {
+	t.Run("adds bind mount when node_exporter path set", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
+			app.WithConfig(app.VMServiceConfig{
+				DefaultImage:   "alpine:latest",
+				DefaultRuntime: "io.containerd.runc.v2",
+				Metrics: app.MetricsConfig{
+					NodeExporterPath: "/opt/nexus/bin/node_exporter",
+					ListenPort:       9100,
+					Collectors:       []string{"cpu", "meminfo"},
+				},
+			}),
+		)
+
+		_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+			Name: "metrics-test",
+		})
+		if err != nil {
+			t.Fatalf("CreateVM: %v", err)
+		}
+
+		if !rt.hasMount("/usr/local/bin/node_exporter") {
+			t.Error("expected node_exporter bind mount in create opts")
+		}
+	})
+
+	t.Run("skips bind mount when node_exporter path empty", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
+			app.WithConfig(app.VMServiceConfig{
+				DefaultImage:   "alpine:latest",
+				DefaultRuntime: "io.containerd.runc.v2",
+			}),
+		)
+
+		_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+			Name: "no-metrics",
+		})
+		if err != nil {
+			t.Fatalf("CreateVM: %v", err)
+		}
+		if rt.hasMount("/usr/local/bin/node_exporter") {
+			t.Error("unexpected node_exporter bind mount")
+		}
+	})
+}
+
+func TestStartVM_MetricsExec(t *testing.T) {
+	t.Run("execs node_exporter for non-init VMs when metrics enabled", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		// Set execResult to return "root:..." so SyncShell doesn't fail.
+		rt.execResult = &domain.ExecResult{ExitCode: 0, Stdout: "root:x:0:0:root:/root:/bin/sh\n"}
+
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
+			app.WithConfig(app.VMServiceConfig{
+				DefaultImage:   "alpine:latest",
+				DefaultRuntime: "io.containerd.runc.v2",
+				Metrics: app.MetricsConfig{
+					NodeExporterPath: "/opt/nexus/bin/node_exporter",
+					ListenPort:       9100,
+					Collectors:       []string{"cpu", "meminfo"},
+				},
+			}),
+		)
+
+		vm := &domain.VM{
+			ID: "vm-1", Name: "test", State: domain.VMStateStopped,
+		}
+		store.vms[vm.ID] = vm
+		rt.containers[vm.ID] = false
+
+		if err := svc.StartVM(context.Background(), "vm-1"); err != nil {
+			t.Fatalf("StartVM: %v", err)
+		}
+
+		// Give the background goroutine a moment to fire.
+		time.Sleep(100 * time.Millisecond)
+
+		if !rt.execCalled {
+			t.Error("expected exec to be called for node_exporter")
+		}
+		if len(rt.lastExecCmd) == 0 || rt.lastExecCmd[0] != "/usr/local/bin/node_exporter" {
+			t.Errorf("exec cmd = %v, want node_exporter", rt.lastExecCmd)
+		}
+	})
+
+	t.Run("skips exec for init VMs (supervised by init system)", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		rt.execResult = &domain.ExecResult{ExitCode: 0, Stdout: "root:x:0:0:root:/root:/bin/sh\n"}
+
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
+			app.WithConfig(app.VMServiceConfig{
+				DefaultImage:   "alpine:latest",
+				DefaultRuntime: "io.containerd.runc.v2",
+				Metrics: app.MetricsConfig{
+					NodeExporterPath: "/opt/nexus/bin/node_exporter",
+					ListenPort:       9100,
+					Collectors:       []string{"cpu"},
+				},
+			}),
+		)
+
+		vm := &domain.VM{
+			ID: "vm-2", Name: "init-vm", State: domain.VMStateStopped,
+			Init: true, TemplateID: "tpl-1",
+		}
+		store.vms[vm.ID] = vm
+		rt.containers[vm.ID] = false
+
+		if err := svc.StartVM(context.Background(), "vm-2"); err != nil {
+			t.Fatalf("StartVM: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Exec might be called for SyncShell but NOT for node_exporter.
+		// The exec for init VMs is skipped — node_exporter managed by init.
+		// We can check the last exec cmd isn't node_exporter.
+		if len(rt.lastExecCmd) > 0 && rt.lastExecCmd[0] == "/usr/local/bin/node_exporter" {
+			t.Error("init VM should not exec-start node_exporter (supervised by init)")
+		}
+	})
+
+	t.Run("skips exec when metrics disabled", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		rt.execResult = &domain.ExecResult{ExitCode: 0, Stdout: "root:x:0:0:root:/root:/bin/sh\n"}
+
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+		vm := &domain.VM{
+			ID: "vm-3", Name: "no-metrics", State: domain.VMStateStopped,
+		}
+		store.vms[vm.ID] = vm
+		rt.containers[vm.ID] = false
+
+		if err := svc.StartVM(context.Background(), "vm-3"); err != nil {
+			t.Fatalf("StartVM: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Exec is called for SyncShell (getent passwd root), not for node_exporter.
+		if len(rt.lastExecCmd) > 0 && rt.lastExecCmd[0] == "/usr/local/bin/node_exporter" {
+			t.Error("exec should not start node_exporter when metrics disabled")
+		}
+	})
+}
+
+func TestInjectMetricsService(t *testing.T) {
+	// This is an internal function test using the exported CreateVM path.
+	// We verify the init script written contains the node_exporter service.
+	store := newMockStore()
+	rt := newMockRuntime()
+	ts := newMockTemplateStore()
+	ts.templates["tpl-alpine"] = &domain.Template{
+		ID:     "tpl-alpine",
+		Name:   "alpine-openrc",
+		Distro: "alpine",
+		Script: "#!/bin/sh\napk add --no-cache openrc\nexec /sbin/init",
+	}
+
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
+		app.WithConfig(app.VMServiceConfig{
+			DefaultImage:   "alpine:latest",
+			DefaultRuntime: "io.containerd.runc.v2",
+			Metrics: app.MetricsConfig{
+				NodeExporterPath: "/opt/nexus/bin/node_exporter",
+				ListenPort:       9100,
+				Collectors:       []string{"cpu", "meminfo"},
+			},
+		}),
+		app.WithTemplateStore(ts),
+	)
+
+	_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+		Name:         "inject-test",
+		Init:         true,
+		TemplateName: "alpine-openrc",
+	})
+	if err != nil {
+		t.Fatalf("CreateVM: %v", err)
+	}
+
+	// The init script path was captured by mockRuntime.
+	if rt.initScript == "" {
+		t.Fatal("expected init script to be set")
+	}
+
+	// Read the written script and verify it contains the service snippet.
+	data, err := os.ReadFile(rt.initScript)
+	if err != nil {
+		t.Fatalf("read init script: %v", err)
+	}
+	script := string(data)
+	if !strings.Contains(script, "/etc/init.d/node_exporter") {
+		t.Error("expected OpenRC service file in init script")
+	}
+	if !strings.Contains(script, "rc-update add node_exporter") {
+		t.Error("expected rc-update in init script")
+	}
+	if !strings.Contains(script, "--collector.cpu") {
+		t.Error("expected collector flags in init script")
+	}
 }
