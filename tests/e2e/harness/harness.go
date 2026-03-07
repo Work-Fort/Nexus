@@ -23,10 +23,15 @@ import (
 // --- Daemon ---
 
 type daemonConfig struct {
-	networkEnabled bool
-	dnsEnabled     bool
-	runtime        string
-	drivesDir      string
+	networkEnabled  bool
+	dnsEnabled      bool
+	runtime         string
+	drivesDir       string
+	snapshotter     string
+	baseDir         string // base for temp XDG dir (default: os default)
+	logLevel        string // daemon log level (default: disabled)
+	quotaHelperSet  bool   // true if quotaHelper was explicitly set
+	quotaHelper     string // quota helper binary (empty to disable)
 }
 
 type DaemonOption func(*daemonConfig)
@@ -47,6 +52,22 @@ func WithDrivesDir(dir string) DaemonOption {
 	return func(c *daemonConfig) { c.drivesDir = dir }
 }
 
+func WithSnapshotter(snapshotter string) DaemonOption {
+	return func(c *daemonConfig) { c.snapshotter = snapshotter }
+}
+
+func WithBaseDir(dir string) DaemonOption {
+	return func(c *daemonConfig) { c.baseDir = dir }
+}
+
+func WithLogLevel(level string) DaemonOption {
+	return func(c *daemonConfig) { c.logLevel = level }
+}
+
+func WithQuotaHelper(helper string) DaemonOption {
+	return func(c *daemonConfig) { c.quotaHelperSet = true; c.quotaHelper = helper }
+}
+
 type Daemon struct {
 	cmd       *exec.Cmd
 	addr      string
@@ -61,18 +82,22 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 		o(cfg)
 	}
 
-	xdgDir, err := os.MkdirTemp("", "nexus-e2e-*")
+	xdgDir, err := os.MkdirTemp(cfg.baseDir, "nexus-e2e-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
 
 	namespace := randomNamespace()
 
+	logLevel := "disabled"
+	if cfg.logLevel != "" {
+		logLevel = cfg.logLevel
+	}
 	args := []string{
 		"daemon",
 		"--listen", addr,
 		"--namespace", namespace,
-		"--log-level", "disabled",
+		"--log-level", logLevel,
 		fmt.Sprintf("--network-enabled=%t", cfg.networkEnabled),
 		fmt.Sprintf("--dns-enabled=%t", cfg.dnsEnabled),
 	}
@@ -81,6 +106,12 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 	}
 	if cfg.drivesDir != "" {
 		args = append(args, "--drives-dir", cfg.drivesDir)
+	}
+	if cfg.snapshotter != "" {
+		args = append(args, "--snapshotter", cfg.snapshotter)
+	}
+	if cfg.quotaHelperSet {
+		args = append(args, "--quota-helper", cfg.quotaHelper)
 	}
 
 	var stderrBuf bytes.Buffer
@@ -142,6 +173,9 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 	}
 	if cfg.drivesDir != "" {
 		args = append(args, "--drives-dir", cfg.drivesDir)
+	}
+	if cfg.snapshotter != "" {
+		args = append(args, "--snapshotter", cfg.snapshotter)
 	}
 
 	var stderrBuf bytes.Buffer
@@ -371,7 +405,12 @@ type APIError struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-func (e *APIError) Error() string { return fmt.Sprintf("%d: %s", e.Status, e.Title) }
+func (e *APIError) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("%d: %s: %s", e.Status, e.Title, e.Detail)
+	}
+	return fmt.Sprintf("%d: %s", e.Status, e.Title)
+}
 
 // --- VM operations ---
 
@@ -766,6 +805,74 @@ func (c *Client) ImportVM(archive []byte, strictDevices bool) (*ImportResponse, 
 	}
 	var result ImportResponse
 	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+// --- Snapshot operations ---
+
+type Snapshot struct {
+	ID        string `json:"id"`
+	VMID      string `json:"vm_id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+}
+
+func (c *Client) CreateSnapshot(vmID, name string) (*Snapshot, error) {
+	body := fmt.Sprintf(`{"name":%q}`, name)
+	resp, err := c.post(fmt.Sprintf("/v1/vms/%s/snapshots", vmID), body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var s Snapshot
+	return &s, json.NewDecoder(resp.Body).Decode(&s)
+}
+
+func (c *Client) ListSnapshots(vmID string) ([]*Snapshot, error) {
+	resp, err := c.get(fmt.Sprintf("/v1/vms/%s/snapshots", vmID))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	var snaps []*Snapshot
+	return snaps, json.NewDecoder(resp.Body).Decode(&snaps)
+}
+
+func (c *Client) DeleteSnapshot(vmID, snapRef string) error {
+	resp, err := c.delete(fmt.Sprintf("/v1/vms/%s/snapshots/%s", vmID, snapRef))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkStatus(resp, http.StatusNoContent)
+}
+
+func (c *Client) RestoreSnapshot(vmID, snapRef string) error {
+	resp, err := c.post(fmt.Sprintf("/v1/vms/%s/snapshots/%s/restore", vmID, snapRef), "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkStatus(resp, http.StatusNoContent)
+}
+
+func (c *Client) CloneSnapshot(vmID, snapRef, newName string) (*VM, error) {
+	body := fmt.Sprintf(`{"name":%q}`, newName)
+	resp, err := c.post(fmt.Sprintf("/v1/vms/%s/snapshots/%s/clone", vmID, snapRef), body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
 }
 
 // --- Prometheus operations ---

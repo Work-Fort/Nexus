@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,18 +30,15 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
-	"github.com/Work-Fort/Nexus/internal/config"
 	"github.com/Work-Fort/Nexus/internal/domain"
-	"github.com/Work-Fort/Nexus/pkg/btrfs"
 )
 
 // Runtime implements domain.Runtime backed by containerd.
 type Runtime struct {
-	client       *client.Client
-	namespace    string
-	snapshotter  string
-	quotaHelper  string // path to nexus-quota binary, empty to skip
-	snapshotsDir string // on-disk path for rootfs snapshots
+	client      *client.Client
+	namespace   string
+	snapshotter string
+	quotaHelper string // path to nexus-quota binary, empty to skip
 }
 
 // New connects to containerd at the given socket path and returns a Runtime
@@ -56,11 +52,10 @@ func New(socketPath, namespace, snapshotter, quotaHelper string) (*Runtime, erro
 		snapshotter = "overlayfs"
 	}
 	return &Runtime{
-		client:       c,
-		namespace:    namespace,
-		snapshotter:  snapshotter,
-		quotaHelper:  quotaHelper,
-		snapshotsDir: filepath.Join(config.GlobalPaths.StateDir, "snapshots"),
+		client:      c,
+		namespace:   namespace,
+		snapshotter: snapshotter,
+		quotaHelper: quotaHelper,
 	}, nil
 }
 
@@ -89,7 +84,10 @@ func (r *Runtime) nsCtx(ctx context.Context) context.Context {
 func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, opts ...domain.CreateOpt) error {
 	ctx = r.nsCtx(ctx)
 
-	img, err := r.client.Pull(ctx, image, client.WithPullUnpack)
+	img, err := r.client.Pull(ctx, image,
+		client.WithPullUnpack,
+		client.WithPullSnapshotter(r.snapshotter),
+	)
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", image, err)
 	}
@@ -275,7 +273,10 @@ func (r *Runtime) SetSnapshotQuota(ctx context.Context, snapName string, sizeByt
 func (r *Runtime) DetectDistro(ctx context.Context, image string) (string, error) {
 	ctx = r.nsCtx(ctx)
 
-	img, err := r.client.Pull(ctx, image, client.WithPullUnpack)
+	img, err := r.client.Pull(ctx, image,
+		client.WithPullUnpack,
+		client.WithPullSnapshotter(r.snapshotter),
+	)
 	if err != nil {
 		return "", fmt.Errorf("pull image %s: %w", image, err)
 	}
@@ -371,66 +372,85 @@ func (r *Runtime) setSnapshotQuota(ctx context.Context, snapName string, sizeByt
 	return nil
 }
 
-// SnapshotRootfs creates a read-only btrfs snapshot of the container's rootfs
-// writable layer. Works while the VM is running (crash-consistent).
+// SnapshotRootfs creates a read-only snapshot of the container's rootfs
+// writable layer using containerd's snapshotter API. This delegates the
+// actual copy-on-write operation to containerd (which has access to its
+// internal data directories), making it work with any snapshotter backend.
+//
+// Internally: commits the active snapshot to a committed snapshot under
+// snapshotName, then prepares a fresh active snapshot so the container
+// keeps a writable layer. A temporary lease protects the committed
+// snapshot from GC between commit and prepare.
 func (r *Runtime) SnapshotRootfs(ctx context.Context, containerID, snapshotName string) error {
 	ctx = r.nsCtx(ctx)
-	snapshotter := r.client.SnapshotService(r.snapshotter)
 
-	snapKey := containerID + "-snap"
-	mounts, err := snapshotter.Mounts(ctx, snapKey)
+	// Create a temporary lease to protect the committed snapshot from GC
+	// between the Commit (which removes the active snapshot) and the
+	// Prepare (which creates a new active referencing the committed one).
+	ls := r.client.LeasesService()
+	lease, err := ls.Create(ctx, leases.WithRandomID(), leases.WithExpiration(1*time.Minute))
 	if err != nil {
-		return fmt.Errorf("get rootfs mounts for %s: %w", containerID, err)
+		return fmt.Errorf("create snapshot lease: %w", err)
 	}
-	if len(mounts) == 0 {
-		return fmt.Errorf("no mounts for snapshot %s", snapKey)
+	defer ls.Delete(ctx, lease) //nolint:errcheck
+
+	leasedCtx := leases.WithLease(ctx, lease.ID)
+	ss := r.client.SnapshotService(r.snapshotter)
+
+	activeKey := containerID + "-snap"
+
+	// Commit the active snapshot to a read-only committed snapshot.
+	// This creates a COW copy and removes the active snapshot.
+	if err := ss.Commit(leasedCtx, snapshotName, activeKey); err != nil {
+		return fmt.Errorf("commit rootfs snapshot %s: %w", containerID, err)
 	}
 
-	srcPath := mounts[0].Source
-	destPath := filepath.Join(r.snapshotsDir, snapshotName)
-	if err := os.MkdirAll(r.snapshotsDir, 0755); err != nil {
-		return fmt.Errorf("create rootfs snapshots dir: %w", err)
+	// Re-create the active snapshot from the committed one so the container
+	// retains a writable rootfs layer.
+	if _, err := ss.Prepare(leasedCtx, activeKey, snapshotName); err != nil {
+		return fmt.Errorf("re-prepare active snapshot %s: %w", containerID, err)
 	}
-	if err := btrfs.CreateSnapshot(srcPath, destPath, true); err != nil {
-		return fmt.Errorf("snapshot rootfs %s: %w", containerID, err)
-	}
+
 	return nil
 }
 
-// RestoreRootfs replaces the container's rootfs writable layer with a writable
-// copy of the named snapshot. The container must be stopped.
+// RestoreRootfs replaces the container's rootfs writable layer with a fresh
+// copy of the named snapshot. The container must be stopped. A temporary
+// lease protects the committed snapshot from GC between remove and prepare.
 func (r *Runtime) RestoreRootfs(ctx context.Context, snapshotName, containerID string) error {
 	ctx = r.nsCtx(ctx)
-	snapshotter := r.client.SnapshotService(r.snapshotter)
 
-	snapKey := containerID + "-snap"
-	mounts, err := snapshotter.Mounts(ctx, snapKey)
+	ls := r.client.LeasesService()
+	lease, err := ls.Create(ctx, leases.WithRandomID(), leases.WithExpiration(1*time.Minute))
 	if err != nil {
-		return fmt.Errorf("get rootfs mounts for %s: %w", containerID, err)
+		return fmt.Errorf("create restore lease: %w", err)
 	}
-	if len(mounts) == 0 {
-		return fmt.Errorf("no mounts for snapshot %s", snapKey)
+	defer ls.Delete(ctx, lease) //nolint:errcheck
+
+	leasedCtx := leases.WithLease(ctx, lease.ID)
+	ss := r.client.SnapshotService(r.snapshotter)
+
+	activeKey := containerID + "-snap"
+
+	// Remove the current active snapshot. After this, the committed
+	// snapshotName has no children — the lease prevents GC collection.
+	if err := ss.Remove(leasedCtx, activeKey); err != nil {
+		return fmt.Errorf("remove active snapshot for restore: %w", err)
 	}
 
-	volPath := mounts[0].Source
-	srcSnap := filepath.Join(r.snapshotsDir, snapshotName)
+	// Create a new active snapshot from the saved committed snapshot.
+	if _, err := ss.Prepare(leasedCtx, activeKey, snapshotName); err != nil {
+		return fmt.Errorf("restore rootfs from snapshot %s: %w", snapshotName, err)
+	}
 
-	if err := btrfs.DeleteSubvolume(volPath); err != nil {
-		return fmt.Errorf("delete rootfs for restore: %w", err)
-	}
-	if err := btrfs.CreateSnapshot(srcSnap, volPath, false); err != nil {
-		return fmt.Errorf("restore rootfs from snapshot: %w", err)
-	}
 	return nil
 }
 
-// DeleteRootfsSnapshot removes a rootfs snapshot.
-func (r *Runtime) DeleteRootfsSnapshot(_ context.Context, snapshotName string) error {
-	snapPath := filepath.Join(r.snapshotsDir, snapshotName)
-	if err := btrfs.DeleteSubvolume(snapPath); err != nil {
-		return fmt.Errorf("delete rootfs snapshot %s: %w", snapshotName, err)
-	}
-	return nil
+// DeleteRootfsSnapshot removes a rootfs snapshot from containerd's snapshotter.
+func (r *Runtime) DeleteRootfsSnapshot(ctx context.Context, snapshotName string) error {
+	ctx = r.nsCtx(ctx)
+	ss := r.client.SnapshotService(r.snapshotter)
+	return ss.Remove(ctx, snapshotName)
 }
 
 // Start creates and starts a task for the given container. If a stale task
@@ -723,7 +743,10 @@ func (r *Runtime) ExportImage(ctx context.Context, imageRef string, w io.Writer)
 		return fmt.Errorf("remove image before export re-pull: %w", err)
 	}
 
-	img, err := r.client.Pull(leasedCtx, imageRef, client.WithPullUnpack)
+	img, err := r.client.Pull(leasedCtx, imageRef,
+		client.WithPullUnpack,
+		client.WithPullSnapshotter(r.snapshotter),
+	)
 	if err != nil {
 		return fmt.Errorf("pull image for export %s: %w", imageRef, err)
 	}
