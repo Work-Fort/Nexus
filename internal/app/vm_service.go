@@ -42,6 +42,7 @@ type VMService struct {
 	deviceStore   domain.DeviceStore
 	dns           domain.DNSManager
 	templateStore domain.TemplateStore
+	snapshotStore domain.SnapshotStore
 	config        VMServiceConfig
 }
 
@@ -95,6 +96,13 @@ func WithTemplateStore(ts domain.TemplateStore) func(*VMService) {
 func WithDNS(dns domain.DNSManager) func(*VMService) {
 	return func(s *VMService) {
 		s.dns = dns
+	}
+}
+
+// WithSnapshotStore enables snapshot management.
+func WithSnapshotStore(ss domain.SnapshotStore) func(*VMService) {
+	return func(s *VMService) {
+		s.snapshotStore = ss
 	}
 }
 

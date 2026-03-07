@@ -16,6 +16,7 @@ type Store interface {
 	domain.DriveStore
 	domain.DeviceStore
 	domain.TemplateStore
+	domain.SnapshotStore
 	io.Closer
 }
 
