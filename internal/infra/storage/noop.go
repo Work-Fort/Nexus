@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/Work-Fort/Nexus/internal/domain"
 )
 
 // NoopStorage implements domain.Storage using plain directories.
@@ -46,4 +48,20 @@ func (s *NoopStorage) SendVolume(_ context.Context, name string, _ io.Writer) er
 
 func (s *NoopStorage) ReceiveVolume(_ context.Context, name string, _ io.Reader) error {
 	return fmt.Errorf("receive volume: not supported on noop storage")
+}
+
+func (s *NoopStorage) SnapshotVolume(_ context.Context, _, _ string) error {
+	return domain.ErrSnapshotNotSupported
+}
+
+func (s *NoopStorage) RestoreVolume(_ context.Context, _, _ string) error {
+	return domain.ErrSnapshotNotSupported
+}
+
+func (s *NoopStorage) DeleteVolumeSnapshot(_ context.Context, _ string) error {
+	return domain.ErrSnapshotNotSupported
+}
+
+func (s *NoopStorage) SendVolumeSnapshot(_ context.Context, _ string, _ io.Writer) error {
+	return domain.ErrSnapshotNotSupported
 }

@@ -103,3 +103,46 @@ func (s *BtrfsStorage) ReceiveVolume(_ context.Context, name string, r io.Reader
 
 	return btrfs.SetReadOnly(targetPath, false)
 }
+
+// SnapshotVolume creates a read-only btrfs snapshot of the named volume.
+// Snapshot is stored at basePath/.snapshots/<snapshotName>.
+func (s *BtrfsStorage) SnapshotVolume(_ context.Context, volumeName, snapshotName string) error {
+	snapshotsDir := filepath.Join(s.basePath, ".snapshots")
+	if err := os.MkdirAll(snapshotsDir, 0755); err != nil {
+		return fmt.Errorf("create snapshots dir: %w", err)
+	}
+	src := filepath.Join(s.basePath, volumeName)
+	dest := filepath.Join(snapshotsDir, snapshotName)
+	if err := btrfs.CreateSnapshot(src, dest, true); err != nil {
+		return fmt.Errorf("snapshot volume %s: %w", volumeName, err)
+	}
+	return nil
+}
+
+// RestoreVolume replaces the named volume with a writable copy of the snapshot.
+func (s *BtrfsStorage) RestoreVolume(_ context.Context, snapshotName, volumeName string) error {
+	snapPath := filepath.Join(s.basePath, ".snapshots", snapshotName)
+	volPath := filepath.Join(s.basePath, volumeName)
+	if err := btrfs.DeleteSubvolume(volPath); err != nil {
+		return fmt.Errorf("delete volume for restore: %w", err)
+	}
+	if err := btrfs.CreateSnapshot(snapPath, volPath, false); err != nil {
+		return fmt.Errorf("restore volume from snapshot: %w", err)
+	}
+	return nil
+}
+
+// DeleteVolumeSnapshot removes a read-only volume snapshot.
+func (s *BtrfsStorage) DeleteVolumeSnapshot(_ context.Context, snapshotName string) error {
+	snapPath := filepath.Join(s.basePath, ".snapshots", snapshotName)
+	if err := btrfs.DeleteSubvolume(snapPath); err != nil {
+		return fmt.Errorf("delete volume snapshot %s: %w", snapshotName, err)
+	}
+	return nil
+}
+
+// SendVolumeSnapshot writes a btrfs send stream of the named snapshot.
+func (s *BtrfsStorage) SendVolumeSnapshot(_ context.Context, snapshotName string, w io.Writer) error {
+	snapPath := filepath.Join(s.basePath, ".snapshots", snapshotName)
+	return btrfs.Send(snapPath, w)
+}
