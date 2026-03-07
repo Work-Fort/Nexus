@@ -255,7 +255,67 @@ func registerVMExecTools(s *server.MCPServer, svc *app.VMService) {
 }
 
 // registerVMManagementTools registers vm_patch and vm_restart_policy tools.
-func registerVMManagementTools(_ *server.MCPServer, _ *app.VMService) {}
+func registerVMManagementTools(s *server.MCPServer, svc *app.VMService) {
+	// vm_patch — expand root size
+	s.AddTool(mcp.NewTool("vm_patch",
+		mcp.WithDescription("Expand the root filesystem size of a VM"),
+		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
+		mcp.WithString("root_size", mcp.Description("New root size (e.g. 2G) — must be larger than current"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		sizeStr, errRes := requireString(req, "root_size")
+		if errRes != nil {
+			return errRes, nil
+		}
+
+		newSize, err := parseByteSize(sizeStr)
+		if err != nil {
+			return errResult(err)
+		}
+
+		if err := svc.ExpandRootSize(ctx, id, newSize); err != nil {
+			return errResult(err)
+		}
+
+		vm, err := svc.GetVM(ctx, id)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(vm)
+	})
+
+	// vm_restart_policy
+	s.AddTool(mcp.NewTool("vm_restart_policy",
+		mcp.WithDescription("Update the restart policy and strategy for a VM"),
+		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
+		mcp.WithString("restart_policy", mcp.Description("Restart policy (none, on-boot, always)"), mcp.Required()),
+		mcp.WithString("restart_strategy", mcp.Description("Restart strategy (immediate, backoff, fixed)"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		policy, errRes := requireString(req, "restart_policy")
+		if errRes != nil {
+			return errRes, nil
+		}
+		strategy, errRes := requireString(req, "restart_strategy")
+		if errRes != nil {
+			return errRes, nil
+		}
+
+		vm, err := svc.UpdateRestartPolicy(ctx, id,
+			domain.RestartPolicy(policy),
+			domain.RestartStrategy(strategy))
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(vm)
+	})
+}
 
 // registerBackupTools registers vm_export and vm_import tools.
 func registerBackupTools(_ *server.MCPServer, _ *app.VMService) {}
