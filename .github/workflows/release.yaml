@@ -101,9 +101,8 @@ jobs:
           VERSION: ${{ needs.tag.outputs.new_tag }}
         run: |
           mkdir -p bin
-          LDFLAGS="-s -w -X github.com/Work-Fort/Nexus/cmd.Version=${VERSION}"
-          go build -ldflags "${LDFLAGS}" -o bin/nexus .
-          go build -ldflags "${LDFLAGS}" -o bin/nexusctl ./cmd/nexusctl/
+          go build -ldflags "-s -w -X github.com/Work-Fort/Nexus/cmd.Version=${VERSION}" -o bin/nexus .
+          go build -ldflags "-s -w -X main.Version=${VERSION}" -o bin/nexusctl ./cmd/nexusctl/
           go build -ldflags "-s -w" -o bin/nexus-netns ./cmd/nexus-netns/
           go build -ldflags "-s -w" -o bin/nexus-cni-exec ./cmd/nexus-cni-exec/
           go build -ldflags "-s -w" -o bin/nexus-quota ./cmd/nexus-quota/

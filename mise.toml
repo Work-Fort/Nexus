@@ -29,25 +29,26 @@ fi
 description = "Build all binaries (debug)"
 depends = ["build:deps"]
 run = [
-    "go build -o build/nexus .",
+    "go build -ldflags=\"-X github.com/Work-Fort/Nexus/cmd.Version=dev-$(git rev-parse --short HEAD)\" -o build/nexus .",
+    "go build -ldflags=\"-X main.Version=dev-$(git rev-parse --short HEAD)\" -o build/nexusctl ./cmd/nexusctl/",
     "go build -o build/nexus-netns ./cmd/nexus-netns/",
     "go build -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
     "go build -o build/nexus-quota ./cmd/nexus-quota/",
     "go build -o build/nexus-btrfs ./cmd/nexus-btrfs/",
     "go build -o build/nexus-dns ./cmd/nexus-dns/",
-    "go build -o build/nexusctl ./cmd/nexusctl/",
 ]
 
 [tasks."build:release"]
 description = "Build all binaries (static release)"
+env = { CGO_ENABLED = "0" }
 run = [
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus .",
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-netns ./cmd/nexus-netns/",
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-quota ./cmd/nexus-quota/",
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-btrfs ./cmd/nexus-btrfs/",
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexus-dns ./cmd/nexus-dns/",
-    "CGO_ENABLED=0 go build -ldflags='-s -w' -o build/nexusctl ./cmd/nexusctl/",
+    "go build -ldflags=\"-s -w -X github.com/Work-Fort/Nexus/cmd.Version=dev-$(git rev-parse --short HEAD)\" -o build/nexus .",
+    "go build -ldflags=\"-s -w -X main.Version=dev-$(git rev-parse --short HEAD)\" -o build/nexusctl ./cmd/nexusctl/",
+    "go build -ldflags='-s -w' -o build/nexus-netns ./cmd/nexus-netns/",
+    "go build -ldflags='-s -w' -o build/nexus-cni-exec ./cmd/nexus-cni-exec/",
+    "go build -ldflags='-s -w' -o build/nexus-quota ./cmd/nexus-quota/",
+    "go build -ldflags='-s -w' -o build/nexus-btrfs ./cmd/nexus-btrfs/",
+    "go build -ldflags='-s -w' -o build/nexus-dns ./cmd/nexus-dns/",
 ]
 
 [tasks.test]

@@ -93,7 +93,11 @@ func init() {
 	rootCmd.AddCommand(newExportCmd())
 	rootCmd.AddCommand(newImportCmd())
 
-	rootCmd.Version = Version
+	if Version != "" {
+		rootCmd.Version = Version
+	} else {
+		rootCmd.Version = "dev"
+	}
 	rootCmd.SilenceUsage = true
 	rootCmd.SilenceErrors = true
 }

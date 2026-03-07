@@ -12,6 +12,9 @@ import (
 	"github.com/Work-Fort/Nexus/client"
 )
 
+// Version is set at build time via ldflags.
+var Version string
+
 var (
 	apiClient *client.Client
 	jsonFlag  bool
@@ -61,16 +64,11 @@ func init() {
 	rootCmd.AddCommand(newTemplateCmd())
 	rootCmd.AddCommand(newNetworkCmd())
 	rootCmd.AddCommand(newMCPBridgeCmd())
-	rootCmd.AddCommand(newVersionCmd())
-}
 
-func newVersionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print nexusctl version",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("nexusctl version dev")
-		},
+	if Version != "" {
+		rootCmd.Version = Version
+	} else {
+		rootCmd.Version = "dev"
 	}
 }
 

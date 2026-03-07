@@ -23,9 +23,9 @@ sha256sums_aarch64=('de69ec8341c8068b7c8e4cfe3eb85065d24d984a3b33007f575d307d13e
 build() {
     cd "Nexus-${pkgver}"
     export CGO_ENABLED=0
-    LDFLAGS="-s -w -X github.com/Work-Fort/Nexus/cmd.Version=${pkgver}-aur"
-    go build -trimpath -ldflags "${LDFLAGS}" -o nexus
-    go build -trimpath -ldflags "${LDFLAGS}" -o nexusctl ./cmd/nexusctl/
+    _ver="${pkgver}-aur"
+    go build -trimpath -ldflags "-s -w -X github.com/Work-Fort/Nexus/cmd.Version=${_ver}" -o nexus
+    go build -trimpath -ldflags "-s -w -X main.Version=${_ver}" -o nexusctl ./cmd/nexusctl/
     go build -trimpath -ldflags "-s -w" -o nexus-netns ./cmd/nexus-netns/
     go build -trimpath -ldflags "-s -w" -o nexus-cni-exec ./cmd/nexus-cni-exec/
     go build -trimpath -ldflags "-s -w" -o nexus-quota ./cmd/nexus-quota/
