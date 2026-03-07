@@ -86,6 +86,10 @@ var ErrDeviceAttached = errors.New("device is attached to a VM")
 // ErrTemplateInUse is returned when deleting a template referenced by VMs.
 var ErrTemplateInUse = errors.New("template is referenced by VMs")
 
+// ErrSnapshotNotSupported is returned when snapshots are attempted on a
+// storage backend that does not support them (e.g., non-btrfs).
+var ErrSnapshotNotSupported = errors.New("snapshots require btrfs storage")
+
 // Mount describes a bind mount from host into the container.
 type Mount struct {
 	HostPath      string
@@ -175,6 +179,15 @@ type TemplateStore interface {
 	UpdateTemplate(ctx context.Context, id string, name, distro, script string) error
 	DeleteTemplate(ctx context.Context, id string) error
 	CountTemplateRefs(ctx context.Context, templateID string) (int, error)
+}
+
+// SnapshotStore persists snapshot metadata.
+type SnapshotStore interface {
+	CreateSnapshot(ctx context.Context, s *Snapshot) error
+	GetSnapshot(ctx context.Context, id string) (*Snapshot, error)
+	GetSnapshotByName(ctx context.Context, vmID, name string) (*Snapshot, error)
+	ListSnapshots(ctx context.Context, vmID string) ([]*Snapshot, error)
+	DeleteSnapshot(ctx context.Context, id string) error
 }
 
 // Storage manages the underlying volume backend (e.g. btrfs subvolumes).
