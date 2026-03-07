@@ -77,7 +77,7 @@ TTY/console access per VM. Must survive Nexus restarts. Research needed:
 Kata/containerd shim may already hold the TTY FDs independently of the client
 process, making this straightforward.
 
-## 8. MCP Endpoint
+## 8. MCP Endpoint ✅
 
 [Design](mcp-endpoint-design.md) · [Plan](plans/2026-03-03-mcp-endpoint.md)
 
