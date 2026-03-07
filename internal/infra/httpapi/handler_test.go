@@ -211,6 +211,18 @@ func (m *mockRuntime) WatchExits(_ context.Context, _ func(string, uint32)) erro
 	return nil
 }
 
+func (m *mockRuntime) SnapshotRootfs(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockRuntime) RestoreRootfs(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockRuntime) DeleteRootfsSnapshot(_ context.Context, _ string) error {
+	return nil
+}
+
 // --- test helpers ---
 
 func setupHandler() http.Handler {

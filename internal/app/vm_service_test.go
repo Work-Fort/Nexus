@@ -267,6 +267,18 @@ func (m *mockRuntime) WatchExits(_ context.Context, _ func(string, uint32)) erro
 	return nil
 }
 
+func (m *mockRuntime) SnapshotRootfs(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockRuntime) RestoreRootfs(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockRuntime) DeleteRootfsSnapshot(_ context.Context, _ string) error {
+	return nil
+}
+
 // --- mock DriveStore ---
 
 type mockDriveStore struct {
@@ -543,6 +555,23 @@ func (m *mockStorage) ReceiveVolume(_ context.Context, name string, r io.Reader)
 	}
 	m.volumes[name] = true
 	return nil
+}
+
+func (m *mockStorage) SnapshotVolume(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockStorage) RestoreVolume(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockStorage) DeleteVolumeSnapshot(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockStorage) SendVolumeSnapshot(_ context.Context, _ string, w io.Writer) error {
+	_, err := w.Write([]byte("btrfs-snapshot-stream"))
+	return err
 }
 
 // --- helper ---
