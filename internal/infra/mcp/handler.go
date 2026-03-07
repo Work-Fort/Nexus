@@ -480,7 +480,125 @@ func registerDriveTools(s *server.MCPServer, svc *app.VMService) {
 
 // registerDeviceTools registers device_create, device_list, device_get,
 // device_delete, device_attach, and device_detach tools.
-func registerDeviceTools(_ *server.MCPServer, _ *app.VMService) {}
+func registerDeviceTools(s *server.MCPServer, svc *app.VMService) {
+	// device_create
+	s.AddTool(mcp.NewTool("device_create",
+		mcp.WithDescription("Register a new host device mapping"),
+		mcp.WithString("name", mcp.Description("Device mapping name"), mcp.Required()),
+		mcp.WithString("host_path", mcp.Description("Host device path (e.g. /dev/dri/renderD128)"), mcp.Required()),
+		mcp.WithString("container_path", mcp.Description("Path inside the container"), mcp.Required()),
+		mcp.WithString("permissions", mcp.Description("Device permissions: combination of r, w, m"), mcp.Required()),
+		mcp.WithNumber("gid", mcp.Description("GID for device node inside container (0 = root)")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name, errRes := requireString(req, "name")
+		if errRes != nil {
+			return errRes, nil
+		}
+		hostPath, errRes := requireString(req, "host_path")
+		if errRes != nil {
+			return errRes, nil
+		}
+		containerPath, errRes := requireString(req, "container_path")
+		if errRes != nil {
+			return errRes, nil
+		}
+		permissions, errRes := requireString(req, "permissions")
+		if errRes != nil {
+			return errRes, nil
+		}
+
+		gid := mcp.ParseUInt32(req, "gid", 0)
+
+		device, err := svc.CreateDevice(ctx, domain.CreateDeviceParams{
+			Name:          name,
+			HostPath:      hostPath,
+			ContainerPath: containerPath,
+			Permissions:   permissions,
+			GID:           gid,
+		})
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(device)
+	})
+
+	// device_list
+	s.AddTool(mcp.NewTool("device_list",
+		mcp.WithDescription("List all registered devices"),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		devices, err := svc.ListDevices(ctx)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(devices)
+	})
+
+	// device_get
+	s.AddTool(mcp.NewTool("device_get",
+		mcp.WithDescription("Get a device by ID or name"),
+		mcp.WithString("id", mcp.Description("Device ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		device, err := svc.GetDevice(ctx, id)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(device)
+	})
+
+	// device_delete
+	s.AddTool(mcp.NewTool("device_delete",
+		mcp.WithDescription("Delete a device (must be detached)"),
+		mcp.WithString("id", mcp.Description("Device ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if err := svc.DeleteDevice(ctx, id); err != nil {
+			return errResult(err)
+		}
+		return mcp.NewToolResultText("deleted"), nil
+	})
+
+	// device_attach
+	s.AddTool(mcp.NewTool("device_attach",
+		mcp.WithDescription("Attach a device to a stopped VM"),
+		mcp.WithString("id", mcp.Description("Device ID or name"), mcp.Required()),
+		mcp.WithString("vm_id", mcp.Description("VM ID or name to attach to"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		vmID, errRes := requireString(req, "vm_id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if err := svc.AttachDevice(ctx, id, vmID); err != nil {
+			return errResult(err)
+		}
+		return mcp.NewToolResultText("attached"), nil
+	})
+
+	// device_detach
+	s.AddTool(mcp.NewTool("device_detach",
+		mcp.WithDescription("Detach a device from its VM"),
+		mcp.WithString("id", mcp.Description("Device ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if err := svc.DetachDevice(ctx, id); err != nil {
+			return errResult(err)
+		}
+		return mcp.NewToolResultText("detached"), nil
+	})
+}
 
 // parseByteSize parses a human-readable byte size string into int64.
 func parseByteSize(s string) (int64, error) {
