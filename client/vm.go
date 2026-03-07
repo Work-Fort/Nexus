@@ -269,6 +269,29 @@ func (c *Client) SyncShell(ctx context.Context, ref string) (*VM, error) {
 	return decodeJSON[VM](resp)
 }
 
+// PrometheusTarget is a single target group in Prometheus HTTP SD format.
+type PrometheusTarget struct {
+	Targets []string          `json:"targets"`
+	Labels  map[string]string `json:"labels"`
+}
+
+// PrometheusTargets returns the Prometheus HTTP service discovery targets.
+func (c *Client) PrometheusTargets(ctx context.Context) ([]PrometheusTarget, error) {
+	resp, err := c.get(ctx, "/v1/prometheus/targets")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := handleResponse(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	var targets []PrometheusTarget
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return targets, nil
+}
+
 // UpdateRestartPolicy updates the restart policy and strategy for a VM.
 func (c *Client) UpdateRestartPolicy(ctx context.Context, ref, policy, strategy string) (*VM, error) {
 	resp, err := c.put(ctx, "/v1/vms/"+url.PathEscape(ref)+"/restart-policy", map[string]string{

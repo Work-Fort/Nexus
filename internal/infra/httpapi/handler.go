@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 
@@ -182,7 +183,16 @@ type StatusOutput struct {
 	Body statusBody
 }
 
+type PrometheusTargetsOutput struct {
+	Body []prometheusTarget
+}
+
 // --- response body types ---
+
+type prometheusTarget struct {
+	Targets []string          `json:"targets" doc:"List of host:port targets"`
+	Labels  map[string]string `json:"labels" doc:"Label set for this target group"`
+}
 
 type dnsConfigBody struct {
 	Servers []string `json:"servers,omitempty" doc:"DNS nameservers"`
@@ -402,6 +412,7 @@ func NewHandler(svc *app.VMService) http.Handler {
 	registerTemplateRoutes(api, svc)
 	registerNetworkRoutes(api, svc)
 	registerBackupRoutes(api, svc)
+	registerPrometheusRoutes(api, svc)
 
 	// WebSocket endpoints (not supported by huma).
 	mux.HandleFunc("GET /v1/vms/{id}/console", handleConsole(svc))
@@ -1029,5 +1040,48 @@ func registerNetworkRoutes(api huma.API, svc *app.VMService) {
 			return nil, mapDomainError(err)
 		}
 		return &StatusOutput{Body: statusBody{Status: "ok"}}, nil
+	})
+}
+
+// --- Prometheus routes ---
+
+func registerPrometheusRoutes(api huma.API, svc *app.VMService) {
+	huma.Register(api, huma.Operation{
+		OperationID: "prometheus-targets",
+		Method:      http.MethodGet,
+		Path:        "/v1/prometheus/targets",
+		Summary:     "Prometheus HTTP service discovery targets",
+		Description: "Returns running VMs as Prometheus scrape targets in HTTP SD format.",
+		Tags:        []string{"Prometheus"},
+	}, func(ctx context.Context, input *struct{}) (*PrometheusTargetsOutput, error) {
+		vms, err := svc.ListVMs(ctx, domain.VMFilter{})
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+
+		metricsPort := svc.MetricsPort()
+		var targets []prometheusTarget
+		for _, vm := range vms {
+			if vm.State != domain.VMStateRunning || vm.IP == "" {
+				continue
+			}
+			labels := map[string]string{
+				"__meta_nexus_vm_id":    vm.ID,
+				"__meta_nexus_vm_name":  vm.Name,
+				"__meta_nexus_vm_state": string(vm.State),
+			}
+			for _, tag := range vm.Tags {
+				labels["__meta_nexus_vm_tag_"+tag] = "true"
+			}
+			targets = append(targets, prometheusTarget{
+				Targets: []string{fmt.Sprintf("%s:%d", vm.IP, metricsPort)},
+				Labels:  labels,
+			})
+		}
+
+		if targets == nil {
+			targets = []prometheusTarget{} // return [] not null
+		}
+		return &PrometheusTargetsOutput{Body: targets}, nil
 	})
 }
