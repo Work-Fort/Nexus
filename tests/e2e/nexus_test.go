@@ -864,7 +864,9 @@ func TestExecStream(t *testing.T) {
 func TestConsole(t *testing.T) {
 	_, c := startDaemon(t)
 
-	vm, err := c.CreateVM("console-test", "agent")
+	// Use nginx:alpine because its master process stays alive, unlike
+	// plain alpine whose /bin/sh exits immediately with NullIO.
+	vm, err := c.CreateVMWithImage("console-test", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {
 		t.Fatalf("create VM: %v", err)
 	}
@@ -903,7 +905,9 @@ func TestConsole(t *testing.T) {
 func TestConsoleResize(t *testing.T) {
 	_, c := startDaemon(t)
 
-	vm, err := c.CreateVM("console-resize", "agent")
+	// Use nginx:alpine because its master process stays alive, unlike
+	// plain alpine whose /bin/sh exits immediately with NullIO.
+	vm, err := c.CreateVMWithImage("console-resize", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {
 		t.Fatalf("create VM: %v", err)
 	}
@@ -946,7 +950,9 @@ func TestConsoleResize(t *testing.T) {
 func TestConsoleCustomShell(t *testing.T) {
 	_, c := startDaemon(t)
 
-	vm, err := c.CreateVM("console-shell", "agent")
+	// Use nginx:alpine because its master process stays alive, unlike
+	// plain alpine whose /bin/sh exits immediately with NullIO.
+	vm, err := c.CreateVMWithImage("console-shell", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {
 		t.Fatalf("create VM: %v", err)
 	}
@@ -987,9 +993,10 @@ func TestConsoleCustomShell(t *testing.T) {
 func TestMCPVMLifecycle(t *testing.T) {
 	_, c := startDaemon(t)
 
-	// 1. vm_create via MCP.
+	// 1. vm_create via MCP (use nginx:alpine so the container stays alive for exec).
 	createResult, err := c.MCPCall("vm_create", map[string]any{
-		"name": "mcp-test",
+		"name":  "mcp-test",
+		"image": "docker.io/library/nginx:alpine",
 	})
 	if err != nil {
 		t.Fatalf("MCP vm_create: %v", err)
