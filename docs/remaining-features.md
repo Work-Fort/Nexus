@@ -138,6 +138,21 @@ resource with full REST and MCP API surface.
 - Per-VM script override without forking the shared template
 - E2E tests with real images (no mocks)
 
+## 14. Live VM Snapshots
+
+[Design](plans/2026-03-07-live-snapshots-design.md) · [Plan](plans/2026-03-07-live-snapshots.md)
+
+Point-in-time btrfs COW snapshots of running VMs (drives + rootfs). Snapshots
+are crash-consistent (equivalent to power failure — journaled guest filesystems
+recover automatically).
+
+- Snapshot while VM is running — no downtime
+- Rollback: stop VM, restore rootfs + drives from snapshot, restart
+- Clone: fork a snapshot into a new independent VM with new identity/network
+- Live export: no longer requires stopping the VM (temp snapshot under the hood)
+- Manual retention only — no automatic expiry or scheduling
+- Requires btrfs storage backend; noop backend returns clear error
+
 ---
 
 ## Investigate
