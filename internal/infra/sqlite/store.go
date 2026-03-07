@@ -63,7 +63,12 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return &Store{db: sqldb, q: New(sqldb)}, nil
+	s := &Store{db: sqldb, q: New(sqldb)}
+	if err := s.seedTemplates(context.Background()); err != nil {
+		sqldb.Close()
+		return nil, fmt.Errorf("seed templates: %w", err)
+	}
+	return s, nil
 }
 
 // Close closes the database connection.
@@ -642,4 +647,118 @@ func vmFromRow(row Vm) (*domain.VM, error) {
 		}
 	}
 	return vm, nil
+}
+
+// --- domain.TemplateStore implementation ---
+
+func (s *Store) CreateTemplate(ctx context.Context, t *domain.Template) error {
+	return s.q.InsertTemplate(ctx, InsertTemplateParams{
+		ID:        t.ID,
+		Name:      t.Name,
+		Distro:    t.Distro,
+		Script:    t.Script,
+		CreatedAt: t.CreatedAt.UTC().Format(timeFormat),
+		UpdatedAt: t.UpdatedAt.UTC().Format(timeFormat),
+	})
+}
+
+func (s *Store) GetTemplate(ctx context.Context, id string) (*domain.Template, error) {
+	row, err := s.q.GetTemplate(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("get template: %w", err)
+	}
+	return templateFromRow(row)
+}
+
+func (s *Store) GetTemplateByName(ctx context.Context, name string) (*domain.Template, error) {
+	row, err := s.q.GetTemplateByName(ctx, name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("get template by name: %w", err)
+	}
+	return templateFromRow(row)
+}
+
+func (s *Store) GetTemplateByDistro(ctx context.Context, distro string) (*domain.Template, error) {
+	row, err := s.q.GetTemplateByDistro(ctx, distro)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("get template by distro: %w", err)
+	}
+	return templateFromRow(row)
+}
+
+func (s *Store) ResolveTemplate(ctx context.Context, ref string) (*domain.Template, error) {
+	row, err := s.q.ResolveTemplate(ctx, ResolveTemplateParams{ID: ref, Name: ref})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("resolve template: %w", err)
+	}
+	return templateFromRow(row)
+}
+
+func (s *Store) ListTemplates(ctx context.Context) ([]*domain.Template, error) {
+	rows, err := s.q.ListTemplates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list templates: %w", err)
+	}
+	templates := make([]*domain.Template, len(rows))
+	for i, r := range rows {
+		t, err := templateFromRow(r)
+		if err != nil {
+			return nil, err
+		}
+		templates[i] = t
+	}
+	return templates, nil
+}
+
+func (s *Store) UpdateTemplate(ctx context.Context, id string, name, distro, script string) error {
+	return s.q.UpdateTemplate(ctx, UpdateTemplateParams{
+		ID:        id,
+		Name:      name,
+		Distro:    distro,
+		Script:    script,
+		UpdatedAt: time.Now().UTC().Format(timeFormat),
+	})
+}
+
+func (s *Store) DeleteTemplate(ctx context.Context, id string) error {
+	return s.q.DeleteTemplate(ctx, id)
+}
+
+func (s *Store) CountTemplateRefs(ctx context.Context, templateID string) (int, error) {
+	n, err := s.q.CountTemplateRefs(ctx, sql.NullString{String: templateID, Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("count template refs: %w", err)
+	}
+	return int(n), nil
+}
+
+func templateFromRow(row Template) (*domain.Template, error) {
+	t := &domain.Template{
+		ID:     row.ID,
+		Name:   row.Name,
+		Distro: row.Distro,
+		Script: row.Script,
+	}
+	var err error
+	t.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse created_at for template %s: %w", row.ID, err)
+	}
+	t.UpdatedAt, err = time.Parse(timeFormat, row.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse updated_at for template %s: %w", row.ID, err)
+	}
+	return t, nil
 }
