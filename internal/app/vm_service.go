@@ -366,6 +366,18 @@ func (s *VMService) DeleteVM(ctx context.Context, ref string) error {
 		}
 	}
 
+	// Clean up all snapshots (on-disk data; DB records cascade via ON DELETE CASCADE).
+	if s.snapshotStore != nil {
+		snaps, err := s.snapshotStore.ListSnapshots(ctx, vm.ID)
+		if err == nil {
+			for _, snap := range snaps {
+				rootfsSnapName := vm.ID + "@" + snap.Name
+				s.runtime.DeleteRootfsSnapshot(ctx, rootfsSnapName) //nolint:errcheck
+				s.cleanupAllSnapshots(ctx, vm.ID, snap.Name)
+			}
+		}
+	}
+
 	if err := s.store.Delete(ctx, vm.ID); err != nil {
 		return fmt.Errorf("store delete: %w", err)
 	}
