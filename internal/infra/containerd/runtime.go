@@ -719,39 +719,19 @@ func (r *Runtime) ExecConsole(ctx context.Context, id string, cmd []string, cols
 }
 
 // ExportImage writes the OCI image as a tar stream to w.
-// It creates a temporary lease and force-pulls the image to ensure content
-// blobs are available, since containerd's GC may have removed them after
-// they were unpacked into snapshots.
+// The image must already be pulled (via Create). Content blobs are protected
+// from GC by the image record's reference labels as long as
+// discard_unpacked_layers is false (the default).
 func (r *Runtime) ExportImage(ctx context.Context, imageRef string, w io.Writer) error {
 	ctx = r.nsCtx(ctx)
 
-	// Create a temporary lease to prevent the GC from removing content
-	// between the pull and the export.
-	ls := r.client.LeasesService()
-	lease, err := ls.Create(ctx, leases.WithRandomID(), leases.WithExpiration(5*time.Minute))
-	if err != nil {
-		return fmt.Errorf("create export lease: %w", err)
-	}
-	defer ls.Delete(ctx, lease) //nolint:errcheck
-
-	leasedCtx := leases.WithLease(ctx, lease.ID)
-
-	// Remove the existing image record so that Pull does a full fetch
-	// (otherwise it may skip downloading content that was GC'd).
 	imgSvc := r.client.ImageService()
-	if err := imgSvc.Delete(leasedCtx, imageRef); err != nil && !errdefs.IsNotFound(err) {
-		return fmt.Errorf("remove image before export re-pull: %w", err)
-	}
-
-	img, err := r.client.Pull(leasedCtx, imageRef,
-		client.WithPullUnpack,
-		client.WithPullSnapshotter(r.snapshotter),
-	)
+	img, err := r.client.GetImage(ctx, imageRef)
 	if err != nil {
-		return fmt.Errorf("pull image for export %s: %w", imageRef, err)
+		return fmt.Errorf("get image %s: %w", imageRef, err)
 	}
 
-	return r.client.Export(leasedCtx, w,
+	return r.client.Export(ctx, w,
 		archive.WithImage(imgSvc, img.Name()),
 		archive.WithPlatform(platforms.DefaultStrict()),
 	)
