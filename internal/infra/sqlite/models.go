@@ -46,4 +46,5 @@ type Vm struct {
 	RootSize        int64          `json:"root_size"`
 	RestartPolicy   string         `json:"restart_policy"`
 	RestartStrategy string         `json:"restart_strategy"`
+	Shell           string         `json:"shell"`
 }

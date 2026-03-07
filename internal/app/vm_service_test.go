@@ -109,6 +109,15 @@ func (m *mockStore) UpdateRestartPolicy(_ context.Context, id string, policy dom
 	return nil
 }
 
+func (m *mockStore) UpdateShell(_ context.Context, id, shell string) error {
+	vm, ok := m.vms[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	vm.Shell = shell
+	return nil
+}
+
 func (m *mockStore) Delete(_ context.Context, id string) error {
 	delete(m.vms, id)
 	return nil
@@ -151,6 +160,10 @@ func (m *mockRuntime) Exec(_ context.Context, id string, cmd []string) (*domain.
 func (m *mockRuntime) ExecStream(_ context.Context, id string, cmd []string, stdout, stderr io.Writer) (int, error) {
 	stdout.Write([]byte("ok\n")) //nolint:errcheck
 	return 0, nil
+}
+
+func (m *mockRuntime) ExecConsole(_ context.Context, id string, cmd []string, cols, rows uint16) (*domain.ConsoleSession, error) {
+	return nil, fmt.Errorf("not implemented in mock")
 }
 
 func (m *mockRuntime) SetSnapshotQuota(_ context.Context, _ string, _ int64) error {

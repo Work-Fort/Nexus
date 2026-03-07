@@ -456,6 +456,87 @@ func (r *Runtime) ExecStream(ctx context.Context, id string, cmd []string, stdou
 	return int(status.ExitCode()), nil
 }
 
+// ExecConsole creates an interactive TTY exec session and returns a handle
+// for bidirectional I/O. The caller is responsible for calling Close.
+func (r *Runtime) ExecConsole(ctx context.Context, id string, cmd []string, cols, rows uint16) (*domain.ConsoleSession, error) {
+	ctx = r.nsCtx(ctx)
+
+	container, err := r.client.LoadContainer(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("load container %s: %w", id, err)
+	}
+
+	task, err := container.Task(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get task %s: %w", id, err)
+	}
+
+	spec, err := container.Spec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get spec %s: %w", id, err)
+	}
+
+	pspec := *spec.Process
+	pspec.Args = cmd
+	pspec.Terminal = true
+	pspec.ConsoleSize = &specs.Box{
+		Height: uint(rows),
+		Width:  uint(cols),
+	}
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+
+	execID := fmt.Sprintf("%s-tty-%s", id, nxid.New())
+	proc, err := task.Exec(ctx, execID, &pspec,
+		cio.NewCreator(cio.WithFIFODir(os.TempDir()), cio.WithStreams(stdinR, stdoutW, nil), cio.WithTerminal),
+	)
+	if err != nil {
+		stdinR.Close()
+		stdinW.Close()
+		stdoutR.Close()
+		stdoutW.Close()
+		return nil, fmt.Errorf("exec console in %s: %w", id, err)
+	}
+
+	if err := proc.Start(ctx); err != nil {
+		proc.Delete(ctx) //nolint:errcheck
+		stdinR.Close()
+		stdinW.Close()
+		stdoutR.Close()
+		stdoutW.Close()
+		return nil, fmt.Errorf("start console exec %s: %w", id, err)
+	}
+
+	// Build a namespace-aware context that outlives the request for cleanup.
+	cleanupCtx := namespaces.WithNamespace(context.Background(), r.namespace)
+
+	return &domain.ConsoleSession{
+		Stdin:  stdinW,
+		Stdout: stdoutR,
+		Wait: func() (int, error) {
+			ch, err := proc.Wait(cleanupCtx)
+			if err != nil {
+				return -1, err
+			}
+			status := <-ch
+			stdoutW.Close() // signal EOF to reader
+			return int(status.ExitCode()), nil
+		},
+		Resize: func(rctx context.Context, w, h uint32) error {
+			return proc.Resize(rctx, w, h)
+		},
+		Close: func() {
+			proc.Kill(cleanupCtx, syscall.SIGKILL) //nolint:errcheck
+			proc.Delete(cleanupCtx)                //nolint:errcheck
+			stdinR.Close()
+			stdinW.Close()
+			stdoutR.Close()
+			stdoutW.Close()
+		},
+	}, nil
+}
+
 // ExportImage writes the OCI image as a tar stream to w.
 // It creates a temporary lease and force-pulls the image to ensure content
 // blobs are available, since containerd's GC may have removed them after

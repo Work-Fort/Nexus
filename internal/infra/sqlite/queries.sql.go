@@ -265,7 +265,7 @@ func (q *Queries) GetDrivesByVM(ctx context.Context, vmID sql.NullString) ([]Dri
 }
 
 const getVM = `-- name: GetVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
 FROM vms WHERE id = ?
 `
 
@@ -290,12 +290,13 @@ func (q *Queries) GetVM(ctx context.Context, id string) (Vm, error) {
 		&i.RootSize,
 		&i.RestartPolicy,
 		&i.RestartStrategy,
+		&i.Shell,
 	)
 	return i, err
 }
 
 const getVMByName = `-- name: GetVMByName :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
 FROM vms WHERE name = ?
 `
 
@@ -320,6 +321,7 @@ func (q *Queries) GetVMByName(ctx context.Context, name string) (Vm, error) {
 		&i.RootSize,
 		&i.RestartPolicy,
 		&i.RestartStrategy,
+		&i.Shell,
 	)
 	return i, err
 }
@@ -382,8 +384,8 @@ func (q *Queries) InsertDrive(ctx context.Context, arg InsertDriveParams) error 
 
 const insertVM = `-- name: InsertVM :exec
 
-INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO vms (id, name, role, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertVMParams struct {
@@ -402,6 +404,7 @@ type InsertVMParams struct {
 	RootSize        int64          `json:"root_size"`
 	RestartPolicy   string         `json:"restart_policy"`
 	RestartStrategy string         `json:"restart_strategy"`
+	Shell           string         `json:"shell"`
 }
 
 // SPDX-License-Identifier: Apache-2.0
@@ -422,6 +425,7 @@ func (q *Queries) InsertVM(ctx context.Context, arg InsertVMParams) error {
 		arg.RootSize,
 		arg.RestartPolicy,
 		arg.RestartStrategy,
+		arg.Shell,
 	)
 	return err
 }
@@ -499,7 +503,7 @@ func (q *Queries) ListDrives(ctx context.Context) ([]Drive, error) {
 }
 
 const listVMs = `-- name: ListVMs :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
 FROM vms ORDER BY created_at DESC
 `
 
@@ -530,6 +534,7 @@ func (q *Queries) ListVMs(ctx context.Context) ([]Vm, error) {
 			&i.RootSize,
 			&i.RestartPolicy,
 			&i.RestartStrategy,
+			&i.Shell,
 		); err != nil {
 			return nil, err
 		}
@@ -545,7 +550,7 @@ func (q *Queries) ListVMs(ctx context.Context) ([]Vm, error) {
 }
 
 const listVMsByRole = `-- name: ListVMsByRole :many
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
 FROM vms WHERE role = ? ORDER BY created_at DESC
 `
 
@@ -576,6 +581,7 @@ func (q *Queries) ListVMsByRole(ctx context.Context, role string) ([]Vm, error) 
 			&i.RootSize,
 			&i.RestartPolicy,
 			&i.RestartStrategy,
+			&i.Shell,
 		); err != nil {
 			return nil, err
 		}
@@ -641,7 +647,7 @@ func (q *Queries) ResolveDrive(ctx context.Context, arg ResolveDriveParams) (Dri
 }
 
 const resolveVM = `-- name: ResolveVM :one
-SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy
+SELECT id, name, role, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
 FROM vms WHERE id = ? OR name = ?
 `
 
@@ -671,6 +677,7 @@ func (q *Queries) ResolveVM(ctx context.Context, arg ResolveVMParams) (Vm, error
 		&i.RootSize,
 		&i.RestartPolicy,
 		&i.RestartStrategy,
+		&i.Shell,
 	)
 	return i, err
 }
@@ -701,6 +708,20 @@ type UpdateVMRootSizeParams struct {
 
 func (q *Queries) UpdateVMRootSize(ctx context.Context, arg UpdateVMRootSizeParams) error {
 	_, err := q.db.ExecContext(ctx, updateVMRootSize, arg.RootSize, arg.ID)
+	return err
+}
+
+const updateVMShell = `-- name: UpdateVMShell :exec
+UPDATE vms SET shell = ? WHERE id = ?
+`
+
+type UpdateVMShellParams struct {
+	Shell string `json:"shell"`
+	ID    string `json:"id"`
+}
+
+func (q *Queries) UpdateVMShell(ctx context.Context, arg UpdateVMShellParams) error {
+	_, err := q.db.ExecContext(ctx, updateVMShell, arg.Shell, arg.ID)
 	return err
 }
 
