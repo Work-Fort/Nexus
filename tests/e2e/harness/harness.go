@@ -34,6 +34,10 @@ type daemonConfig struct {
 	quotaHelper     string // quota helper binary (empty to disable)
 	btrfsHelperSet  bool
 	btrfsHelper     string
+	netnsHelperSet  bool
+	netnsHelper     string
+	cniExecBinSet   bool
+	cniExecBin      string
 }
 
 type DaemonOption func(*daemonConfig)
@@ -72,6 +76,14 @@ func WithQuotaHelper(helper string) DaemonOption {
 
 func WithBtrfsHelper(helper string) DaemonOption {
 	return func(c *daemonConfig) { c.btrfsHelperSet = true; c.btrfsHelper = helper }
+}
+
+func WithNetNSHelper(helper string) DaemonOption {
+	return func(c *daemonConfig) { c.netnsHelperSet = true; c.netnsHelper = helper }
+}
+
+func WithCNIExecBin(bin string) DaemonOption {
+	return func(c *daemonConfig) { c.cniExecBinSet = true; c.cniExecBin = bin }
 }
 
 type Daemon struct {
@@ -121,6 +133,12 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 	}
 	if cfg.btrfsHelperSet {
 		args = append(args, "--btrfs-helper", cfg.btrfsHelper)
+	}
+	if cfg.netnsHelperSet {
+		args = append(args, "--netns-helper", cfg.netnsHelper)
+	}
+	if cfg.cniExecBinSet {
+		args = append(args, "--cni-exec-bin", cfg.cniExecBin)
 	}
 
 	var stderrBuf bytes.Buffer
@@ -191,6 +209,12 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 	}
 	if cfg.btrfsHelperSet {
 		args = append(args, "--btrfs-helper", cfg.btrfsHelper)
+	}
+	if cfg.netnsHelperSet {
+		args = append(args, "--netns-helper", cfg.netnsHelper)
+	}
+	if cfg.cniExecBinSet {
+		args = append(args, "--cni-exec-bin", cfg.cniExecBin)
 	}
 
 	var stderrBuf bytes.Buffer
