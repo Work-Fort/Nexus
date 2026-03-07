@@ -42,6 +42,7 @@ func newDaemonCmd() *cobra.Command {
 
 			store, err := sqlite.Open(dbPath)
 			if err != nil {
+				log.Error("failed to open database", "path", dbPath, "err", err)
 				return fmt.Errorf("open database: %w", err)
 			}
 			defer store.Close()
@@ -59,19 +60,22 @@ func newDaemonCmd() *cobra.Command {
 
 			runtime, err := ctrd.New(socketPath, namespace, snapshotter, quotaHelper)
 			if err != nil {
+				log.Error("failed to connect to containerd", "socket", socketPath, "namespace", namespace, "err", err)
 				return fmt.Errorf("connect to containerd: %w", err)
 			}
 			defer runtime.Close()
 
 			var network domain.Network
 			if viper.GetBool("network-enabled") {
-				cniNet, err := cni.New(cni.Config{
+				cniCfg := cni.Config{
 					BinDir:     viper.GetString("cni-bin-dir"),
 					Subnet:     viper.GetString("network-subnet"),
 					HelperBin:  viper.GetString("netns-helper"),
 					CNIExecBin: viper.GetString("cni-exec-bin"),
-				})
+				}
+				cniNet, err := cni.New(cniCfg)
 				if err != nil {
+					log.Error("failed to init CNI networking", "subnet", cniCfg.Subnet, "err", err)
 					return fmt.Errorf("init cni: %w", err)
 				}
 				defer cniNet.Close()
@@ -122,6 +126,8 @@ func newDaemonCmd() *cobra.Command {
 			} else {
 				dnsManager = &dns.NoopManager{}
 			}
+
+			log.Info("nexus starting", "addr", addr, "db", dbPath, "containerd", socketPath, "namespace", namespace)
 
 			if logFile != nil {
 				defer logFile.Close()
@@ -187,13 +193,14 @@ func newDaemonCmd() *cobra.Command {
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 			errCh := make(chan error, 1)
+			ln, err := net.Listen("tcp4", addr)
+			if err != nil {
+				log.Error("failed to bind listen address", "addr", addr, "err", err)
+				return fmt.Errorf("listen: %w", err)
+			}
+
+			log.Info("nexus listening", "addr", ln.Addr())
 			go func() {
-				ln, err := net.Listen("tcp4", addr)
-				if err != nil {
-					errCh <- fmt.Errorf("listen: %w", err)
-					return
-				}
-				fmt.Fprintf(os.Stderr, "nexus listening on %s\n", ln.Addr())
 				if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 					errCh <- err
 				}
@@ -201,7 +208,7 @@ func newDaemonCmd() *cobra.Command {
 
 			select {
 			case sig := <-sigCh:
-				fmt.Fprintf(os.Stderr, "\nReceived %s, shutting down...\n", sig)
+				log.Info("received signal, shutting down", "signal", sig)
 			case err := <-errCh:
 				return err
 			}
