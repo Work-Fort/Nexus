@@ -28,6 +28,13 @@ type Drive struct {
 	CreatedAt string         `json:"created_at"`
 }
 
+type Snapshot struct {
+	ID        string `json:"id"`
+	VmID      string `json:"vm_id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+}
+
 type Template struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`

@@ -762,3 +762,62 @@ func templateFromRow(row Template) (*domain.Template, error) {
 	}
 	return t, nil
 }
+
+// --- SnapshotStore ---
+
+func (s *Store) CreateSnapshot(ctx context.Context, snap *domain.Snapshot) error {
+	return s.q.InsertSnapshot(ctx, InsertSnapshotParams{
+		ID:        snap.ID,
+		VmID:      snap.VMID,
+		Name:      snap.Name,
+		CreatedAt: snap.CreatedAt.UTC().Format(timeFormat),
+	})
+}
+
+func (s *Store) GetSnapshot(ctx context.Context, id string) (*domain.Snapshot, error) {
+	row, err := s.q.GetSnapshot(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	return snapshotFromRow(row), nil
+}
+
+func (s *Store) GetSnapshotByName(ctx context.Context, vmID, name string) (*domain.Snapshot, error) {
+	row, err := s.q.GetSnapshotByName(ctx, GetSnapshotByNameParams{VmID: vmID, Name: name})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	return snapshotFromRow(row), nil
+}
+
+func (s *Store) ListSnapshots(ctx context.Context, vmID string) ([]*domain.Snapshot, error) {
+	rows, err := s.q.ListSnapshotsByVM(ctx, vmID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*domain.Snapshot, len(rows))
+	for i, r := range rows {
+		result[i] = snapshotFromRow(r)
+	}
+	return result, nil
+}
+
+func (s *Store) DeleteSnapshot(ctx context.Context, id string) error {
+	return s.q.DeleteSnapshotByID(ctx, id)
+}
+
+func snapshotFromRow(row Snapshot) *domain.Snapshot {
+	t, _ := time.Parse(timeFormat, row.CreatedAt)
+	return &domain.Snapshot{
+		ID:        row.ID,
+		VMID:      row.VmID,
+		Name:      row.Name,
+		CreatedAt: t,
+	}
+}

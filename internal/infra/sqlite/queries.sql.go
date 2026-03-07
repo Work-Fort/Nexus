@@ -89,6 +89,15 @@ func (q *Queries) DeleteDrive(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteSnapshotByID = `-- name: DeleteSnapshotByID :exec
+DELETE FROM snapshots WHERE id = ?
+`
+
+func (q *Queries) DeleteSnapshotByID(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteSnapshotByID, id)
+	return err
+}
+
 const deleteTagsByVM = `-- name: DeleteTagsByVM :exec
 DELETE FROM vm_tags WHERE vm_id = ?
 `
@@ -304,6 +313,43 @@ func (q *Queries) GetDrivesByVM(ctx context.Context, vmID sql.NullString) ([]Dri
 	return items, nil
 }
 
+const getSnapshot = `-- name: GetSnapshot :one
+SELECT id, vm_id, name, created_at FROM snapshots WHERE id = ?
+`
+
+func (q *Queries) GetSnapshot(ctx context.Context, id string) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshot, id)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.VmID,
+		&i.Name,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSnapshotByName = `-- name: GetSnapshotByName :one
+SELECT id, vm_id, name, created_at FROM snapshots WHERE vm_id = ? AND name = ?
+`
+
+type GetSnapshotByNameParams struct {
+	VmID string `json:"vm_id"`
+	Name string `json:"name"`
+}
+
+func (q *Queries) GetSnapshotByName(ctx context.Context, arg GetSnapshotByNameParams) (Snapshot, error) {
+	row := q.db.QueryRowContext(ctx, getSnapshotByName, arg.VmID, arg.Name)
+	var i Snapshot
+	err := row.Scan(
+		&i.ID,
+		&i.VmID,
+		&i.Name,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getTagsByVM = `-- name: GetTagsByVM :many
 SELECT tag FROM vm_tags WHERE vm_id = ? ORDER BY tag
 `
@@ -510,6 +556,27 @@ func (q *Queries) InsertDrive(ctx context.Context, arg InsertDriveParams) error 
 	return err
 }
 
+const insertSnapshot = `-- name: InsertSnapshot :exec
+INSERT INTO snapshots (id, vm_id, name, created_at) VALUES (?, ?, ?, ?)
+`
+
+type InsertSnapshotParams struct {
+	ID        string `json:"id"`
+	VmID      string `json:"vm_id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+}
+
+func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) error {
+	_, err := q.db.ExecContext(ctx, insertSnapshot,
+		arg.ID,
+		arg.VmID,
+		arg.Name,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const insertTag = `-- name: InsertTag :exec
 INSERT OR IGNORE INTO vm_tags (vm_id, tag) VALUES (?, ?)
 `
@@ -661,6 +728,38 @@ func (q *Queries) ListDrives(ctx context.Context) ([]Drive, error) {
 			&i.SizeBytes,
 			&i.MountPath,
 			&i.VmID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSnapshotsByVM = `-- name: ListSnapshotsByVM :many
+SELECT id, vm_id, name, created_at FROM snapshots WHERE vm_id = ? ORDER BY created_at
+`
+
+func (q *Queries) ListSnapshotsByVM(ctx context.Context, vmID string) ([]Snapshot, error) {
+	rows, err := q.db.QueryContext(ctx, listSnapshotsByVM, vmID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Snapshot{}
+	for rows.Next() {
+		var i Snapshot
+		if err := rows.Scan(
+			&i.ID,
+			&i.VmID,
+			&i.Name,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

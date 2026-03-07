@@ -165,3 +165,18 @@ SELECT COUNT(*) FROM vms WHERE template_id = ? AND init = 1;
 
 -- name: CountTemplates :one
 SELECT COUNT(*) FROM templates;
+
+-- name: InsertSnapshot :exec
+INSERT INTO snapshots (id, vm_id, name, created_at) VALUES (?, ?, ?, ?);
+
+-- name: GetSnapshot :one
+SELECT id, vm_id, name, created_at FROM snapshots WHERE id = ?;
+
+-- name: GetSnapshotByName :one
+SELECT id, vm_id, name, created_at FROM snapshots WHERE vm_id = ? AND name = ?;
+
+-- name: ListSnapshotsByVM :many
+SELECT id, vm_id, name, created_at FROM snapshots WHERE vm_id = ? ORDER BY created_at;
+
+-- name: DeleteSnapshotByID :exec
+DELETE FROM snapshots WHERE id = ?;
