@@ -2,3 +2,12 @@
 *.db
 .DS_Store
 *.swp
+
+# Built binaries (go build output)
+/build/
+/nexus
+/nexusctl
+/nexus-netns
+/nexus-cni-exec
+/nexus-quota
+/nexus-dns
