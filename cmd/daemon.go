@@ -23,6 +23,7 @@ import (
 	"github.com/Work-Fort/Nexus/internal/infra/dns"
 	ctrd "github.com/Work-Fort/Nexus/internal/infra/containerd"
 	"github.com/Work-Fort/Nexus/internal/infra/httpapi"
+	nexusmcp "github.com/Work-Fort/Nexus/internal/infra/mcp"
 	"github.com/Work-Fort/Nexus/internal/infra/sqlite"
 	"github.com/Work-Fort/Nexus/internal/infra/storage"
 	"github.com/Work-Fort/Nexus/pkg/btrfs"
@@ -170,11 +171,13 @@ func newDaemonCmd() *cobra.Command {
 			defer monitorCancel()
 			svc.StartCrashMonitor(monitorCtx)
 
-			handler := httpapi.NewHandler(svc)
+			mux := http.NewServeMux()
+			mux.Handle("/mcp", nexusmcp.NewHandler(svc))
+			mux.Handle("/", httpapi.NewHandler(svc))
 
 			httpServer := &http.Server{
 				Addr:         addr,
-				Handler:      handler,
+				Handler:      mux,
 				ReadTimeout:  10 * time.Second,
 				WriteTimeout: 30 * time.Second,
 				IdleTimeout:  60 * time.Second,
