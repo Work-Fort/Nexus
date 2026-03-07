@@ -748,6 +748,26 @@ func (c *Client) ImportVM(archive []byte, strictDevices bool) (*ImportResponse, 
 	return &result, json.NewDecoder(resp.Body).Decode(&result)
 }
 
+// --- Prometheus operations ---
+
+type PrometheusTarget struct {
+	Targets []string          `json:"targets"`
+	Labels  map[string]string `json:"labels"`
+}
+
+func (c *Client) PrometheusTargets() ([]PrometheusTarget, error) {
+	resp, err := c.get("/v1/prometheus/targets")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	var targets []PrometheusTarget
+	return targets, json.NewDecoder(resp.Body).Decode(&targets)
+}
+
 // --- Raw access ---
 
 func (c *Client) RawRequest(method, path string, body io.Reader) (*http.Response, error) {
