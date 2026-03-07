@@ -7,6 +7,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -318,7 +319,52 @@ func registerVMManagementTools(s *server.MCPServer, svc *app.VMService) {
 }
 
 // registerBackupTools registers vm_export and vm_import tools.
-func registerBackupTools(_ *server.MCPServer, _ *app.VMService) {}
+func registerBackupTools(s *server.MCPServer, svc *app.VMService) {
+	// vm_export
+	s.AddTool(mcp.NewTool("vm_export",
+		mcp.WithDescription("Export a stopped VM as a base64-encoded tar.zst archive"),
+		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
+		mcp.WithBoolean("include_devices", mcp.Description("Include device mappings in export")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		includeDevices := mcp.ParseBoolean(req, "include_devices", false)
+
+		var buf bytes.Buffer
+		if err := svc.ExportVM(ctx, id, includeDevices, &buf); err != nil {
+			return errResult(err)
+		}
+
+		encoded := base64.StdEncoding.EncodeToString(buf.Bytes())
+		return mcp.NewToolResultText(encoded), nil
+	})
+
+	// vm_import
+	s.AddTool(mcp.NewTool("vm_import",
+		mcp.WithDescription("Import a VM from a base64-encoded tar.zst archive"),
+		mcp.WithString("archive_base64", mcp.Description("Base64-encoded archive data"), mcp.Required()),
+		mcp.WithBoolean("strict_devices", mcp.Description("Fail if device mappings cannot be restored")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		archiveStr, errRes := requireString(req, "archive_base64")
+		if errRes != nil {
+			return errRes, nil
+		}
+		strictDevices := mcp.ParseBoolean(req, "strict_devices", false)
+
+		data, err := base64.StdEncoding.DecodeString(archiveStr)
+		if err != nil {
+			return errResult(fmt.Errorf("invalid base64: %w", err))
+		}
+
+		result, err := svc.ImportVM(ctx, bytes.NewReader(data), strictDevices)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(result)
+	})
+}
 
 // registerDriveTools registers drive_create, drive_list, drive_get,
 // drive_delete, drive_attach, and drive_detach tools.
