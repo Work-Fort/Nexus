@@ -53,7 +53,7 @@ nexusctl
 `client/` is a typed Go HTTP client mirroring the REST API:
 
 ```go
-c, err := client.New("http://localhost:7777")
+c, err := client.New("http://127.0.0.1:9600")
 vm, err := c.CreateVM(ctx, client.CreateVMParams{...})
 vms, err := c.ListVMs(ctx, client.ListVMsFilter{...})
 vm, err := c.GetVM(ctx, "my-vm")
@@ -110,7 +110,7 @@ Viper precedence:
 1. `--addr` flag
 2. `NEXUS_ADDR` environment variable
 3. `~/.config/nexus/nexusctl.toml`
-4. Default: `http://localhost:7777`
+4. Default: `http://127.0.0.1:9600`
 
 ## Testing
 
