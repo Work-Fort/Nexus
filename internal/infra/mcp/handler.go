@@ -368,7 +368,115 @@ func registerBackupTools(s *server.MCPServer, svc *app.VMService) {
 
 // registerDriveTools registers drive_create, drive_list, drive_get,
 // drive_delete, drive_attach, and drive_detach tools.
-func registerDriveTools(_ *server.MCPServer, _ *app.VMService) {}
+func registerDriveTools(s *server.MCPServer, svc *app.VMService) {
+	// drive_create
+	s.AddTool(mcp.NewTool("drive_create",
+		mcp.WithDescription("Create a new persistent data drive"),
+		mcp.WithString("name", mcp.Description("Drive name"), mcp.Required()),
+		mcp.WithString("size", mcp.Description("Size (e.g. 1G, 500Mi)"), mcp.Required()),
+		mcp.WithString("mount_path", mcp.Description("Mount path inside VM (e.g. /data)"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name, errRes := requireString(req, "name")
+		if errRes != nil {
+			return errRes, nil
+		}
+		size, errRes := requireString(req, "size")
+		if errRes != nil {
+			return errRes, nil
+		}
+		mountPath, errRes := requireString(req, "mount_path")
+		if errRes != nil {
+			return errRes, nil
+		}
+
+		drive, err := svc.CreateDrive(ctx, domain.CreateDriveParams{
+			Name:      name,
+			Size:      size,
+			MountPath: mountPath,
+		})
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(drive)
+	})
+
+	// drive_list
+	s.AddTool(mcp.NewTool("drive_list",
+		mcp.WithDescription("List all drives"),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		drives, err := svc.ListDrives(ctx)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(drives)
+	})
+
+	// drive_get
+	s.AddTool(mcp.NewTool("drive_get",
+		mcp.WithDescription("Get a drive by ID or name"),
+		mcp.WithString("id", mcp.Description("Drive ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		drive, err := svc.GetDrive(ctx, id)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(drive)
+	})
+
+	// drive_delete
+	s.AddTool(mcp.NewTool("drive_delete",
+		mcp.WithDescription("Delete a drive (must be detached)"),
+		mcp.WithString("id", mcp.Description("Drive ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if err := svc.DeleteDrive(ctx, id); err != nil {
+			return errResult(err)
+		}
+		return mcp.NewToolResultText("deleted"), nil
+	})
+
+	// drive_attach
+	s.AddTool(mcp.NewTool("drive_attach",
+		mcp.WithDescription("Attach a drive to a stopped VM"),
+		mcp.WithString("id", mcp.Description("Drive ID or name"), mcp.Required()),
+		mcp.WithString("vm_id", mcp.Description("VM ID or name to attach to"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		vmID, errRes := requireString(req, "vm_id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if err := svc.AttachDrive(ctx, id, vmID); err != nil {
+			return errResult(err)
+		}
+		return mcp.NewToolResultText("attached"), nil
+	})
+
+	// drive_detach
+	s.AddTool(mcp.NewTool("drive_detach",
+		mcp.WithDescription("Detach a drive from its VM"),
+		mcp.WithString("id", mcp.Description("Drive ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if err := svc.DetachDrive(ctx, id); err != nil {
+			return errResult(err)
+		}
+		return mcp.NewToolResultText("detached"), nil
+	})
+}
 
 // registerDeviceTools registers device_create, device_list, device_get,
 // device_delete, device_attach, and device_detach tools.
