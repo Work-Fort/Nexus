@@ -38,6 +38,28 @@ func (q *Queries) AttachDrive(ctx context.Context, arg AttachDriveParams) error 
 	return err
 }
 
+const countTemplateRefs = `-- name: CountTemplateRefs :one
+SELECT COUNT(*) FROM vms WHERE template_id = ? AND init = 1
+`
+
+func (q *Queries) CountTemplateRefs(ctx context.Context, templateID sql.NullString) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTemplateRefs, templateID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countTemplates = `-- name: CountTemplates :one
+SELECT COUNT(*) FROM templates
+`
+
+func (q *Queries) CountTemplates(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTemplates)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countVMs = `-- name: CountVMs :one
 SELECT COUNT(*) FROM vms
 `
@@ -73,6 +95,15 @@ DELETE FROM vm_tags WHERE vm_id = ?
 
 func (q *Queries) DeleteTagsByVM(ctx context.Context, vmID string) error {
 	_, err := q.db.ExecContext(ctx, deleteTagsByVM, vmID)
+	return err
+}
+
+const deleteTemplate = `-- name: DeleteTemplate :exec
+DELETE FROM templates WHERE id = ?
+`
+
+func (q *Queries) DeleteTemplate(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteTemplate, id)
 	return err
 }
 
@@ -300,8 +331,65 @@ func (q *Queries) GetTagsByVM(ctx context.Context, vmID string) ([]string, error
 	return items, nil
 }
 
+const getTemplate = `-- name: GetTemplate :one
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates WHERE id = ?
+`
+
+func (q *Queries) GetTemplate(ctx context.Context, id string) (Template, error) {
+	row := q.db.QueryRowContext(ctx, getTemplate, id)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Distro,
+		&i.Script,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTemplateByDistro = `-- name: GetTemplateByDistro :one
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates WHERE distro = ?
+`
+
+func (q *Queries) GetTemplateByDistro(ctx context.Context, distro string) (Template, error) {
+	row := q.db.QueryRowContext(ctx, getTemplateByDistro, distro)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Distro,
+		&i.Script,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getTemplateByName = `-- name: GetTemplateByName :one
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates WHERE name = ?
+`
+
+func (q *Queries) GetTemplateByName(ctx context.Context, name string) (Template, error) {
+	row := q.db.QueryRowContext(ctx, getTemplateByName, name)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Distro,
+		&i.Script,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getVM = `-- name: GetVM :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
 FROM vms WHERE id = ?
 `
 
@@ -326,12 +414,15 @@ func (q *Queries) GetVM(ctx context.Context, id string) (Vm, error) {
 		&i.RestartPolicy,
 		&i.RestartStrategy,
 		&i.Shell,
+		&i.Init,
+		&i.TemplateID,
+		&i.ScriptOverride,
 	)
 	return i, err
 }
 
 const getVMByName = `-- name: GetVMByName :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
 FROM vms WHERE name = ?
 `
 
@@ -356,6 +447,9 @@ func (q *Queries) GetVMByName(ctx context.Context, name string) (Vm, error) {
 		&i.RestartPolicy,
 		&i.RestartStrategy,
 		&i.Shell,
+		&i.Init,
+		&i.TemplateID,
+		&i.ScriptOverride,
 	)
 	return i, err
 }
@@ -430,10 +524,38 @@ func (q *Queries) InsertTag(ctx context.Context, arg InsertTagParams) error {
 	return err
 }
 
+const insertTemplate = `-- name: InsertTemplate :exec
+
+INSERT INTO templates (id, name, distro, script, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type InsertTemplateParams struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Distro    string `json:"distro"`
+	Script    string `json:"script"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// Template queries
+func (q *Queries) InsertTemplate(ctx context.Context, arg InsertTemplateParams) error {
+	_, err := q.db.ExecContext(ctx, insertTemplate,
+		arg.ID,
+		arg.Name,
+		arg.Distro,
+		arg.Script,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
 const insertVM = `-- name: InsertVM :exec
 
-INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertVMParams struct {
@@ -452,6 +574,9 @@ type InsertVMParams struct {
 	RestartPolicy   string         `json:"restart_policy"`
 	RestartStrategy string         `json:"restart_strategy"`
 	Shell           string         `json:"shell"`
+	Init            int64          `json:"init"`
+	TemplateID      sql.NullString `json:"template_id"`
+	ScriptOverride  sql.NullString `json:"script_override"`
 }
 
 // SPDX-License-Identifier: Apache-2.0
@@ -472,6 +597,9 @@ func (q *Queries) InsertVM(ctx context.Context, arg InsertVMParams) error {
 		arg.RestartPolicy,
 		arg.RestartStrategy,
 		arg.Shell,
+		arg.Init,
+		arg.TemplateID,
+		arg.ScriptOverride,
 	)
 	return err
 }
@@ -548,8 +676,43 @@ func (q *Queries) ListDrives(ctx context.Context) ([]Drive, error) {
 	return items, nil
 }
 
+const listTemplates = `-- name: ListTemplates :many
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates ORDER BY name
+`
+
+func (q *Queries) ListTemplates(ctx context.Context) ([]Template, error) {
+	rows, err := q.db.QueryContext(ctx, listTemplates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Template{}
+	for rows.Next() {
+		var i Template
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Distro,
+			&i.Script,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVMs = `-- name: ListVMs :many
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
 FROM vms ORDER BY created_at DESC
 `
 
@@ -580,6 +743,9 @@ func (q *Queries) ListVMs(ctx context.Context) ([]Vm, error) {
 			&i.RestartPolicy,
 			&i.RestartStrategy,
 			&i.Shell,
+			&i.Init,
+			&i.TemplateID,
+			&i.ScriptOverride,
 		); err != nil {
 			return nil, err
 		}
@@ -644,8 +810,32 @@ func (q *Queries) ResolveDrive(ctx context.Context, arg ResolveDriveParams) (Dri
 	return i, err
 }
 
+const resolveTemplate = `-- name: ResolveTemplate :one
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates WHERE id = ? OR name = ?
+`
+
+type ResolveTemplateParams struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (q *Queries) ResolveTemplate(ctx context.Context, arg ResolveTemplateParams) (Template, error) {
+	row := q.db.QueryRowContext(ctx, resolveTemplate, arg.ID, arg.Name)
+	var i Template
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Distro,
+		&i.Script,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const resolveVM = `-- name: ResolveVM :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
 FROM vms WHERE id = ? OR name = ?
 `
 
@@ -675,8 +865,55 @@ func (q *Queries) ResolveVM(ctx context.Context, arg ResolveVMParams) (Vm, error
 		&i.RestartPolicy,
 		&i.RestartStrategy,
 		&i.Shell,
+		&i.Init,
+		&i.TemplateID,
+		&i.ScriptOverride,
 	)
 	return i, err
+}
+
+const updateTemplate = `-- name: UpdateTemplate :exec
+UPDATE templates SET name = ?, distro = ?, script = ?, updated_at = ? WHERE id = ?
+`
+
+type UpdateTemplateParams struct {
+	Name      string `json:"name"`
+	Distro    string `json:"distro"`
+	Script    string `json:"script"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) error {
+	_, err := q.db.ExecContext(ctx, updateTemplate,
+		arg.Name,
+		arg.Distro,
+		arg.Script,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
+}
+
+const updateVMInit = `-- name: UpdateVMInit :exec
+UPDATE vms SET init = ?, template_id = ?, script_override = ? WHERE id = ?
+`
+
+type UpdateVMInitParams struct {
+	Init           int64          `json:"init"`
+	TemplateID     sql.NullString `json:"template_id"`
+	ScriptOverride sql.NullString `json:"script_override"`
+	ID             string         `json:"id"`
+}
+
+func (q *Queries) UpdateVMInit(ctx context.Context, arg UpdateVMInitParams) error {
+	_, err := q.db.ExecContext(ctx, updateVMInit,
+		arg.Init,
+		arg.TemplateID,
+		arg.ScriptOverride,
+		arg.ID,
+	)
+	return err
 }
 
 const updateVMRestartPolicy = `-- name: UpdateVMRestartPolicy :exec

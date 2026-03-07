@@ -28,6 +28,15 @@ type Drive struct {
 	CreatedAt string         `json:"created_at"`
 }
 
+type Template struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Distro    string `json:"distro"`
+	Script    string `json:"script"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
 type Vm struct {
 	ID              string         `json:"id"`
 	Name            string         `json:"name"`
@@ -46,6 +55,9 @@ type Vm struct {
 	RestartPolicy   string         `json:"restart_policy"`
 	RestartStrategy string         `json:"restart_strategy"`
 	Shell           string         `json:"shell"`
+	Init            int64          `json:"init"`
+	TemplateID      sql.NullString `json:"template_id"`
+	ScriptOverride  sql.NullString `json:"script_override"`
 }
 
 type VmTag struct {

@@ -100,6 +100,18 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 			dnsSearch = sql.NullString{String: string(b), Valid: true}
 		}
 	}
+	var initVal int64
+	if vm.Init {
+		initVal = 1
+	}
+	var templateID sql.NullString
+	if vm.TemplateID != "" {
+		templateID = sql.NullString{String: vm.TemplateID, Valid: true}
+	}
+	var scriptOverride sql.NullString
+	if vm.ScriptOverride != "" {
+		scriptOverride = sql.NullString{String: vm.ScriptOverride, Valid: true}
+	}
 	if err := s.q.InsertVM(ctx, InsertVMParams{
 		ID:              vm.ID,
 		Name:            vm.Name,
@@ -116,6 +128,9 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 		RestartPolicy:   string(vm.RestartPolicy),
 		RestartStrategy: string(vm.RestartStrategy),
 		Shell:           vm.Shell,
+		Init:            initVal,
+		TemplateID:      templateID,
+		ScriptOverride:  scriptOverride,
 	}); err != nil {
 		return err
 	}
@@ -594,6 +609,9 @@ func vmFromRow(row Vm) (*domain.VM, error) {
 		RestartPolicy:   domain.RestartPolicy(row.RestartPolicy),
 		RestartStrategy: domain.RestartStrategy(row.RestartStrategy),
 		Shell:           row.Shell,
+		Init:            row.Init != 0,
+		TemplateID:      row.TemplateID.String,
+		ScriptOverride:  row.ScriptOverride.String,
 	}
 	var err error
 	vm.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)

@@ -1,19 +1,19 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- name: InsertVM :exec
-INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetVM :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
 FROM vms WHERE id = ?;
 
 -- name: GetVMByName :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
 FROM vms WHERE name = ?;
 
 -- name: ListVMs :many
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
 FROM vms ORDER BY created_at DESC;
 
 -- name: UpdateVMStateCreated :exec
@@ -111,7 +111,7 @@ FROM devices WHERE vm_id = ? ORDER BY host_path;
 DELETE FROM devices WHERE id = ?;
 
 -- name: ResolveVM :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
 FROM vms WHERE id = ? OR name = ?;
 
 -- name: UpdateVMRestartPolicy :exec
@@ -124,3 +124,44 @@ FROM drives WHERE id = ? OR name = ?;
 -- name: ResolveDevice :one
 SELECT id, name, host_path, container_path, permissions, gid, vm_id, created_at
 FROM devices WHERE id = ? OR name = ?;
+
+-- name: UpdateVMInit :exec
+UPDATE vms SET init = ?, template_id = ?, script_override = ? WHERE id = ?;
+
+-- Template queries
+
+-- name: InsertTemplate :exec
+INSERT INTO templates (id, name, distro, script, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+-- name: GetTemplate :one
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates WHERE id = ?;
+
+-- name: GetTemplateByName :one
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates WHERE name = ?;
+
+-- name: GetTemplateByDistro :one
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates WHERE distro = ?;
+
+-- name: ResolveTemplate :one
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates WHERE id = ? OR name = ?;
+
+-- name: ListTemplates :many
+SELECT id, name, distro, script, created_at, updated_at
+FROM templates ORDER BY name;
+
+-- name: UpdateTemplate :exec
+UPDATE templates SET name = ?, distro = ?, script = ?, updated_at = ? WHERE id = ?;
+
+-- name: DeleteTemplate :exec
+DELETE FROM templates WHERE id = ?;
+
+-- name: CountTemplateRefs :one
+SELECT COUNT(*) FROM vms WHERE template_id = ? AND init = 1;
+
+-- name: CountTemplates :one
+SELECT COUNT(*) FROM templates;
