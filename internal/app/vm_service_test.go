@@ -547,6 +547,87 @@ func newSvcWithDevices() (*app.VMService, *mockStore, *mockRuntime, *mockDeviceS
 	return svc, store, rt, devStore
 }
 
+// --- mock TemplateStore ---
+
+type mockTemplateStore struct {
+	templates map[string]*domain.Template
+}
+
+func newMockTemplateStore() *mockTemplateStore {
+	return &mockTemplateStore{templates: make(map[string]*domain.Template)}
+}
+
+func (m *mockTemplateStore) CreateTemplate(_ context.Context, t *domain.Template) error {
+	m.templates[t.ID] = t
+	return nil
+}
+
+func (m *mockTemplateStore) GetTemplate(_ context.Context, id string) (*domain.Template, error) {
+	t, ok := m.templates[id]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	return t, nil
+}
+
+func (m *mockTemplateStore) GetTemplateByName(_ context.Context, name string) (*domain.Template, error) {
+	for _, t := range m.templates {
+		if t.Name == name {
+			return t, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (m *mockTemplateStore) GetTemplateByDistro(_ context.Context, distro string) (*domain.Template, error) {
+	for _, t := range m.templates {
+		if t.Distro == distro {
+			return t, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (m *mockTemplateStore) ResolveTemplate(_ context.Context, ref string) (*domain.Template, error) {
+	if t, ok := m.templates[ref]; ok {
+		return t, nil
+	}
+	for _, t := range m.templates {
+		if t.Name == ref {
+			return t, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (m *mockTemplateStore) ListTemplates(_ context.Context) ([]*domain.Template, error) {
+	var result []*domain.Template
+	for _, t := range m.templates {
+		result = append(result, t)
+	}
+	return result, nil
+}
+
+func (m *mockTemplateStore) UpdateTemplate(_ context.Context, id, name, distro, script string) error {
+	t, ok := m.templates[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	t.Name = name
+	t.Distro = distro
+	t.Script = script
+	return nil
+}
+
+func (m *mockTemplateStore) DeleteTemplate(_ context.Context, id string) error {
+	delete(m.templates, id)
+	return nil
+}
+
+func (m *mockTemplateStore) CountTemplateRefs(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+
 // --- tests ---
 
 func TestCreateVM(t *testing.T) {
@@ -1874,6 +1955,173 @@ func TestStartVM_AutoSyncShell(t *testing.T) {
 		got := store.vms["vm-1"]
 		if got.Shell != "/bin/bash" {
 			t.Errorf("Shell = %q, want /bin/bash (unchanged)", got.Shell)
+		}
+	})
+}
+
+func TestTemplateCRUD(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	ts := newMockTemplateStore()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{}, app.WithTemplateStore(ts))
+
+	ctx := context.Background()
+
+	// Create
+	tmpl, err := svc.CreateTemplate(ctx, domain.CreateTemplateParams{
+		Name:   "test-openrc",
+		Distro: "test",
+		Script: "#!/bin/sh\nexec /sbin/init",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if tmpl.Name != "test-openrc" {
+		t.Errorf("name = %q", tmpl.Name)
+	}
+
+	// Get
+	got, err := svc.GetTemplate(ctx, tmpl.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Distro != "test" {
+		t.Errorf("distro = %q", got.Distro)
+	}
+
+	// List
+	all, err := svc.ListTemplates(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 1 {
+		t.Errorf("list count = %d", len(all))
+	}
+
+	// Update
+	updated, err := svc.UpdateTemplate(ctx, tmpl.ID, domain.CreateTemplateParams{
+		Name:   "test-openrc-v2",
+		Script: "#!/bin/sh\nexec /sbin/init --new",
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.Name != "test-openrc-v2" {
+		t.Errorf("updated name = %q", updated.Name)
+	}
+
+	// Delete
+	if err := svc.DeleteTemplate(ctx, tmpl.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+}
+
+func TestCreateTemplateValidation(t *testing.T) {
+	store := newMockStore()
+	rt := newMockRuntime()
+	ts := newMockTemplateStore()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{}, app.WithTemplateStore(ts))
+
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		params domain.CreateTemplateParams
+	}{
+		{"missing name", domain.CreateTemplateParams{Distro: "x", Script: "x"}},
+		{"missing distro", domain.CreateTemplateParams{Name: "x", Script: "x"}},
+		{"missing script", domain.CreateTemplateParams{Name: "x", Distro: "x"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.CreateTemplate(ctx, tc.params)
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Errorf("err = %v, want ErrValidation", err)
+			}
+		})
+	}
+}
+
+func TestCreateVMWithInit(t *testing.T) {
+	t.Run("auto-detect distro", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		rt.detectDistro = "alpine"
+		ts := newMockTemplateStore()
+		ts.templates["tpl-1"] = &domain.Template{
+			ID: "tpl-1", Name: "alpine-openrc", Distro: "alpine",
+			Script: "#!/bin/sh\nexec /sbin/init",
+		}
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{}, app.WithTemplateStore(ts))
+
+		vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+			Name: "init-test",
+			Init: true,
+		})
+		if err != nil {
+			t.Fatalf("CreateVM: %v", err)
+		}
+		if !vm.Init {
+			t.Error("Init = false")
+		}
+		if vm.TemplateID != "tpl-1" {
+			t.Errorf("TemplateID = %q, want tpl-1", vm.TemplateID)
+		}
+		if rt.initScript == "" {
+			t.Error("expected init script path to be set")
+		}
+	})
+
+	t.Run("explicit template name", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		ts := newMockTemplateStore()
+		ts.templates["tpl-1"] = &domain.Template{
+			ID: "tpl-1", Name: "my-template", Distro: "custom",
+			Script: "#!/bin/sh\necho custom",
+		}
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{}, app.WithTemplateStore(ts))
+
+		vm, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+			Name:         "init-test2",
+			Init:         true,
+			TemplateName: "my-template",
+		})
+		if err != nil {
+			t.Fatalf("CreateVM: %v", err)
+		}
+		if vm.TemplateID != "tpl-1" {
+			t.Errorf("TemplateID = %q, want tpl-1", vm.TemplateID)
+		}
+	})
+
+	t.Run("no matching template fails", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		rt.detectDistro = "unknown"
+		ts := newMockTemplateStore()
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{}, app.WithTemplateStore(ts))
+
+		_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+			Name: "init-fail",
+			Init: true,
+		})
+		if err == nil {
+			t.Fatal("expected error for missing template")
+		}
+	})
+
+	t.Run("no template store fails", func(t *testing.T) {
+		store := newMockStore()
+		rt := newMockRuntime()
+		svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
+
+		_, err := svc.CreateVM(context.Background(), domain.CreateVMParams{
+			Name: "init-fail",
+			Init: true,
+		})
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("err = %v, want ErrValidation", err)
 		}
 	})
 }
