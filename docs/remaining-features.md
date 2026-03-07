@@ -88,7 +88,7 @@ HTTP streaming MCP server exposing REST-equivalent functions:
 - Device CRUD + attach/detach
 - Exec, terminal access
 
-## 9. nexusctl
+## 9. nexusctl ✅
 
 [Design](nexusctl-design.md) · [Plan](plans/2026-03-05-nexusctl.md)
 
