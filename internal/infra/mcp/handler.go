@@ -35,6 +35,7 @@ func NewHandler(svc *app.VMService) http.Handler {
 	registerDriveTools(s, svc)
 	registerDeviceTools(s, svc)
 	registerTemplateTools(s, svc)
+	registerSnapshotTools(s, svc)
 
 	return server.NewStreamableHTTPServer(s)
 }
@@ -727,4 +728,104 @@ func parseByteSize(s string) (int64, error) {
 		return 0, err
 	}
 	return int64(n), nil
+}
+
+func registerSnapshotTools(s *server.MCPServer, svc *app.VMService) {
+	s.AddTool(mcp.NewTool("snapshot_create",
+		mcp.WithDescription("Create a point-in-time snapshot of a VM"),
+		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
+		mcp.WithString("name", mcp.Description("Snapshot name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		vmRef, errRes := requireString(req, "vm_id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		name, errRes := requireString(req, "name")
+		if errRes != nil {
+			return errRes, nil
+		}
+		snap, err := svc.CreateSnapshot(ctx, vmRef, name)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(snap)
+	})
+
+	s.AddTool(mcp.NewTool("snapshot_list",
+		mcp.WithDescription("List snapshots for a VM"),
+		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		vmRef, errRes := requireString(req, "vm_id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		snaps, err := svc.ListSnapshots(ctx, vmRef)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(snaps)
+	})
+
+	s.AddTool(mcp.NewTool("snapshot_delete",
+		mcp.WithDescription("Delete a VM snapshot"),
+		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
+		mcp.WithString("id", mcp.Description("Snapshot ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		vmRef, errRes := requireString(req, "vm_id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		snapRef, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if err := svc.DeleteSnapshot(ctx, vmRef, snapRef); err != nil {
+			return errResult(err)
+		}
+		return jsonResult(map[string]string{"status": "deleted"})
+	})
+
+	s.AddTool(mcp.NewTool("snapshot_restore",
+		mcp.WithDescription("Restore a stopped VM to a previous snapshot"),
+		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
+		mcp.WithString("id", mcp.Description("Snapshot ID or name"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		vmRef, errRes := requireString(req, "vm_id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		snapRef, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		if err := svc.RestoreSnapshot(ctx, vmRef, snapRef); err != nil {
+			return errResult(err)
+		}
+		return jsonResult(map[string]string{"status": "restored"})
+	})
+
+	s.AddTool(mcp.NewTool("snapshot_clone",
+		mcp.WithDescription("Clone a VM from a snapshot"),
+		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
+		mcp.WithString("id", mcp.Description("Snapshot ID or name"), mcp.Required()),
+		mcp.WithString("name", mcp.Description("Name for the new VM"), mcp.Required()),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		vmRef, errRes := requireString(req, "vm_id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		snapRef, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+		name, errRes := requireString(req, "name")
+		if errRes != nil {
+			return errRes, nil
+		}
+		vm, err := svc.CloneSnapshot(ctx, vmRef, snapRef, name)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(vm)
+	})
 }
