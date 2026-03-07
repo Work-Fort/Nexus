@@ -34,10 +34,12 @@ type daemonConfig struct {
 	quotaHelper     string // quota helper binary (empty to disable)
 	btrfsHelperSet  bool
 	btrfsHelper     string
-	netnsHelperSet  bool
-	netnsHelper     string
-	cniExecBinSet   bool
-	cniExecBin      string
+	netnsHelperSet       bool
+	netnsHelper          string
+	cniExecBinSet        bool
+	cniExecBin           string
+	nodeExporterPathSet  bool
+	nodeExporterPath     string
 }
 
 type DaemonOption func(*daemonConfig)
@@ -84,6 +86,10 @@ func WithNetNSHelper(helper string) DaemonOption {
 
 func WithCNIExecBin(bin string) DaemonOption {
 	return func(c *daemonConfig) { c.cniExecBinSet = true; c.cniExecBin = bin }
+}
+
+func WithNodeExporterPath(path string) DaemonOption {
+	return func(c *daemonConfig) { c.nodeExporterPathSet = true; c.nodeExporterPath = path }
 }
 
 type Daemon struct {
@@ -139,6 +145,9 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 	}
 	if cfg.cniExecBinSet {
 		args = append(args, "--cni-exec-bin", cfg.cniExecBin)
+	}
+	if cfg.nodeExporterPathSet {
+		args = append(args, "--node-exporter-path", cfg.nodeExporterPath)
 	}
 
 	var stderrBuf bytes.Buffer
@@ -215,6 +224,9 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 	}
 	if cfg.cniExecBinSet {
 		args = append(args, "--cni-exec-bin", cfg.cniExecBin)
+	}
+	if cfg.nodeExporterPathSet {
+		args = append(args, "--node-exporter-path", cfg.nodeExporterPath)
 	}
 
 	var stderrBuf bytes.Buffer

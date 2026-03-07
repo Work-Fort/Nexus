@@ -65,6 +65,26 @@ echo "Installing Nexus binaries to ~/.local/bin/"
 mkdir -p ~/.local/bin
 cp build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota build/nexus-btrfs build/nexus-dns build/nexusctl ~/.local/bin/
 
+# Install node_exporter if not already present.
+if [ ! -f ~/.local/bin/node_exporter ]; then
+    NODE_EXPORTER_VERSION="1.10.2"
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64)  ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+    esac
+    TARBALL="node_exporter-${NODE_EXPORTER_VERSION}.linux-${ARCH}.tar.gz"
+    URL="https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VERSION}/${TARBALL}"
+    echo "Downloading node_exporter v${NODE_EXPORTER_VERSION}..."
+    TMPDIR=$(mktemp -d)
+    curl -sL "$URL" | tar xz -C "$TMPDIR" --strip-components=1
+    cp "$TMPDIR/node_exporter" ~/.local/bin/
+    rm -rf "$TMPDIR"
+    echo "Installed node_exporter to ~/.local/bin/"
+else
+    echo "node_exporter already installed, skipping download"
+fi
+
 # Set capabilities on helper binaries (matches scripts/dev-setcap-loop.sh)
 echo "Setting capabilities (requires sudo)..."
 sudo setcap cap_sys_admin+ep ~/.local/bin/nexus-netns

@@ -30,7 +30,7 @@ const (
 	DefaultSnapshotter  = "" // empty = containerd default (overlayfs)
 	DefaultCoreDNSBin       = "coredns"
 	DefaultDNSHelper        = "nexus-dns"
-	DefaultNodeExporterPath = "/opt/nexus/bin/node_exporter"
+	DefaultNodeExporterPath = "node_exporter" // resolved via PATH; install:local puts it in ~/.local/bin
 	DefaultMetricsPort      = 9100
 )
 
@@ -108,7 +108,7 @@ func InitViper() {
 	viper.SetDefault("dns-enabled", true)
 	viper.SetDefault("coredns-bin", DefaultCoreDNSBin)
 	viper.SetDefault("dns-helper", DefaultDNSHelper)
-	viper.SetDefault("metrics.node-exporter-path", DefaultNodeExporterPath)
+	viper.SetDefault("node-exporter-path", DefaultNodeExporterPath)
 	viper.SetDefault("metrics.listen-port", DefaultMetricsPort)
 	viper.SetDefault("metrics.collectors", []string{
 		"cpu", "meminfo", "diskstats", "filesystem", "loadavg", "netdev",
