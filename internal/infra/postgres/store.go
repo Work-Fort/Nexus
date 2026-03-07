@@ -22,7 +22,8 @@ var (
 	_ domain.VMStore       = (*Store)(nil)
 	_ domain.DriveStore    = (*Store)(nil)
 	_ domain.DeviceStore   = (*Store)(nil)
-	_ domain.TemplateStore = (*Store)(nil)
+	_ domain.TemplateStore  = (*Store)(nil)
+	_ domain.SnapshotStore  = (*Store)(nil)
 )
 
 //go:embed migrations/*.sql
@@ -644,4 +645,63 @@ func scanTemplateRow(s scanner) (*domain.Template, error) {
 	t.CreatedAt = createdAt
 	t.UpdatedAt = updatedAt
 	return &t, nil
+}
+
+// --- SnapshotStore ---
+
+func (s *Store) CreateSnapshot(ctx context.Context, snap *domain.Snapshot) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO snapshots (id, vm_id, name, created_at) VALUES ($1, $2, $3, $4)`,
+		snap.ID, snap.VMID, snap.Name, snap.CreatedAt)
+	return err
+}
+
+func (s *Store) GetSnapshot(ctx context.Context, id string) (*domain.Snapshot, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, vm_id, name, created_at FROM snapshots WHERE id = $1`, id)
+	return scanSnapshotRow(row)
+}
+
+func (s *Store) GetSnapshotByName(ctx context.Context, vmID, name string) (*domain.Snapshot, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, vm_id, name, created_at FROM snapshots WHERE vm_id = $1 AND name = $2`,
+		vmID, name)
+	return scanSnapshotRow(row)
+}
+
+func (s *Store) ListSnapshots(ctx context.Context, vmID string) ([]*domain.Snapshot, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, vm_id, name, created_at FROM snapshots WHERE vm_id = $1 ORDER BY created_at`,
+		vmID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []*domain.Snapshot
+	for rows.Next() {
+		snap, err := scanSnapshotRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, snap)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) DeleteSnapshot(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM snapshots WHERE id = $1`, id)
+	return err
+}
+
+func scanSnapshotRow(s scanner) (*domain.Snapshot, error) {
+	var snap domain.Snapshot
+	var createdAt time.Time
+	if err := s.Scan(&snap.ID, &snap.VMID, &snap.Name, &createdAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, domain.ErrNotFound
+		}
+		return nil, err
+	}
+	snap.CreatedAt = createdAt
+	return &snap, nil
 }
