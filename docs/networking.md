@@ -168,6 +168,29 @@ netns-helper: "nexus-netns"
 cni-exec-bin: "nexus-cni-exec"
 ```
 
+## Firewall Forwarding
+
+Hosts running UFW, firewalld, or custom iptables rules typically set the
+default FORWARD policy to DROP, which blocks VM traffic even when IP
+forwarding is enabled. Nexus handles this automatically — no manual firewall
+configuration is needed.
+
+On daemon startup, `nexus-cni-exec setup-forwarding nexus0` creates a
+`NEXUS-FORWARD` chain in the iptables filter table with two rules:
+
+1. Accept outbound traffic from the bridge (`-i nexus0 -j ACCEPT`)
+2. Accept related/established return traffic to the bridge
+   (`-o nexus0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT`)
+
+A jump rule is inserted at position 1 of the FORWARD chain so the
+`NEXUS-FORWARD` rules are evaluated before any DROP policy.
+
+On daemon shutdown, `nexus-cni-exec teardown-forwarding nexus0` removes the
+jump rule, flushes the chain, and deletes it. Both operations are idempotent.
+
+This works with UFW, firewalld, and bare iptables/nftables setups because the
+rules use the iptables API (which nftables translates via `iptables-nft`).
+
 ## Troubleshooting
 
 ### Bridge creation fails
