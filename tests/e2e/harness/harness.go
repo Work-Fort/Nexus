@@ -1103,7 +1103,39 @@ func (c *Client) MCPCall(toolName string, args map[string]any) (*MCPToolResult, 
 		return nil, fmt.Errorf("MCP call %s: status %d: %s", toolName, resp.StatusCode, string(respBody))
 	}
 
-	// Parse JSON-RPC response.
+	// Parse JSON-RPC response. When notifications are sent during
+	// tool execution, mcp-go upgrades the response to SSE format.
+	var responseJSON []byte
+	ct := resp.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "text/event-stream") {
+		// SSE response — find the last data: line with a JSON-RPC
+		// result (skip notification lines).
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "data: ") {
+				payload := []byte(line[len("data: "):])
+				// Check if this is a result (has "result" key), not a notification.
+				var peek struct {
+					Result any `json:"result"`
+				}
+				if json.Unmarshal(payload, &peek) == nil && peek.Result != nil {
+					responseJSON = payload
+				}
+			}
+		}
+		if responseJSON == nil {
+			return nil, fmt.Errorf("no JSON-RPC result found in SSE stream")
+		}
+	} else {
+		var err2 error
+		responseJSON, err2 = io.ReadAll(resp.Body)
+		if err2 != nil {
+			return nil, fmt.Errorf("read MCP response: %w", err2)
+		}
+	}
+
 	var rpcResp struct {
 		Result struct {
 			Content []struct {
@@ -1118,7 +1150,7 @@ func (c *Client) MCPCall(toolName string, args map[string]any) (*MCPToolResult, 
 		} `json:"error"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	if err := json.Unmarshal(responseJSON, &rpcResp); err != nil {
 		return nil, fmt.Errorf("decode MCP response: %w", err)
 	}
 
