@@ -88,6 +88,7 @@ func TestGenerateResolvConfDefault(t *testing.T) {
 	m := &Manager{
 		cfg: Config{
 			GatewayIP:  "172.16.0.1",
+			Domains:    []string{"nexus"},
 			RuntimeDir: runtimeDir,
 		},
 	}
@@ -116,6 +117,7 @@ func TestGenerateResolvConfCustom(t *testing.T) {
 	m := &Manager{
 		cfg: Config{
 			GatewayIP:  "172.16.0.1",
+			Domains:    []string{"nexus"},
 			RuntimeDir: runtimeDir,
 		},
 	}
@@ -139,6 +141,26 @@ func TestGenerateResolvConfCustom(t *testing.T) {
 	}
 	if !strings.Contains(content, "search nexus example.com") {
 		t.Errorf("missing search domains:\n%s", content)
+	}
+}
+
+func TestGenerateResolvConfMultiDomain(t *testing.T) {
+	runtimeDir := t.TempDir()
+	m := &Manager{
+		cfg: Config{
+			GatewayIP:  "172.16.0.1",
+			Domains:    []string{"nexus", "work-fort"},
+			RuntimeDir: runtimeDir,
+		},
+	}
+	path, err := m.GenerateResolvConf("vm-multi", nil)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+	if !strings.Contains(content, "search nexus work-fort") {
+		t.Errorf("missing multi-domain search:\n%s", content)
 	}
 }
 

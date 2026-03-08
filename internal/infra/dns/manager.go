@@ -164,7 +164,7 @@ func (m *Manager) removeRecord(name string) error {
 // GenerateResolvConf creates a resolv.conf file for a VM and returns its path.
 func (m *Manager) GenerateResolvConf(vmID string, cfg *domain.DNSConfig) (string, error) {
 	servers := []string{m.cfg.GatewayIP}
-	search := []string{"nexus"}
+	search := m.cfg.Domains
 	if cfg != nil {
 		if len(cfg.Servers) > 0 {
 			servers = cfg.Servers
