@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/containernetworking/cni/libcni"
 	"github.com/containernetworking/cni/pkg/invoke"
@@ -169,6 +170,19 @@ func New(cfg Config) (*Network, error) {
 		},
 	)
 
+	// Best-effort firewall forwarding setup. Ensures the host firewall
+	// (UFW, firewalld) allows FORWARD traffic for the bridge interface.
+	// Non-fatal: on systems without iptables, networking may still work
+	// if the host has no restrictive firewall.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		out, err := exec.CommandContext(ctx, cniExecAbs, "setup-forwarding", "nexus0").CombinedOutput()
+		cancel()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "nexus: warning: setup forwarding: %v: %s\n", err, out)
+		}
+	}
+
 	return &Network{
 		cni:         cniConfig,
 		confList:    confList,
@@ -183,8 +197,13 @@ func New(cfg Config) (*Network, error) {
 	}, nil
 }
 
-// Close removes temporary directories.
+// Close removes firewall rules and temporary directories.
 func (n *Network) Close() error {
+	// Best-effort firewall cleanup.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	exec.CommandContext(ctx, n.cniExecBin, "teardown-forwarding", n.bridgeName).CombinedOutput() //nolint:errcheck
+	cancel()
+
 	os.RemoveAll(n.wrapperDir)
 	return os.RemoveAll(n.confDir)
 }
