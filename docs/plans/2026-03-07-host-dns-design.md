@@ -2,26 +2,71 @@
 
 ## Goal
 
-Enable the host to resolve `*.nexus` domains so tools like `curl`, `ping`,
-and browsers can reach VMs by name. Split DNS — only `.nexus` queries route
-to CoreDNS, all other DNS is unaffected.
+Enable the host to resolve VMs by name via configurable DNS domains.
+Split DNS — only configured domains (default `.nexus`) route to CoreDNS,
+all other DNS is unaffected. Supports multiple domains so users can add
+vanity TLDs (e.g. `.work-fort`) alongside the internal `.nexus` default.
 
 ## Architecture
 
-CoreDNS dual-binds the `nexus` zone to a loopback address (`127.0.0.100`)
-for host resolution and the bridge gateway IP for VM resolution. The daemon
-registers split DNS routing with systemd-resolved via D-Bus so the host's
-stub resolver knows to send `*.nexus` queries to `127.0.0.100`.
+CoreDNS dual-binds the configured zones to a loopback address
+(`127.0.0.100`) for host resolution and the bridge gateway IP for VM
+resolution. The daemon registers split DNS routing with systemd-resolved
+via D-Bus so the host's stub resolver knows to send queries for all
+configured domains to `127.0.0.100`.
 
 ```
 Host app (curl myvm.nexus)
   → 127.0.0.53 (systemd-resolved stub)
-  → routing domain ~nexus → 127.0.0.100 (CoreDNS, nexus zone only)
+  → routing domain ~nexus → 127.0.0.100 (CoreDNS, configured zones only)
+  → hosts file lookup → 172.16.0.x
+
+Host app (curl myvm.work-fort)
+  → 127.0.0.53 (systemd-resolved stub)
+  → routing domain ~work-fort → 127.0.0.100 (CoreDNS, same hosts file)
   → hosts file lookup → 172.16.0.x
 
 VM (nslookup anything)
   → 172.16.0.1 (CoreDNS, gateway)
-  → nexus zone OR catch-all forwarder → upstream DNS
+  → configured zones OR catch-all forwarder → upstream DNS
+```
+
+## Multiple Domain Support
+
+The daemon accepts a list of DNS domains via `--dns-domains` (default
+`nexus`). The first domain is the primary. `nexus` is always included —
+if the user specifies `--dns-domains work-fort`, the effective list is
+`[nexus, work-fort]`.
+
+Each VM gets aliases in the hosts file for every configured domain:
+
+```
+172.16.0.2 myvm.nexus myvm.work-fort myvm
+```
+
+CoreDNS serves a combined zone matching all configured domains:
+
+```
+nexus work-fort {
+    bind 127.0.0.100 172.16.0.1
+    hosts /path/to/hosts { reload 2s; fallthrough }
+    log
+}
+```
+
+The resolved D-Bus registration includes all domains as routing-only:
+
+```
+SetLinkDomains(ifindex, [
+    {"nexus", routing_only=true},
+    {"work-fort", routing_only=true},
+])
+```
+
+VM resolv.conf search path includes all domains:
+
+```
+search nexus work-fort
 ```
 
 ## Loopback Address: `127.0.0.100`
@@ -41,9 +86,11 @@ addresses:
 
 ## CoreDNS Configuration
 
-The `nexus` server block binds to both the loopback and gateway. The
-catch-all forwarder binds only to the gateway — the host never uses
-CoreDNS for non-nexus queries.
+The configured zones bind to both the loopback and gateway. The catch-all
+forwarder binds only to the gateway — the host never uses CoreDNS for
+queries outside the configured domains.
+
+**Single domain (default):**
 
 ```
 nexus {
@@ -62,9 +109,28 @@ nexus {
 }
 ```
 
-Non-nexus queries from the host to `127.0.0.100` get REFUSED by CoreDNS.
-systemd-resolved handles this correctly — it falls back to the normal
-upstream DNS servers.
+**Multiple domains:**
+
+```
+nexus work-fort {
+    bind 127.0.0.100 172.16.0.1
+    hosts /var/lib/nexus/dns/hosts {
+        reload 2s
+        fallthrough
+    }
+    log
+}
+
+. {
+    bind 172.16.0.1
+    forward . 1.1.1.1 8.8.8.8
+    log
+}
+```
+
+Non-configured-domain queries from the host to `127.0.0.100` get REFUSED
+by CoreDNS. systemd-resolved handles this correctly — it falls back to
+the normal upstream DNS servers.
 
 ## Split DNS Registration via D-Bus
 
@@ -77,7 +143,7 @@ Server) or NetworkManager (Ubuntu Desktop, Fedora Workstation).
 
 1. Look up interface index: `net.InterfaceByName("nexus0")`
 2. `SetLinkDNS(ifindex, [{AF_INET, 127.0.0.100}])`
-3. `SetLinkDomains(ifindex, [{"nexus", routing_only=true}])`
+3. `SetLinkDomains(ifindex, [{"nexus", true}, {"work-fort", true}, ...])`
 4. `SetLinkDefaultRoute(ifindex, false)`
 
 ### Teardown (on shutdown)
@@ -88,7 +154,7 @@ Server) or NetworkManager (Ubuntu Desktop, Fedora Workstation).
 
 Best-effort. If any D-Bus call fails (resolved not running, polkit
 denied, interface not found), the daemon logs a warning and continues.
-VM networking is unaffected — only host-side `.nexus` resolution is
+VM networking is unaffected — only host-side name resolution is
 unavailable.
 
 ### Self-healing on crash
@@ -125,23 +191,32 @@ actions, not arbitrary system changes.
 
 Small package wrapping the D-Bus calls:
 
-- `Register(ifname, dnsIP, domain string) error` — calls SetLinkDNS +
-  SetLinkDomains + SetLinkDefaultRoute
+- `Register(ifname, dnsIP string, domains []string) error` — calls
+  SetLinkDNS + SetLinkDomains + SetLinkDefaultRoute
 - `Revert(ifname string) error` — calls RevertLink
 - Uses `github.com/godbus/dbus/v5`
 
 ### `dns.Config` changes
 
-New field: `LoopbackIP string` (default `"127.0.0.100"`).
+Two new fields:
 
-`writeCorefile()` adds the loopback IP to the `nexus` server block's
-`bind` directive. The catch-all `.` block remains gateway-only.
+- `LoopbackIP string` — default `"127.0.0.100"`
+- `Domains []string` — default `["nexus"]`
+
+`writeCorefile()` uses all domains as the zone name(s) and adds the
+loopback IP to the bind directive. The catch-all `.` block remains
+gateway-only.
+
+`writeHostsFile()` generates aliases for each domain:
+`IP name.domain1 name.domain2 ... name`
+
+`GenerateResolvConf()` uses the domain list as the search path.
 
 ### `cmd/daemon.go` changes
 
 After `dm.Start()`:
 ```go
-if err := resolved.Register("nexus0", loopbackIP, "nexus"); err != nil {
+if err := resolved.Register("nexus0", loopbackIP, domains); err != nil {
     log.Warn("host dns: could not register with resolved", "err", err)
 }
 ```
@@ -153,7 +228,9 @@ resolved.Revert("nexus0")
 
 ### Configuration
 
-New flag: `--dns-loopback` (default `127.0.0.100`, env `NEXUS_DNS_LOOPBACK`).
+- `--dns-loopback` (default `127.0.0.100`, env `NEXUS_DNS_LOOPBACK`)
+- `--dns-domains` (default `nexus`, env `NEXUS_DNS_DOMAINS`) — comma-
+  separated list. `nexus` is always included even if not specified.
 
 ## New Dependency
 
@@ -177,9 +254,11 @@ the systemd project for VPN-like daemons.
 ## Testing
 
 - **Unit test:** Verify `writeCorefile()` generates correct dual-bind
-  config with loopback IP in `nexus` block only.
+  config with loopback IP, single and multiple domains.
+- **Unit test:** Verify `writeHostsFile()` generates aliases for all
+  configured domains.
 - **Unit test for resolved package:** Mock D-Bus connection, verify
-  correct method calls and arguments.
+  correct method calls with domain list.
 - **E2E:** Difficult to test host DNS in CI (needs resolved + real
   bridge). The Corefile generation and CoreDNS loopback binding can be
   tested. Resolved registration is best-effort and tested via unit tests.

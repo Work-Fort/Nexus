@@ -181,10 +181,13 @@ all other DNS is unaffected.
 routing with systemd-resolved via D-Bus (`godbus/dbus`). Same pattern
 as Tailscale, recommended by the systemd VPN documentation.
 
-- Loopback `127.0.0.100` serves nexus zone only — catch-all forwarder
-  stays on gateway only
+- Configurable domain list (`--dns-domains`, default `nexus`). `nexus`
+  always included. Users can add vanity domains (e.g. `work-fort`)
+- Loopback `127.0.0.100` serves configured zones only — catch-all
+  forwarder stays on gateway only
+- Hosts file generates aliases for all domains: `myvm.nexus myvm.work-fort`
 - Daemon calls resolved D-Bus API directly: `SetLinkDNS`,
-  `SetLinkDomains(~nexus)`, `SetLinkDefaultRoute(false)`
+  `SetLinkDomains(~nexus, ~work-fort, ...)`, `SetLinkDefaultRoute(false)`
 - Works on any systemd distro regardless of networkd vs NetworkManager
   (Arch, Ubuntu desktop/server, Fedora)
 - Best-effort — failure logs warning, VMs unaffected
