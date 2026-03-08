@@ -84,6 +84,7 @@ func newDaemonCmd() *cobra.Command {
 				cniCfg := cni.Config{
 					BinDir:     viper.GetString("cni-bin-dir"),
 					Subnet:     viper.GetString("network-subnet"),
+					BridgeName: viper.GetString("bridge-name"),
 					HelperBin:  viper.GetString("netns-helper"),
 					CNIExecBin: viper.GetString("cni-exec-bin"),
 				}
@@ -303,6 +304,7 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("agent-image", config.DefaultAgentImage, "Default OCI image for agent VMs")
 	cmd.Flags().String("cni-bin-dir", config.DefaultCNIBinDir, "Directory containing CNI plugin binaries")
 	cmd.Flags().String("network-subnet", config.DefaultNetSubnet, "CIDR subnet for the VM bridge network")
+	cmd.Flags().String("bridge-name", "nexus0", "Bridge interface name for VM networking")
 	cmd.Flags().Bool("network-enabled", true, "Enable CNI networking for VMs")
 	cmd.Flags().String("netns-helper", config.DefaultNetNSHelper, "Path to nexus-netns helper binary")
 	cmd.Flags().String("cni-exec-bin", config.DefaultCNIExecBin, "Path to nexus-cni-exec wrapper binary")
@@ -317,7 +319,7 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("dns-domains", config.DefaultDNSDomains, "Comma-separated DNS domains (nexus is always included)")
 	cmd.Flags().String("node-exporter-path", config.DefaultNodeExporterPath, "Path to node_exporter binary for in-VM metrics (empty to disable)")
 
-	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "dns-loopback", "dns-domains", "node-exporter-path"} {
+	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "bridge-name", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "dns-loopback", "dns-domains", "node-exporter-path"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}

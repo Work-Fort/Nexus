@@ -21,6 +21,18 @@ var (
 	binDir   string // directory containing all helper binaries
 )
 
+// e2eSubnet is an isolated subnet for E2E tests so they don't conflict
+// with a running system daemon (which uses the default 172.16.0.0/12).
+const e2eSubnet = "10.99.0.0/24"
+
+// e2eLoopback is a separate loopback address for E2E DNS so it doesn't
+// conflict with the system daemon's CoreDNS on 127.0.0.100.
+const e2eLoopback = "127.0.0.101"
+
+// e2eBridgeName is a separate bridge interface for E2E tests so they don't
+// share the system daemon's nexus0 bridge.
+const e2eBridgeName = "nexus-e2e"
+
 func TestMain(m *testing.M) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -75,6 +87,7 @@ func TestMain(m *testing.M) {
 func requireNetworkCaps(t *testing.T) {
 	t.Helper()
 	cniExec := filepath.Join(binDir, "nexus-cni-exec")
+	dnsHelper := filepath.Join(binDir, "nexus-dns")
 
 	// Verify the binary is NOT on a nosuid filesystem (caps are silently
 	// ignored on nosuid mounts like /tmp).
@@ -85,8 +98,10 @@ func requireNetworkCaps(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		out, err := exec.Command("getcap", cniExec).Output()
-		if err == nil && strings.Contains(string(out), "cap_net_admin") {
+		cniOut, err1 := exec.Command("getcap", cniExec).Output()
+		dnsOut, err2 := exec.Command("getcap", dnsHelper).Output()
+		if err1 == nil && strings.Contains(string(cniOut), "cap_net_admin") &&
+			err2 == nil && strings.Contains(string(dnsOut), "cap_net_bind_service") {
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -225,7 +240,7 @@ func TestExecVM(t *testing.T) {
 
 func TestOutboundConnectivity(t *testing.T) {
 	requireNetworkCaps(t)
-	_, c := startDaemon(t, harness.WithNetworkEnabled(true))
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithBridgeName(e2eBridgeName))
 
 	vm, err := c.CreateVMWithImage("test-ping", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {
@@ -256,7 +271,7 @@ func TestOutboundConnectivity(t *testing.T) {
 
 func TestOutboundTCP(t *testing.T) {
 	requireNetworkCaps(t)
-	_, c := startDaemon(t, harness.WithNetworkEnabled(true))
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithBridgeName(e2eBridgeName))
 
 	vm, err := c.CreateVMWithImage("test-tcp", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {
@@ -288,7 +303,7 @@ func TestOutboundTCP(t *testing.T) {
 
 func TestDNSResolution(t *testing.T) {
 	requireNetworkCaps(t)
-	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithDNSEnabled(true))
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithDNSEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithDNSLoopback(e2eLoopback), harness.WithBridgeName(e2eBridgeName))
 
 	vm, err := c.CreateVMWithImage("test-dns", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {
@@ -338,9 +353,88 @@ func TestDNSResolution(t *testing.T) {
 	t.Logf("DNS local resolution OK: %s", result.Stdout)
 }
 
+func TestVanityDomainDNS(t *testing.T) {
+	requireNetworkCaps(t)
+	_, c := startDaemon(t,
+		harness.WithNetworkEnabled(true),
+		harness.WithDNSEnabled(true),
+		harness.WithNetworkSubnet(e2eSubnet),
+		harness.WithDNSLoopback(e2eLoopback),
+		harness.WithBridgeName(e2eBridgeName),
+		harness.WithDNSDomains("nexus,test-vanity"),
+	)
+
+	vm, err := c.CreateVMWithImage("vanity-vm", "agent", "docker.io/library/nginx:alpine")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Wait for CoreDNS to reload the hosts file (2s interval).
+	time.Sleep(3 * time.Second)
+
+	// Test 1: VM resolves its own name via the vanity domain.
+	var result *harness.ExecResult
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"nslookup", "vanity-vm.test-vanity"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		t.Fatalf("exec nslookup vanity: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("vanity domain resolution failed in VM (exit %d): stdout=%s stderr=%s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+	t.Logf("VM vanity domain resolution OK: %s", result.Stdout)
+
+	// Test 2: VM resolves via the default .nexus domain too.
+	result, err = c.ExecVM(vm.ID, []string{"nslookup", "vanity-vm.nexus"})
+	if err != nil {
+		t.Fatalf("exec nslookup nexus: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf(".nexus resolution failed in VM (exit %d): stdout=%s stderr=%s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+	t.Logf("VM .nexus domain resolution OK: %s", result.Stdout)
+
+	// Test 3: Host resolves VM via loopback for .nexus domain.
+	loopback := "@" + e2eLoopback
+	out, digErr := exec.Command("dig", "+short", loopback, "vanity-vm.nexus").CombinedOutput()
+	if digErr != nil {
+		t.Fatalf("dig vanity-vm.nexus %s: %v: %s", loopback, digErr, out)
+	}
+	resolved := strings.TrimSpace(string(out))
+	if resolved == "" || !strings.Contains(resolved, ".") {
+		t.Fatalf("host loopback .nexus resolution returned no IP: %q", resolved)
+	}
+	t.Logf("Host loopback .nexus resolution OK: vanity-vm.nexus → %s", resolved)
+
+	// Test 4: Host resolves VM via loopback for vanity domain.
+	out, digErr = exec.Command("dig", "+short", loopback, "vanity-vm.test-vanity").CombinedOutput()
+	if digErr != nil {
+		t.Fatalf("dig vanity-vm.test-vanity %s: %v: %s", loopback, digErr, out)
+	}
+	resolved2 := strings.TrimSpace(string(out))
+	if resolved2 == "" || !strings.Contains(resolved2, ".") {
+		t.Fatalf("host loopback vanity resolution returned no IP: %q", resolved2)
+	}
+	if resolved != resolved2 {
+		t.Errorf("loopback IPs differ: .nexus=%s vanity=%s", resolved, resolved2)
+	}
+	t.Logf("Host loopback vanity resolution OK: vanity-vm.test-vanity → %s", resolved2)
+}
+
 func TestHTTPDownload(t *testing.T) {
 	requireNetworkCaps(t)
-	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithDNSEnabled(true))
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithDNSEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithDNSLoopback(e2eLoopback), harness.WithBridgeName(e2eBridgeName))
 
 	vm, err := c.CreateVMWithImage("test-http", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {

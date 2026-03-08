@@ -36,6 +36,8 @@ func startNetworkedDaemon(t *testing.T, extraOpts ...harness.DaemonOption) (*har
 
 	opts := []harness.DaemonOption{
 		harness.WithNetworkEnabled(true),
+		harness.WithNetworkSubnet(e2eSubnet),
+		harness.WithBridgeName(e2eBridgeName),
 		harness.WithNetNSHelper(netnsHelper),
 		harness.WithCNIExecBin(cniExecBin),
 	}

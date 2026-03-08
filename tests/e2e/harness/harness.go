@@ -41,6 +41,10 @@ type daemonConfig struct {
 	cniExecBin           string
 	nodeExporterPathSet  bool
 	nodeExporterPath     string
+	dnsDomains           string // comma-separated DNS domains
+	dnsLoopback          string // loopback IP for host DNS
+	networkSubnet        string // CIDR subnet for VM bridge
+	bridgeName           string // bridge interface name
 }
 
 type DaemonOption func(*daemonConfig)
@@ -91,6 +95,22 @@ func WithCNIExecBin(bin string) DaemonOption {
 
 func WithNodeExporterPath(path string) DaemonOption {
 	return func(c *daemonConfig) { c.nodeExporterPathSet = true; c.nodeExporterPath = path }
+}
+
+func WithDNSDomains(domains string) DaemonOption {
+	return func(c *daemonConfig) { c.dnsDomains = domains }
+}
+
+func WithNetworkSubnet(subnet string) DaemonOption {
+	return func(c *daemonConfig) { c.networkSubnet = subnet }
+}
+
+func WithDNSLoopback(ip string) DaemonOption {
+	return func(c *daemonConfig) { c.dnsLoopback = ip }
+}
+
+func WithBridgeName(name string) DaemonOption {
+	return func(c *daemonConfig) { c.bridgeName = name }
 }
 
 type Daemon struct {
@@ -155,6 +175,18 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 	}
 	if cfg.nodeExporterPathSet {
 		args = append(args, "--node-exporter-path", cfg.nodeExporterPath)
+	}
+	if cfg.dnsDomains != "" {
+		args = append(args, "--dns-domains", cfg.dnsDomains)
+	}
+	if cfg.dnsLoopback != "" {
+		args = append(args, "--dns-loopback", cfg.dnsLoopback)
+	}
+	if cfg.networkSubnet != "" {
+		args = append(args, "--network-subnet", cfg.networkSubnet)
+	}
+	if cfg.bridgeName != "" {
+		args = append(args, "--bridge-name", cfg.bridgeName)
 	}
 
 	var stderrBuf bytes.Buffer
@@ -234,6 +266,18 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 	}
 	if cfg.nodeExporterPathSet {
 		args = append(args, "--node-exporter-path", cfg.nodeExporterPath)
+	}
+	if cfg.dnsDomains != "" {
+		args = append(args, "--dns-domains", cfg.dnsDomains)
+	}
+	if cfg.dnsLoopback != "" {
+		args = append(args, "--dns-loopback", cfg.dnsLoopback)
+	}
+	if cfg.networkSubnet != "" {
+		args = append(args, "--network-subnet", cfg.networkSubnet)
+	}
+	if cfg.bridgeName != "" {
+		args = append(args, "--bridge-name", cfg.bridgeName)
 	}
 
 	var stderrBuf bytes.Buffer

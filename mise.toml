@@ -277,5 +277,12 @@ for ns in $(ctr namespaces list -q | grep ^nexus-e2e- 2>/dev/null); do
   ctr -n "$ns" content prune references 2>/dev/null || true
   ctr namespaces remove "$ns" 2>/dev/null || true
 done
+
+# Clean up the E2E bridge interface (if it exists).
+if ip link show nexus-e2e &>/dev/null; then
+  echo "  Deleting bridge: nexus-e2e"
+  sudo ip link delete nexus-e2e 2>/dev/null || true
+fi
+
 echo "E2E cleanup done"
 """

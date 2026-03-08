@@ -23,6 +23,7 @@ import (
 type Config struct {
 	BinDir     string // directory containing real CNI plugin binaries
 	Subnet     string // CIDR for the bridge network (e.g. "10.88.0.0/16")
+	BridgeName string // bridge interface name (default: "nexus0")
 	HelperBin  string // path to the nexus-netns helper binary
 	CNIExecBin string // path to the nexus-cni-exec wrapper binary
 }
@@ -61,6 +62,9 @@ type Network struct {
 // requires root. libcni's NewCNIConfigWithCacheDir lets us use a
 // user-writable location.
 func New(cfg Config) (*Network, error) {
+	if cfg.BridgeName == "" {
+		cfg.BridgeName = "nexus0"
+	}
 	if _, err := exec.LookPath(cfg.HelperBin); err != nil {
 		return nil, fmt.Errorf("netns helper not found at %q: %w", cfg.HelperBin, err)
 	}
@@ -126,7 +130,7 @@ func New(cfg Config) (*Network, error) {
   "plugins": [
     {
       "type": "bridge",
-      "bridge": "nexus0",
+      "bridge": %q,
       "isGateway": true,
       "ipMasq": true,
       "ipam": {
@@ -137,7 +141,7 @@ func New(cfg Config) (*Network, error) {
       }
     }
   ]
-}`, cfg.Subnet, ipamDataDir)
+}`, cfg.BridgeName, cfg.Subnet, ipamDataDir)
 
 	confPath := filepath.Join(confDir, "10-nexus.conflist")
 	if err := os.WriteFile(confPath, []byte(confJSON), 0644); err != nil {
@@ -176,7 +180,7 @@ func New(cfg Config) (*Network, error) {
 	// if the host has no restrictive firewall.
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		out, err := exec.CommandContext(ctx, cniExecAbs, "setup-forwarding", "nexus0").CombinedOutput()
+		out, err := exec.CommandContext(ctx, cniExecAbs, "setup-forwarding", cfg.BridgeName).CombinedOutput()
 		cancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "nexus: warning: setup forwarding: %v: %s\n", err, out)
@@ -190,7 +194,7 @@ func New(cfg Config) (*Network, error) {
 		wrapperDir:  wrapperDir,
 		netnsDir:    nsDir,
 		helperBin:   cfg.HelperBin,
-		bridgeName:  "nexus0",
+		bridgeName:  cfg.BridgeName,
 		cniExecBin:  cniExecAbs,
 		ipamDataDir: ipamDataDir,
 		cacheDir:    cacheDir,
