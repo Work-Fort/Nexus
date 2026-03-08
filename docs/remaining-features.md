@@ -170,29 +170,27 @@ forwarded traffic by default.
 
 ## 16. Host DNS Resolution for `.nexus`
 
+[Design](plans/2026-03-07-host-dns-design.md)
+
 Resolve `*.nexus` from the host so tools like `curl`, `ping`, and browsers
-can reach VMs by name. Must work as a split-DNS add-on — only `.nexus`
-queries route to CoreDNS, all other DNS is unaffected.
+can reach VMs by name. Split DNS — only `.nexus` queries route to CoreDNS,
+all other DNS is unaffected.
 
-**Approach:** systemd-resolved split DNS via a systemd-networkd `.network`
-file for the `nexus0` bridge. Same pattern as Tailscale, recommended by
-the systemd VPN documentation.
+**Approach:** CoreDNS dual-binds the `nexus` zone to `127.0.0.100`
+(host) and the bridge gateway (VMs). The daemon registers split DNS
+routing with systemd-resolved via D-Bus (`godbus/dbus`). Same pattern
+as Tailscale, recommended by the systemd VPN documentation.
 
-- CoreDNS binds to both the bridge gateway (for VMs) and a loopback
-  address like `127.0.0.54` (for host resolution)
-- `.network` file points to the fixed loopback address — fully decoupled
-  from the bridge subnet, making the subnet configurable without touching
-  DNS config
-- Ship `/etc/systemd/network/15-nexus0.network` with `DNS=127.0.0.54`,
-  `Domains=~nexus`, `DNSDefaultRoute=false`
-- `KeepConfiguration=static` so networkd doesn't touch the IP Nexus
-  configures on the bridge
-- AUR package installs the `.network` file; install hook runs
-  `networkctl reload`
-- Automatic lifecycle: resolved routes `.nexus` when `nexus0` appears,
-  auto-cleans when it disappears
-- No new daemons, no runtime privilege escalation
-- Works on any systemd-based distro (Arch, Ubuntu, Fedora)
+- Loopback `127.0.0.100` serves nexus zone only — catch-all forwarder
+  stays on gateway only
+- Daemon calls resolved D-Bus API directly: `SetLinkDNS`,
+  `SetLinkDomains(~nexus)`, `SetLinkDefaultRoute(false)`
+- Works on any systemd distro regardless of networkd vs NetworkManager
+  (Arch, Ubuntu desktop/server, Fedora)
+- Best-effort — failure logs warning, VMs unaffected
+- Self-healing on crash: resolved auto-clears when `nexus0` disappears
+- Package ships polkit rule for resolved D-Bus authorization
+- Subnet-independent: loopback address is fixed, bridge IP can change
 
 ---
 
