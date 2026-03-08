@@ -220,8 +220,14 @@ func (m *Manager) writeHostsFile() error {
 func (m *Manager) writeCorefile() error {
 	hostsPath := filepath.Join(m.cfg.StateDir, "hosts")
 	upstreams := strings.Join(m.cfg.Upstreams, " ")
+	zones := strings.Join(m.cfg.Domains, " ")
 
-	corefile := fmt.Sprintf(`nexus {
+	zoneBind := m.cfg.GatewayIP
+	if m.cfg.LoopbackIP != "" {
+		zoneBind = m.cfg.LoopbackIP + " " + m.cfg.GatewayIP
+	}
+
+	corefile := fmt.Sprintf(`%s {
     bind %s
     hosts %s {
         reload 2s
@@ -235,7 +241,7 @@ func (m *Manager) writeCorefile() error {
     forward . %s
     log
 }
-`, m.cfg.GatewayIP, hostsPath, m.cfg.GatewayIP, upstreams)
+`, zones, zoneBind, hostsPath, m.cfg.GatewayIP, upstreams)
 
 	path := filepath.Join(m.cfg.StateDir, "Corefile")
 	return os.WriteFile(path, []byte(corefile), 0644)

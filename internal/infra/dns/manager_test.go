@@ -175,6 +175,89 @@ func TestCleanupResolvConfIdempotent(t *testing.T) {
 	}
 }
 
+func TestWriteCorefileLoopback(t *testing.T) {
+	stateDir := t.TempDir()
+	m := &Manager{
+		cfg: Config{
+			GatewayIP:  "172.16.0.1",
+			LoopbackIP: "127.0.0.100",
+			Domains:    []string{"nexus"},
+			StateDir:   stateDir,
+			Upstreams:  []string{"1.1.1.1", "8.8.8.8"},
+		},
+	}
+	if err := m.writeCorefile(); err != nil {
+		t.Fatalf("writeCorefile: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(stateDir, "Corefile"))
+	if err != nil {
+		t.Fatalf("read corefile: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "bind 127.0.0.100 172.16.0.1") {
+		t.Errorf("nexus zone missing dual bind:\n%s", content)
+	}
+	// Verify catch-all does NOT have loopback
+	lines := strings.Split(content, "\n")
+	inCatchAll := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == ". {" {
+			inCatchAll = true
+		}
+		if inCatchAll && strings.Contains(line, "bind") {
+			if strings.Contains(line, "127.0.0.100") {
+				t.Errorf("catch-all zone should NOT bind loopback:\n%s", content)
+			}
+			break
+		}
+	}
+}
+
+func TestWriteCorefileMultiDomain(t *testing.T) {
+	stateDir := t.TempDir()
+	m := &Manager{
+		cfg: Config{
+			GatewayIP:  "172.16.0.1",
+			LoopbackIP: "127.0.0.100",
+			Domains:    []string{"nexus", "work-fort"},
+			StateDir:   stateDir,
+			Upstreams:  []string{"1.1.1.1"},
+		},
+	}
+	if err := m.writeCorefile(); err != nil {
+		t.Fatalf("writeCorefile: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(stateDir, "Corefile"))
+	content := string(data)
+	if !strings.Contains(content, "nexus work-fort {") {
+		t.Errorf("corefile missing multi-domain zone:\n%s", content)
+	}
+}
+
+func TestWriteCorefileNoLoopback(t *testing.T) {
+	stateDir := t.TempDir()
+	m := &Manager{
+		cfg: Config{
+			GatewayIP: "172.16.0.1",
+			Domains:   []string{"nexus"},
+			StateDir:  stateDir,
+			Upstreams: []string{"1.1.1.1"},
+		},
+	}
+	if err := m.writeCorefile(); err != nil {
+		t.Fatalf("writeCorefile: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(stateDir, "Corefile"))
+	content := string(data)
+	if !strings.Contains(content, "bind 172.16.0.1") {
+		t.Errorf("missing gateway bind:\n%s", content)
+	}
+	if strings.Contains(content, "127.0.0.100") {
+		t.Errorf("should not contain loopback when not configured:\n%s", content)
+	}
+}
+
 func TestParseUpstreams(t *testing.T) {
 	tmp := t.TempDir()
 	resolvPath := filepath.Join(tmp, "resolv.conf")
