@@ -37,10 +37,10 @@ func TestAddAndRemoveRecord(t *testing.T) {
 		t.Fatalf("read hosts: %v", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "172.16.0.2 web.nexus.local web") {
+	if !strings.Contains(content, "172.16.0.2 web.nexus web") {
 		t.Errorf("hosts missing web entry:\n%s", content)
 	}
-	if !strings.Contains(content, "172.16.0.3 db.nexus.local db") {
+	if !strings.Contains(content, "172.16.0.3 db.nexus db") {
 		t.Errorf("hosts missing db entry:\n%s", content)
 	}
 
@@ -81,7 +81,7 @@ func TestGenerateResolvConfDefault(t *testing.T) {
 	if !strings.Contains(content, "nameserver 172.16.0.1") {
 		t.Errorf("missing default nameserver:\n%s", content)
 	}
-	if !strings.Contains(content, "search nexus.local") {
+	if !strings.Contains(content, "search nexus") {
 		t.Errorf("missing default search:\n%s", content)
 	}
 }
@@ -98,7 +98,7 @@ func TestGenerateResolvConfCustom(t *testing.T) {
 
 	cfg := &domain.DNSConfig{
 		Servers: []string{"172.16.0.1", "8.8.8.8"},
-		Search:  []string{"nexus.local", "example.com"},
+		Search:  []string{"nexus", "example.com"},
 	}
 	path, err := m.GenerateResolvConf("vm-xyz", cfg)
 	if err != nil {
@@ -113,7 +113,7 @@ func TestGenerateResolvConfCustom(t *testing.T) {
 	if !strings.Contains(content, "nameserver 8.8.8.8") {
 		t.Errorf("missing second nameserver:\n%s", content)
 	}
-	if !strings.Contains(content, "search nexus.local example.com") {
+	if !strings.Contains(content, "search nexus example.com") {
 		t.Errorf("missing search domains:\n%s", content)
 	}
 }

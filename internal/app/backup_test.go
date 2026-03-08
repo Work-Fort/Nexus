@@ -17,7 +17,7 @@ func TestManifestRoundTrip(t *testing.T) {
 			RootSize: "10G",
 			DNS: &ManifestDNS{
 				Servers: []string{"172.16.0.1"},
-				Search:  []string{"nexus.local"},
+				Search:  []string{"nexus"},
 			},
 		},
 		Drives: []ManifestDrive{

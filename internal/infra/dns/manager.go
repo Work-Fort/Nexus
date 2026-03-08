@@ -159,7 +159,7 @@ func (m *Manager) removeRecord(name string) error {
 // GenerateResolvConf creates a resolv.conf file for a VM and returns its path.
 func (m *Manager) GenerateResolvConf(vmID string, cfg *domain.DNSConfig) (string, error) {
 	servers := []string{m.cfg.GatewayIP}
-	search := []string{"nexus.local"}
+	search := []string{"nexus"}
 	if cfg != nil {
 		if len(cfg.Servers) > 0 {
 			servers = cfg.Servers
@@ -197,7 +197,7 @@ func (m *Manager) CleanupResolvConf(vmID string) error {
 func (m *Manager) writeHostsFile() error {
 	var buf bytes.Buffer
 	for name, ip := range m.records {
-		fmt.Fprintf(&buf, "%s %s.nexus.local %s\n", ip, name, name)
+		fmt.Fprintf(&buf, "%s %s.nexus %s\n", ip, name, name)
 	}
 	hostsPath := filepath.Join(m.cfg.StateDir, "hosts")
 	tmp := hostsPath + ".tmp"
@@ -212,7 +212,7 @@ func (m *Manager) writeCorefile() error {
 	hostsPath := filepath.Join(m.cfg.StateDir, "hosts")
 	upstreams := strings.Join(m.cfg.Upstreams, " ")
 
-	corefile := fmt.Sprintf(`nexus.local {
+	corefile := fmt.Sprintf(`nexus {
     bind %s
     hosts %s {
         reload 2s
