@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -106,7 +107,13 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 		o(cfg)
 	}
 
-	xdgDir, err := os.MkdirTemp(cfg.baseDir, "nexus-e2e-*")
+	// Default to binDir's parent as the temp base, keeping everything
+	// inside the project tree (not /tmp which is nosuid on many systems).
+	baseDir := cfg.baseDir
+	if baseDir == "" {
+		baseDir = filepath.Dir(binDir)
+	}
+	xdgDir, err := os.MkdirTemp(baseDir, ".e2e-state-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp dir: %w", err)
 	}

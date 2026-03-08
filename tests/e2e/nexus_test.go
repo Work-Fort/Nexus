@@ -318,8 +318,16 @@ func TestDNSResolution(t *testing.T) {
 	}
 	t.Logf("DNS external resolution OK")
 
-	// Test 2: VM can resolve its own local hostname (vm-name.nexus.local).
-	result, err = c.ExecVM(vm.ID, []string{"nslookup", "test-dns.nexus.local"})
+	// Test 2: VM can resolve its own local hostname (vm-name.nexus).
+	// Retry because CoreDNS reloads the hosts file every 2s.
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"nslookup", "test-dns.nexus"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
 	if err != nil {
 		t.Fatalf("exec nslookup local: %v", err)
 	}
