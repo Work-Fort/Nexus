@@ -207,10 +207,10 @@ type Storage interface {
 }
 
 // DNSConfig holds per-VM DNS resolution settings.
-// Nil means use defaults (gateway as nameserver, "nexus" as search).
+// Nil means use defaults (gateway as nameserver, configured domains as search).
 type DNSConfig struct {
 	Servers []string // nameservers (default: [gateway IP])
-	Search  []string // search domains (default: ["nexus"])
+	Search  []string // search domains (default: configured dns-domains)
 }
 
 // DNSManager manages internal DNS for VM name resolution.
