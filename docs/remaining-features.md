@@ -209,3 +209,17 @@ Deleted `internal/infra/dns/noop.go`.
 helper that checks `GetImage` (local) before falling back to `Pull`.
 Both `Create` and `DetectDistro` use it — second call is a fast local
 lookup instead of a registry round-trip.
+
+## 18. MCP Streaming Exec
+
+[Design](mcp-streaming-exec-design.md) · [Plan](plans/2026-03-08-mcp-streaming-exec.md)
+
+Make `vm_exec` stream output while the command runs. The tool switches
+from `ExecVM` to `ExecStreamVM`, sending `run_command.stdout` /
+`run_command.stderr` JSON-RPC notifications as chunks arrive. The
+mcp-bridge intercepts these notifications and writes chunk text to
+stderr, so users see streaming output during execution.
+
+- Notification-sending `io.Writer` wrappers in the MCP handler
+- `handleStreamingNotification` in mcp-bridge to intercept and display chunks
+- Tool result still returns full buffered output for standard MCP clients
