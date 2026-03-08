@@ -270,7 +270,7 @@ func (s *VMService) CloneSnapshot(ctx context.Context, vmRef, snapRef, newName s
 	}
 
 	// DNS record for clone.
-	if s.dns != nil && newVM.IP != "" {
+	if newVM.IP != "" {
 		s.dns.AddRecord(ctx, newVM.Name, newVM.IP) //nolint:errcheck
 	}
 

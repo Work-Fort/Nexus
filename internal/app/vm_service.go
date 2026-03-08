@@ -52,6 +52,7 @@ func NewVMService(store domain.VMStore, runtime domain.Runtime, network domain.N
 		store:   store,
 		runtime: runtime,
 		network: network,
+		dns:     domain.NoopDNSManager{},
 		config: VMServiceConfig{
 			DefaultImage:   "docker.io/library/alpine:latest",
 			DefaultRuntime: "io.containerd.runc.v2",
@@ -182,19 +183,15 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 
 	vm.DNSConfig = params.DNSConfig
 
-	var resolvConfPath string
-	if s.dns != nil {
-		if err := s.dns.AddRecord(ctx, vm.Name, vm.IP); err != nil {
-			s.network.Teardown(ctx, vm.ID) //nolint:errcheck
-			return nil, fmt.Errorf("dns add record: %w", err)
-		}
-		path, err := s.dns.GenerateResolvConf(vm.ID, vm.DNSConfig)
-		if err != nil {
-			s.dns.RemoveRecord(ctx, vm.Name) //nolint:errcheck
-			s.network.Teardown(ctx, vm.ID)   //nolint:errcheck
-			return nil, fmt.Errorf("dns resolv.conf: %w", err)
-		}
-		resolvConfPath = path
+	if err := s.dns.AddRecord(ctx, vm.Name, vm.IP); err != nil {
+		s.network.Teardown(ctx, vm.ID) //nolint:errcheck
+		return nil, fmt.Errorf("dns add record: %w", err)
+	}
+	resolvConfPath, err := s.dns.GenerateResolvConf(vm.ID, vm.DNSConfig)
+	if err != nil {
+		s.dns.RemoveRecord(ctx, vm.Name) //nolint:errcheck
+		s.network.Teardown(ctx, vm.ID)   //nolint:errcheck
+		return nil, fmt.Errorf("dns resolv.conf: %w", err)
 	}
 
 	var createOpts []domain.CreateOpt
@@ -225,10 +222,8 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		}
 		initPath, templateID, err := s.resolveInitScript(ctx, vm.ID, params.Image, params.TemplateName)
 		if err != nil {
-			if s.dns != nil {
-				s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
-				s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
-			}
+			s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
+			s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
 			s.network.Teardown(ctx, vm.ID) //nolint:errcheck
 			return nil, fmt.Errorf("init script: %w", err)
 		}
@@ -238,10 +233,8 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	}
 
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
-		if s.dns != nil {
-			s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
-			s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
-		}
+		s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
+		s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
 		s.network.Teardown(ctx, vm.ID) //nolint:errcheck // best-effort rollback
 		return nil, fmt.Errorf("runtime create: %w", err)
 	}
@@ -349,10 +342,8 @@ func (s *VMService) DeleteVM(ctx context.Context, ref string) error {
 		log.Warn("network teardown failed", "id", vm.ID, "err", err)
 	}
 
-	if s.dns != nil {
-		s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
-		s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
-	}
+	s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
+	s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
 
 	if s.driveStore != nil {
 		if err := s.driveStore.DetachAllDrives(ctx, vm.ID); err != nil {
@@ -860,9 +851,6 @@ func (s *VMService) DetachDevice(ctx context.Context, deviceRef string) error {
 // SyncDNS loads all existing VM records into the DNS manager.
 // Called once at startup to populate the hosts file.
 func (s *VMService) SyncDNS(ctx context.Context) error {
-	if s.dns == nil {
-		return nil
-	}
 	vms, err := s.store.List(ctx, domain.VMFilter{})
 	if err != nil {
 		return fmt.Errorf("list vms for dns sync: %w", err)
@@ -920,13 +908,9 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 		}
 	}
 
-	var resolvConfPath string
-	if s.dns != nil {
-		path, err := s.dns.GenerateResolvConf(vm.ID, vm.DNSConfig)
-		if err != nil {
-			return fmt.Errorf("dns resolv.conf: %w", err)
-		}
-		resolvConfPath = path
+	resolvConfPath, err := s.dns.GenerateResolvConf(vm.ID, vm.DNSConfig)
+	if err != nil {
+		return fmt.Errorf("dns resolv.conf: %w", err)
 	}
 
 	if err := s.runtime.Delete(ctx, vm.ID); err != nil {

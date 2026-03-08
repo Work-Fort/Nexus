@@ -176,7 +176,7 @@ func newDaemonCmd() *cobra.Command {
 					}()
 				}
 			} else {
-				dnsManager = &dns.NoopManager{}
+				dnsManager = domain.NoopDNSManager{}
 			}
 
 			log.Info("nexus starting", "addr", addr, "db", dsn, "containerd", socketPath, "namespace", namespace)

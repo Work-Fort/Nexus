@@ -222,3 +222,14 @@ type DNSManager interface {
 	GenerateResolvConf(vmID string, cfg *DNSConfig) (path string, err error)
 	CleanupResolvConf(vmID string) error
 }
+
+// NoopDNSManager is a DNSManager that does nothing. Used as the default
+// when DNS is not configured.
+type NoopDNSManager struct{}
+
+func (NoopDNSManager) Start(context.Context) error                          { return nil }
+func (NoopDNSManager) Stop() error                                          { return nil }
+func (NoopDNSManager) AddRecord(context.Context, string, string) error      { return nil }
+func (NoopDNSManager) RemoveRecord(context.Context, string) error           { return nil }
+func (NoopDNSManager) GenerateResolvConf(string, *DNSConfig) (string, error) { return "", nil }
+func (NoopDNSManager) CleanupResolvConf(string) error                       { return nil }

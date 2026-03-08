@@ -591,16 +591,14 @@ func (s *VMService) ImportVM(ctx context.Context, r io.Reader, strictDevices boo
 	}
 
 	// DNS resolv.conf.
-	if s.dns != nil {
-		resolvPath, err := s.dns.GenerateResolvConf(vm.ID, vm.DNSConfig)
-		if err != nil {
-			log.Warn("generate resolv.conf for import", "err", err)
-		} else {
-			createOpts = append(createOpts, domain.WithResolvConf(resolvPath))
-		}
-		if vm.IP != "" {
-			s.dns.AddRecord(ctx, vm.Name, vm.IP) //nolint:errcheck
-		}
+	resolvPath, err := s.dns.GenerateResolvConf(vm.ID, vm.DNSConfig)
+	if err != nil {
+		log.Warn("generate resolv.conf for import", "err", err)
+	} else {
+		createOpts = append(createOpts, domain.WithResolvConf(resolvPath))
+	}
+	if vm.IP != "" {
+		s.dns.AddRecord(ctx, vm.Name, vm.IP) //nolint:errcheck
 	}
 
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
