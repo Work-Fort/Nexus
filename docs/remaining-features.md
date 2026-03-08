@@ -138,7 +138,7 @@ resource with full REST and MCP API surface.
 - Per-VM script override without forking the shared template
 - E2E tests with real images (no mocks)
 
-## 14. Live VM Snapshots
+## 14. Live VM Snapshots ✅
 
 [Design](plans/2026-03-07-live-snapshots-design.md) · [Plan](plans/2026-03-07-live-snapshots.md)
 
@@ -153,7 +153,7 @@ recover automatically).
 - Manual retention only — no automatic expiry or scheduling
 - Requires btrfs storage backend; noop backend returns clear error
 
-## 15. Automatic Firewall Forwarding
+## 15. Automatic Firewall Forwarding ✅
 
 [Design](firewall-forwarding-design.md) · [Plan](plans/2026-03-07-firewall-forwarding.md)
 
@@ -167,6 +167,32 @@ forwarded traffic by default.
 - Rules applied on daemon start, removed on shutdown
 - Own `NEXUS-FORWARD` chain inserted at top of FORWARD
 - Remove obsolete `nexus setup` command (superseded by helper binaries)
+
+## 16. Host DNS Resolution for `.nexus`
+
+Resolve `*.nexus` from the host so tools like `curl`, `ping`, and browsers
+can reach VMs by name. Must work as a split-DNS add-on — only `.nexus`
+queries route to CoreDNS, all other DNS is unaffected.
+
+**Approach:** systemd-resolved split DNS via a systemd-networkd `.network`
+file for the `nexus0` bridge. Same pattern as Tailscale, recommended by
+the systemd VPN documentation.
+
+- CoreDNS binds to both the bridge gateway (for VMs) and a loopback
+  address like `127.0.0.54` (for host resolution)
+- `.network` file points to the fixed loopback address — fully decoupled
+  from the bridge subnet, making the subnet configurable without touching
+  DNS config
+- Ship `/etc/systemd/network/15-nexus0.network` with `DNS=127.0.0.54`,
+  `Domains=~nexus`, `DNSDefaultRoute=false`
+- `KeepConfiguration=static` so networkd doesn't touch the IP Nexus
+  configures on the bridge
+- AUR package installs the `.network` file; install hook runs
+  `networkctl reload`
+- Automatic lifecycle: resolved routes `.nexus` when `nexus0` appears,
+  auto-cleans when it disappears
+- No new daemons, no runtime privilege escalation
+- Works on any systemd-based distro (Arch, Ubuntu, Fedora)
 
 ---
 
