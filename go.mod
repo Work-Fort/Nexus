@@ -10,7 +10,9 @@ require (
 	github.com/containerd/platforms v1.0.0-rc.2
 	github.com/containerd/typeurl/v2 v2.2.3
 	github.com/containernetworking/cni v1.3.0
+	github.com/coreos/go-iptables v0.8.0
 	github.com/danielgtaylor/huma/v2 v2.37.2
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/klauspost/compress v1.18.4
@@ -45,7 +47,6 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/plugin v1.0.0 // indirect
 	github.com/containerd/ttrpc v1.2.7 // indirect
-	github.com/coreos/go-iptables v0.8.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.5.1 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
