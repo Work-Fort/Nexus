@@ -274,9 +274,11 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().Bool("dns-enabled", true, "Enable internal DNS for VM name resolution")
 	cmd.Flags().String("coredns-bin", config.DefaultCoreDNSBin, "Path to CoreDNS binary")
 	cmd.Flags().String("dns-helper", config.DefaultDNSHelper, "Path to nexus-dns helper binary (cap_net_bind_service)")
+	cmd.Flags().String("dns-loopback", config.DefaultDNSLoopback, "Loopback IP for host DNS resolution (empty to disable)")
+	cmd.Flags().String("dns-domains", config.DefaultDNSDomains, "Comma-separated DNS domains (nexus is always included)")
 	cmd.Flags().String("node-exporter-path", config.DefaultNodeExporterPath, "Path to node_exporter binary for in-VM metrics (empty to disable)")
 
-	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "node-exporter-path"} {
+	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "dns-loopback", "dns-domains", "node-exporter-path"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}
