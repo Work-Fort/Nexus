@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/coreos/go-iptables/iptables"
+	"golang.org/x/sys/unix"
 )
 
 const nexusChain = "NEXUS-FORWARD"
@@ -23,6 +24,11 @@ func setupForwarding() {
 	bridge := os.Args[2]
 	if !validIfName(bridge) {
 		fmt.Fprintf(os.Stderr, "nexus-cni-exec: invalid bridge name %q\n", bridge)
+		os.Exit(1)
+	}
+
+	if err := raiseAmbientCap(unix.CAP_NET_ADMIN); err != nil {
+		fmt.Fprintf(os.Stderr, "nexus-cni-exec: raise CAP_NET_ADMIN: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -51,6 +57,11 @@ func teardownForwarding() {
 		os.Exit(1)
 	}
 
+	if err := raiseAmbientCap(unix.CAP_NET_ADMIN); err != nil {
+		fmt.Fprintf(os.Stderr, "nexus-cni-exec: raise CAP_NET_ADMIN: %v\n", err)
+		os.Exit(1)
+	}
+
 	ipt, err := iptables.New()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nexus-cni-exec: init iptables: %v\n", err)
@@ -64,10 +75,7 @@ func teardownForwarding() {
 }
 
 func setupForwardChain(ipt *iptables.IPTables, bridge string) error {
-	// Create chain (idempotent — NewChain returns error if exists, ignore it).
-	ipt.NewChain("filter", nexusChain) //nolint:errcheck
-
-	// Flush existing rules to ensure idempotent state.
+	// Flush existing rules to ensure idempotent state (ClearChain creates if needed).
 	if err := ipt.ClearChain("filter", nexusChain); err != nil {
 		return fmt.Errorf("clear chain: %w", err)
 	}
