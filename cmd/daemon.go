@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	ctrd "github.com/Work-Fort/Nexus/internal/infra/containerd"
 	"github.com/Work-Fort/Nexus/internal/infra"
 	"github.com/Work-Fort/Nexus/internal/infra/httpapi"
+	"github.com/Work-Fort/Nexus/internal/infra/resolved"
 	nexusmcp "github.com/Work-Fort/Nexus/internal/infra/mcp"
 	"github.com/Work-Fort/Nexus/internal/infra/storage"
 	"github.com/Work-Fort/Nexus/pkg/btrfs"
@@ -118,10 +120,30 @@ func newDaemonCmd() *cobra.Command {
 					}
 				}
 
+				// Parse DNS domains — ensure "nexus" is always present.
+				dnsDomains := strings.Split(viper.GetString("dns-domains"), ",")
+				for i := range dnsDomains {
+					dnsDomains[i] = strings.TrimSpace(dnsDomains[i])
+				}
+				hasNexus := false
+				for _, d := range dnsDomains {
+					if d == "nexus" {
+						hasNexus = true
+						break
+					}
+				}
+				if !hasNexus {
+					dnsDomains = append([]string{"nexus"}, dnsDomains...)
+				}
+
+				dnsLoopback := viper.GetString("dns-loopback")
+
 				dm, err := dns.New(dns.Config{
 					CoreDNSBin: viper.GetString("coredns-bin"),
 					DNSHelper:  dnsHelper,
 					GatewayIP:  gatewayIP,
+					LoopbackIP: dnsLoopback,
+					Domains:    dnsDomains,
 					StateDir:   filepath.Join(config.GlobalPaths.StateDir, "dns"),
 					RuntimeDir: filepath.Join(runtimeDir, "nexus", "dns"),
 				})
@@ -135,6 +157,21 @@ func newDaemonCmd() *cobra.Command {
 				defer dm.Stop()
 				dnsManager = dm
 				log.Info("dns enabled", "gateway", gatewayIP)
+
+				// Best-effort: register split DNS with systemd-resolved
+				// so the host can resolve *.nexus (and vanity domains).
+				if dnsLoopback != "" {
+					if err := resolved.Register("nexus0", dnsLoopback, dnsDomains); err != nil {
+						log.Warn("host dns: could not register with resolved", "err", err)
+					} else {
+						log.Info("host dns registered", "loopback", dnsLoopback, "domains", dnsDomains)
+					}
+					defer func() {
+						if err := resolved.Revert("nexus0"); err != nil {
+							log.Warn("host dns: could not revert resolved", "err", err)
+						}
+					}()
+				}
 			} else {
 				dnsManager = &dns.NoopManager{}
 			}
