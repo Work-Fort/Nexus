@@ -202,7 +202,11 @@ func (m *Manager) CleanupResolvConf(vmID string) error {
 func (m *Manager) writeHostsFile() error {
 	var buf bytes.Buffer
 	for name, ip := range m.records {
-		fmt.Fprintf(&buf, "%s %s.nexus %s\n", ip, name, name)
+		fmt.Fprintf(&buf, "%s", ip)
+		for _, d := range m.cfg.Domains {
+			fmt.Fprintf(&buf, " %s.%s", name, d)
+		}
+		fmt.Fprintf(&buf, " %s\n", name)
 	}
 	hostsPath := filepath.Join(m.cfg.StateDir, "hosts")
 	tmp := hostsPath + ".tmp"

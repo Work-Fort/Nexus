@@ -17,6 +17,7 @@ func TestAddAndRemoveRecord(t *testing.T) {
 	m := &Manager{
 		cfg: Config{
 			GatewayIP:  "172.16.0.1",
+			Domains:    []string{"nexus"},
 			StateDir:   stateDir,
 			RuntimeDir: runtimeDir,
 		},
@@ -55,6 +56,29 @@ func TestAddAndRemoveRecord(t *testing.T) {
 	}
 	if !strings.Contains(content, "db") {
 		t.Errorf("hosts missing db after removing web:\n%s", content)
+	}
+}
+
+func TestAddRecordMultiDomain(t *testing.T) {
+	stateDir := t.TempDir()
+	m := &Manager{
+		cfg: Config{
+			GatewayIP: "172.16.0.1",
+			Domains:   []string{"nexus", "work-fort"},
+			StateDir:  stateDir,
+		},
+		records: make(map[string]string),
+	}
+	if err := m.addRecord("web", "172.16.0.2"); err != nil {
+		t.Fatalf("add web: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(stateDir, "hosts"))
+	if err != nil {
+		t.Fatalf("read hosts: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "172.16.0.2 web.nexus web.work-fort web") {
+		t.Errorf("hosts missing multi-domain entry:\n%s", content)
 	}
 }
 
