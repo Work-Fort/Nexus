@@ -195,20 +195,26 @@ as Tailscale, recommended by the systemd VPN documentation.
 - Package ships polkit rule for resolved D-Bus authorization
 - Subnet-independent: loopback address is fixed, bridge IP can change
 
----
+## 17. Internal Cleanup
 
-## Investigate
+Small code quality improvements discovered during investigation. No new
+features — just removing unnecessary work and dead patterns.
 
-Things to look into — not yet committed features.
+**DNS nil-check cleanup:**
+Wire `dns.NoopManager` as the default in `NewVMService` so 8 operational
+nil-checks in `vm_service.go`, `snapshot.go`, and `backup.go` can be
+removed. The noop must live in `internal/domain/` (not `internal/infra/dns`)
+to preserve hexagonal layering — or be wired in the daemon's setup code
+(`cmd/daemon.go`) before any `WithDNS` option. One gate check in `SyncDNS`
+becomes dead code but is harmless to keep.
 
-- **Noop pattern for optional subsystems** — `VMService` nil-checks `driveStore`,
-  `deviceStore`, and `dns` throughout its methods. The noop adapter pattern
-  already exists for some infra packages (`dns/noop.go`, `storage/noop.go`).
-  Investigated: only ~11 of 23 nil-checks can be eliminated by noops. The 7
-  "gate" checks (`== nil` returning `ErrValidation`) must stay regardless. Not
-  worth the added abstraction. One small win: wire `dns.NoopManager` by default
-  in the constructor to eliminate 5 dns nil-checks with zero new code.
+**Avoid double image pull in DetectDistro:**
+`runtime.DetectDistro` calls `client.Pull()` for the same image that
+`runtime.Create` already pulled. Containerd deduplicates at the content
+store level so the second pull is fast (milliseconds), but it's still
+unnecessary network + API overhead. Pass the already-pulled image object
+through instead.
 
-- **Docker/OCI image caching** — Investigate where containerd caches pulled
-  images and how to manage cache size, eviction, and pre-warming. Currently
-  every `vm_create` with a new image triggers a full pull.
+Note: containerd handles all image caching and layer deduplication
+internally. No Nexus-layer cache, eviction, or pre-warming is needed —
+`client.Pull()` is a no-op for images already in the content store.
