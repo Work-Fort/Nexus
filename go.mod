@@ -45,6 +45,7 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/plugin v1.0.0 // indirect
 	github.com/containerd/ttrpc v1.2.7 // indirect
+	github.com/coreos/go-iptables v0.8.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.5.1 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

@@ -41,6 +41,10 @@ func main() {
 		switch os.Args[1] {
 		case "delete-bridge":
 			deleteBridge()
+		case "setup-forwarding":
+			setupForwarding()
+		case "teardown-forwarding":
+			teardownForwarding()
 		default:
 			fmt.Fprintf(os.Stderr, "nexus-cni-exec: unknown subcommand %q\n", os.Args[1])
 			os.Exit(1)
