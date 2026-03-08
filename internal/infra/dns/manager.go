@@ -26,6 +26,8 @@ type Config struct {
 	CoreDNSBin string   // path to coredns binary
 	DNSHelper  string   // path to nexus-dns helper (raises cap_net_bind_service)
 	GatewayIP  string   // bridge gateway IP (e.g. "172.16.0.1")
+	LoopbackIP string   // loopback IP for host DNS resolution (e.g. "127.0.0.100")
+	Domains    []string // DNS domains (default: ["nexus"])
 	StateDir   string   // persistent dir for Corefile + hosts
 	RuntimeDir string   // runtime dir for per-VM resolv.conf files
 	Upstreams  []string // upstream DNS servers (nil = auto-detect)
@@ -61,6 +63,9 @@ func New(cfg Config) (*Manager, error) {
 	}
 	if len(cfg.Upstreams) == 0 {
 		cfg.Upstreams = parseUpstreams()
+	}
+	if len(cfg.Domains) == 0 {
+		cfg.Domains = []string{"nexus"}
 	}
 	return &Manager{
 		cfg:     cfg,
