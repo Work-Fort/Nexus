@@ -153,6 +153,21 @@ recover automatically).
 - Manual retention only — no automatic expiry or scheduling
 - Requires btrfs storage backend; noop backend returns clear error
 
+## 15. Automatic Firewall Forwarding
+
+[Design](firewall-forwarding-design.md) · [Plan](plans/2026-03-07-firewall-forwarding.md)
+
+Automatically manage iptables FORWARD rules so VMs can reach external
+services even when a host firewall (UFW, firewalld) is active. CNI's
+bridge plugin handles NAT but not FORWARD rules — host firewalls DROP
+forwarded traffic by default.
+
+- Extend `nexus-cni-exec` with `setup-forwarding` / `teardown-forwarding`
+- Uses `coreos/go-iptables` (works with both legacy iptables and iptables-nft)
+- Rules applied on daemon start, removed on shutdown
+- Own `NEXUS-FORWARD` chain inserted at top of FORWARD
+- Remove obsolete `nexus setup` command (superseded by helper binaries)
+
 ---
 
 ## Investigate
