@@ -225,6 +225,37 @@ func TestOutboundConnectivity(t *testing.T) {
 	t.Logf("ping output: %s", result.Stdout)
 }
 
+func TestOutboundTCP(t *testing.T) {
+	_, c := startDaemon(t)
+
+	vm, err := c.CreateVMWithImage("test-tcp", "agent", "docker.io/library/nginx:alpine")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Wait for networking to come up, then test TCP connectivity.
+	var result *harness.ExecResult
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"wget", "-q", "-O", "/dev/null", "--timeout=5", "http://example.com"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("exec wget: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("wget failed (exit %d): stdout=%s stderr=%s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+	t.Logf("TCP outbound OK: wget http://example.com succeeded")
+}
+
 func TestDeleteVM(t *testing.T) {
 	_, c := startDaemon(t)
 
