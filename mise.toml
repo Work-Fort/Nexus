@@ -94,7 +94,7 @@ cp build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota build/ne
 # Set capabilities on helper binaries (matches scripts/dev-setcap-loop.sh)
 echo "Setting capabilities (requires sudo)..."
 sudo setcap cap_sys_admin+ep ~/.local/bin/nexus-netns
-sudo setcap cap_net_admin,cap_sys_admin+ep ~/.local/bin/nexus-cni-exec
+sudo setcap cap_net_admin,cap_net_raw,cap_sys_admin+ep ~/.local/bin/nexus-cni-exec
 sudo setcap cap_sys_admin+ep ~/.local/bin/nexus-quota
 sudo setcap cap_sys_admin,cap_fowner+ep ~/.local/bin/nexus-btrfs
 sudo setcap cap_net_bind_service+ep ~/.local/bin/nexus-dns
