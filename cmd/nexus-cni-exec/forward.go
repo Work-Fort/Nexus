@@ -29,11 +29,7 @@ func setupForwarding() {
 		os.Exit(1)
 	}
 
-	if err := raiseAmbientCap(unix.CAP_NET_ADMIN); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus-cni-exec: raise CAP_NET_ADMIN: %v\n", err)
-		os.Exit(1)
-	}
-
+	raiseForwardingCaps()
 	ensureXtablesLock()
 
 	ipt, err := newIPTables()
@@ -61,11 +57,7 @@ func teardownForwarding() {
 		os.Exit(1)
 	}
 
-	if err := raiseAmbientCap(unix.CAP_NET_ADMIN); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus-cni-exec: raise CAP_NET_ADMIN: %v\n", err)
-		os.Exit(1)
-	}
-
+	raiseForwardingCaps()
 	ensureXtablesLock()
 
 	ipt, err := newIPTables()
@@ -78,6 +70,19 @@ func teardownForwarding() {
 		fmt.Fprintf(os.Stderr, "nexus-cni-exec: teardown forwarding: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// raiseForwardingCaps raises capabilities needed for iptables.
+// CAP_NET_ADMIN is required for netfilter operations.
+// CAP_NET_RAW is required for legacy iptables (raw socket access).
+func raiseForwardingCaps() {
+	if err := raiseAmbientCap(unix.CAP_NET_ADMIN); err != nil {
+		fmt.Fprintf(os.Stderr, "nexus-cni-exec: raise CAP_NET_ADMIN: %v\n", err)
+		os.Exit(1)
+	}
+	// Best-effort: CAP_NET_RAW is only needed for legacy iptables.
+	// If not in the permitted set (binary lacks it), skip silently.
+	raiseAmbientCap(unix.CAP_NET_RAW) //nolint:errcheck
 }
 
 func setupForwardChain(ipt *iptables.IPTables, bridge string) error {
@@ -113,14 +118,22 @@ func setupForwardChain(ipt *iptables.IPTables, bridge string) error {
 	return nil
 }
 
-// newIPTables creates an iptables handle, preferring iptables-nft over
-// legacy iptables. Legacy iptables uses raw sockets that require uid 0;
-// iptables-nft uses netlink which works with just CAP_NET_ADMIN.
+// newIPTables creates an iptables handle. It uses the system default
+// iptables binary first (which matches the host firewall's backend),
+// falling back to iptables-nft. Using the same backend as the firewall
+// is critical: iptables-legacy and iptables-nft operate on separate
+// netfilter hook registrations, so rules in one don't affect the other.
 func newIPTables() (*iptables.IPTables, error) {
-	if path, err := exec.LookPath("iptables-nft"); err == nil {
+	ipt, err := iptables.New()
+	if err == nil {
+		return ipt, nil
+	}
+	// System default failed (e.g. legacy iptables without CAP_NET_RAW).
+	// Try iptables-nft explicitly as a fallback.
+	if path, lookErr := exec.LookPath("iptables-nft"); lookErr == nil {
 		return iptables.New(iptables.Path(path))
 	}
-	return iptables.New()
+	return nil, err
 }
 
 // ensureXtablesLock sets XTABLES_LOCKFILE to a user-writable path if the

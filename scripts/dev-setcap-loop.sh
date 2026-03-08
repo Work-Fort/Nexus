@@ -28,7 +28,7 @@ DNS_HELPER="$BUILD_DIR/nexus-dns"
 echo "Starting capability auto-setter (Ctrl+C to stop)"
 echo "Watching:"
 echo "  $NETNS_HELPER  → CAP_SYS_ADMIN"
-echo "  $CNI_EXEC      → CAP_NET_ADMIN,CAP_SYS_ADMIN"
+echo "  $CNI_EXEC      → CAP_NET_ADMIN,CAP_NET_RAW,CAP_SYS_ADMIN"
 echo "  $QUOTA_HELPER  → CAP_SYS_ADMIN"
 echo "  $BTRFS_HELPER  → CAP_SYS_ADMIN,CAP_FOWNER"
 echo "  $DNS_HELPER    → CAP_NET_BIND_SERVICE"
@@ -41,7 +41,7 @@ while true; do
         # +ep: permitted and effective are set at execve.
         # The binary programmatically adds caps to the inheritable set
         # and raises them as ambient before exec-ing the real CNI plugin.
-        setcap cap_net_admin,cap_sys_admin+ep "$CNI_EXEC" 2>/dev/null || true
+        setcap cap_net_admin,cap_net_raw,cap_sys_admin+ep "$CNI_EXEC" 2>/dev/null || true
     fi
     if [ -f "$QUOTA_HELPER" ]; then
         setcap cap_sys_admin+ep "$QUOTA_HELPER" 2>/dev/null || true

@@ -32,6 +32,19 @@ Docker, podman, and CNI itself use for container networking.
 Using `coreos/go-iptables` works on both legacy iptables AND nftables
 systems via the `iptables-nft` compatibility layer.
 
+### Matching the Firewall Backend
+
+Critical: `iptables-legacy` and `iptables-nft` operate on **separate
+netfilter hook registrations**. Rules added via one don't affect the other.
+An ACCEPT in the nft filter table does NOT prevent a DROP in the legacy
+xtables filter table (and vice versa).
+
+We must use the same backend as the host firewall. The code tries the
+system default `iptables` first (which matches whatever the firewall uses),
+falling back to `iptables-nft` only if the default fails. Legacy iptables
+requires `CAP_NET_RAW` for raw socket access; `iptables-nft` only needs
+`CAP_NET_ADMIN`.
+
 ### Architecture
 
 **Where:** New subcommands in `nexus-cni-exec`:
@@ -72,7 +85,7 @@ Inserted at position 1 in FORWARD, runs before UFW/firewalld rules.
 - **Idempotent:** safe to call setup/teardown multiple times
 - **Clean:** own chain, no interference with existing rules
 - **No new binaries:** extends existing `nexus-cni-exec`
-- **No new capabilities:** `CAP_NET_ADMIN` already present
+- **Capabilities:** `CAP_NET_ADMIN` (already present) + `CAP_NET_RAW` (added for legacy iptables)
 
 ## Cleanup: Remove `nexus setup`
 

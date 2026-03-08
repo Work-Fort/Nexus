@@ -236,24 +236,25 @@ func TestOutboundTCP(t *testing.T) {
 		t.Fatalf("start VM: %v", err)
 	}
 
-	// Wait for networking to come up, then test TCP connectivity.
+	// Wait for networking to come up, then test TCP connectivity to 1.1.1.1:443.
+	// Uses nc (netcat) instead of wget to avoid DNS dependency.
 	var result *harness.ExecResult
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		result, err = c.ExecVM(vm.ID, []string{"wget", "-q", "-O", "/dev/null", "--timeout=5", "http://example.com"})
+		result, err = c.ExecVM(vm.ID, []string{"nc", "-z", "-w", "3", "1.1.1.1", "443"})
 		if err == nil && result.ExitCode == 0 {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	if err != nil {
-		t.Fatalf("exec wget: %v", err)
+		t.Fatalf("exec nc: %v", err)
 	}
 	if result.ExitCode != 0 {
-		t.Fatalf("wget failed (exit %d): stdout=%s stderr=%s",
+		t.Fatalf("TCP connect failed (exit %d): stdout=%s stderr=%s",
 			result.ExitCode, result.Stdout, result.Stderr)
 	}
-	t.Logf("TCP outbound OK: wget http://example.com succeeded")
+	t.Logf("TCP outbound OK: nc -z 1.1.1.1 443 succeeded")
 }
 
 func TestDeleteVM(t *testing.T) {
