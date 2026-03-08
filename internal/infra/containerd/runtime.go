@@ -582,6 +582,11 @@ func (r *Runtime) Exec(ctx context.Context, id string, cmd []string) (*domain.Ex
 	}
 	status := <-ch
 
+	// Wait for I/O copy goroutines to finish draining FIFO buffers
+	// before reading stdout/stderr. proc.Wait() returns when the
+	// process exits, but cio.copyIO goroutines may still be writing.
+	proc.IO().Wait()
+
 	proc.Delete(ctx) //nolint:errcheck // best-effort cleanup
 
 	return &domain.ExecResult{
