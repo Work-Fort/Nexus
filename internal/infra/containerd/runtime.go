@@ -69,12 +69,15 @@ func (r *Runtime) nsCtx(ctx context.Context) context.Context {
 	return namespaces.WithNamespace(ctx, r.namespace)
 }
 
-// pullImage ensures the image is available locally. It first checks the local
-// content store (fast path for images already pulled by DetectDistro), and
-// falls back to a full Pull if the image is not found locally.
+// pullImage ensures the image is available and unpacked locally. It checks the
+// local content store first (fast path for images already pulled by
+// DetectDistro), and falls back to a full Pull if the image is missing or not
+// yet unpacked into the snapshotter (e.g. after ImportImage).
 func (r *Runtime) pullImage(ctx context.Context, image string) (client.Image, error) {
 	if img, err := r.client.GetImage(ctx, image); err == nil {
-		return img, nil
+		if ok, _ := img.IsUnpacked(ctx, r.snapshotter); ok {
+			return img, nil
+		}
 	}
 	return r.client.Pull(ctx, image,
 		client.WithPullUnpack,

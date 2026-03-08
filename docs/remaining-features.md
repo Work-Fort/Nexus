@@ -195,26 +195,17 @@ as Tailscale, recommended by the systemd VPN documentation.
 - Package ships polkit rule for resolved D-Bus authorization
 - Subnet-independent: loopback address is fixed, bridge IP can change
 
-## 17. Internal Cleanup
+## 17. Internal Cleanup ✅
 
 Small code quality improvements discovered during investigation. No new
 features — just removing unnecessary work and dead patterns.
 
-**DNS nil-check cleanup:**
-Wire `dns.NoopManager` as the default in `NewVMService` so 8 operational
-nil-checks in `vm_service.go`, `snapshot.go`, and `backup.go` can be
-removed. The noop must live in `internal/domain/` (not `internal/infra/dns`)
-to preserve hexagonal layering — or be wired in the daemon's setup code
-(`cmd/daemon.go`) before any `WithDNS` option. One gate check in `SyncDNS`
-becomes dead code but is harmless to keep.
+**DNS nil-check cleanup:** Done in `8e0611c`. Added `NoopDNSManager` to
+`internal/domain/ports.go`, defaulted in `NewVMService` constructor,
+removed 9 nil-checks across `vm_service.go`, `snapshot.go`, `backup.go`.
+Deleted `internal/infra/dns/noop.go`.
 
-**Avoid double image pull in DetectDistro:**
-`runtime.DetectDistro` calls `client.Pull()` for the same image that
-`runtime.Create` already pulled. Containerd deduplicates at the content
-store level so the second pull is fast (milliseconds), but it's still
-unnecessary network + API overhead. Pass the already-pulled image object
-through instead.
-
-Note: containerd handles all image caching and layer deduplication
-internally. No Nexus-layer cache, eviction, or pre-warming is needed —
-`client.Pull()` is a no-op for images already in the content store.
+**Avoid double image pull:** Done in `e5af0e9`. Extracted `pullImage`
+helper that checks `GetImage` (local) before falling back to `Pull`.
+Both `Create` and `DetectDistro` use it — second call is a fast local
+lookup instead of a registry round-trip.
