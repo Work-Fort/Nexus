@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/coreos/go-iptables/iptables"
 	"golang.org/x/sys/unix"
@@ -32,7 +34,9 @@ func setupForwarding() {
 		os.Exit(1)
 	}
 
-	ipt, err := iptables.New()
+	ensureXtablesLock()
+
+	ipt, err := newIPTables()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nexus-cni-exec: init iptables: %v\n", err)
 		os.Exit(1)
@@ -62,7 +66,9 @@ func teardownForwarding() {
 		os.Exit(1)
 	}
 
-	ipt, err := iptables.New()
+	ensureXtablesLock()
+
+	ipt, err := newIPTables()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nexus-cni-exec: init iptables: %v\n", err)
 		os.Exit(1)
@@ -105,6 +111,34 @@ func setupForwardChain(ipt *iptables.IPTables, bridge string) error {
 	}
 
 	return nil
+}
+
+// newIPTables creates an iptables handle, preferring iptables-nft over
+// legacy iptables. Legacy iptables uses raw sockets that require uid 0;
+// iptables-nft uses netlink which works with just CAP_NET_ADMIN.
+func newIPTables() (*iptables.IPTables, error) {
+	if path, err := exec.LookPath("iptables-nft"); err == nil {
+		return iptables.New(iptables.Path(path))
+	}
+	return iptables.New()
+}
+
+// ensureXtablesLock sets XTABLES_LOCKFILE to a user-writable path if the
+// system lock file (/run/xtables.lock) is not accessible. This is needed
+// because the lock file is typically root-owned 0600, and CAP_NET_ADMIN
+// does not bypass regular file permission checks.
+func ensureXtablesLock() {
+	if f, err := os.OpenFile("/run/xtables.lock", os.O_RDWR, 0); err == nil {
+		f.Close()
+		return
+	}
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = fmt.Sprintf("/tmp/nexus-%d", os.Getuid())
+	}
+	lockDir := filepath.Join(dir, "nexus")
+	os.MkdirAll(lockDir, 0700) //nolint:errcheck
+	os.Setenv("XTABLES_LOCKFILE", filepath.Join(lockDir, "xtables.lock"))
 }
 
 func teardownForwardChain(ipt *iptables.IPTables, bridge string) error {
