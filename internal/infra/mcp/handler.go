@@ -190,7 +190,7 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 	})
 }
 
-// registerVMExecTools registers vm_exec and vm_exec_stream tools.
+// registerVMExecTools registers the vm_exec tool.
 func registerVMExecTools(s *server.MCPServer, svc *app.VMService) {
 	// vm_exec
 	s.AddTool(mcp.NewTool("vm_exec",
@@ -212,45 +212,19 @@ func registerVMExecTools(s *server.MCPServer, svc *app.VMService) {
 			return errResult(fmt.Errorf("cmd must be a JSON array of strings: %w", err))
 		}
 
-		result, err := svc.ExecVM(ctx, id, cmd)
-		if err != nil {
-			return errResult(err)
-		}
-		return jsonResult(result)
-	})
-
-	// vm_exec_stream
-	s.AddTool(mcp.NewTool("vm_exec_stream",
-		mcp.WithDescription("Execute a command in a running VM with streaming output"),
-		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
-		mcp.WithString("cmd", mcp.Description("Command as JSON array (e.g. [\"ls\",\"-la\"])"), mcp.Required()),
-	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		id, errRes := requireString(req, "id")
-		if errRes != nil {
-			return errRes, nil
-		}
-		cmdStr, errRes := requireString(req, "cmd")
-		if errRes != nil {
-			return errRes, nil
-		}
-
-		var cmd []string
-		if err := json.Unmarshal([]byte(cmdStr), &cmd); err != nil {
-			return errResult(fmt.Errorf("cmd must be a JSON array of strings: %w", err))
-		}
-
-		var stdout, stderr bytes.Buffer
-		exitCode, err := svc.ExecStreamVM(ctx, id, cmd, &stdout, &stderr)
+		var stdoutBuf, stderrBuf bytes.Buffer
+		stdoutW := &notifyWriter{srv: s, ctx: ctx, method: "run_command.stdout", buf: &stdoutBuf}
+		stderrW := &notifyWriter{srv: s, ctx: ctx, method: "run_command.stderr", buf: &stderrBuf}
+		exitCode, err := svc.ExecStreamVM(ctx, id, cmd, stdoutW, stderrW)
 		if err != nil {
 			return errResult(err)
 		}
 
-		out := map[string]any{
+		return jsonResult(map[string]any{
 			"exit_code": exitCode,
-			"stdout":    stdout.String(),
-			"stderr":    stderr.String(),
-		}
-		return jsonResult(out)
+			"stdout":    stdoutBuf.String(),
+			"stderr":    stderrBuf.String(),
+		})
 	})
 }
 
