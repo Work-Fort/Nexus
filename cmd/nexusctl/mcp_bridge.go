@@ -4,6 +4,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,6 +75,9 @@ func runMCPBridge() error {
 				sseLine := sseScanner.Text()
 				if strings.HasPrefix(sseLine, "data: ") {
 					payload := sseLine[len("data: "):]
+					if handleStreamingNotification(payload) {
+						continue
+					}
 					os.Stdout.WriteString(payload) //nolint:errcheck
 					os.Stdout.Write([]byte{'\n'})  //nolint:errcheck
 				}
@@ -88,4 +92,29 @@ func runMCPBridge() error {
 		}
 	}
 	return scanner.Err()
+}
+
+// handleStreamingNotification checks if a JSON-RPC message is a
+// run_command.stdout or run_command.stderr notification. If so, it
+// writes the chunk text to stderr (visible to the user) and returns
+// true so the caller skips forwarding raw JSON to stdout.
+func handleStreamingNotification(payload string) bool {
+	var msg struct {
+		Method string `json:"method"`
+		Params struct {
+			Chunk string `json:"chunk"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal([]byte(payload), &msg); err != nil {
+		return false
+	}
+	switch msg.Method {
+	case "run_command.stdout":
+		os.Stderr.WriteString(msg.Params.Chunk) //nolint:errcheck
+		return true
+	case "run_command.stderr":
+		os.Stderr.WriteString(msg.Params.Chunk) //nolint:errcheck
+		return true
+	}
+	return false
 }
