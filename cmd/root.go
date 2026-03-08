@@ -89,7 +89,6 @@ func init() {
 	}
 
 	rootCmd.AddCommand(newDaemonCmd())
-	rootCmd.AddCommand(newSetupCmd())
 	rootCmd.AddCommand(newExportCmd())
 	rootCmd.AddCommand(newImportCmd())
 
