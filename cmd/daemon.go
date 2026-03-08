@@ -304,7 +304,7 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("agent-image", config.DefaultAgentImage, "Default OCI image for agent VMs")
 	cmd.Flags().String("cni-bin-dir", config.DefaultCNIBinDir, "Directory containing CNI plugin binaries")
 	cmd.Flags().String("network-subnet", config.DefaultNetSubnet, "CIDR subnet for the VM bridge network")
-	cmd.Flags().String("bridge-name", "nexus0", "Bridge interface name for VM networking")
+	cmd.Flags().String("bridge-name", config.DefaultBridgeName, "Bridge interface name for VM networking")
 	cmd.Flags().Bool("network-enabled", true, "Enable CNI networking for VMs")
 	cmd.Flags().String("netns-helper", config.DefaultNetNSHelper, "Path to nexus-netns helper binary")
 	cmd.Flags().String("cni-exec-bin", config.DefaultCNIExecBin, "Path to nexus-cni-exec wrapper binary")

@@ -22,6 +22,7 @@ const (
 	DefaultAgentImage  = "docker.io/library/alpine:latest"
 	DefaultCNIBinDir    = "/opt/cni/bin"
 	DefaultNetSubnet    = "172.16.0.0/12"
+	DefaultBridgeName   = "nexus0"
 	DefaultNetNSHelper  = "nexus-netns"
 	DefaultCNIExecBin   = "nexus-cni-exec"
 	DefaultDrivesDir    = "" // empty = auto-detect ($XDG_STATE_HOME/nexus/drives)
@@ -100,6 +101,7 @@ func InitViper() {
 	viper.SetDefault("agent-image", DefaultAgentImage)
 	viper.SetDefault("cni-bin-dir", DefaultCNIBinDir)
 	viper.SetDefault("network-subnet", DefaultNetSubnet)
+	viper.SetDefault("bridge-name", DefaultBridgeName)
 	viper.SetDefault("network-enabled", true)
 	viper.SetDefault("netns-helper", DefaultNetNSHelper)
 	viper.SetDefault("cni-exec-bin", DefaultCNIExecBin)
