@@ -43,6 +43,7 @@ package() {
     install -Dm755 nexus-btrfs "${pkgdir}/usr/bin/nexus-btrfs"
     install -Dm755 nexus-dns "${pkgdir}/usr/bin/nexus-dns"
     install -Dm644 dist/nexus.service "${pkgdir}/usr/lib/systemd/user/nexus.service"
+    install -Dm644 dist/49-nexus-resolved.rules "${pkgdir}/etc/polkit-1/rules.d/49-nexus-resolved.rules"
 
     # node_exporter from upstream Prometheus release (strip debug symbols to
     # avoid debugedit warnings from makepkg).

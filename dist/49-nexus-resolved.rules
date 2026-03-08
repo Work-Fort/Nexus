@@ -1,0 +1,9 @@
+// Allow local active users to configure per-link DNS via systemd-resolved.
+// This lets the nexus daemon register split DNS for .nexus domains without
+// requiring root. Scope is narrow: only resolved set/revert actions.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.resolve1.") === 0 &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});
