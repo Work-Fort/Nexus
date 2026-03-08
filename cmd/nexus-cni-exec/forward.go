@@ -12,12 +12,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const nexusChain = "NEXUS-FORWARD"
+const (
+	nexusForwardChain = "NEXUS-FORWARD"
+	nexusInputChain   = "NEXUS-INPUT"
+)
 
-// setupForwarding creates iptables FORWARD rules for the bridge interface.
-// It creates a NEXUS-FORWARD chain with rules that accept traffic from/to
-// the bridge, then inserts a jump to it at the top of the FORWARD chain.
-// Idempotent: safe to call multiple times.
+// setupForwarding creates iptables rules for the bridge interface:
+//   - NEXUS-FORWARD chain: accepts forwarded traffic from/to the bridge (VM → internet)
+//   - NEXUS-INPUT chain: accepts traffic from VMs to host services (DNS, API)
+//
+// Both chains are inserted at position 1 in their respective parent chains,
+// running before UFW/firewalld rules. Idempotent: safe to call multiple times.
 func setupForwarding() {
 	if len(os.Args) < 3 {
 		fmt.Fprintf(os.Stderr, "usage: nexus-cni-exec setup-forwarding <bridge>\n")
@@ -38,7 +43,7 @@ func setupForwarding() {
 		os.Exit(1)
 	}
 
-	if err := setupForwardChain(ipt, bridge); err != nil {
+	if err := setupChains(ipt, bridge); err != nil {
 		fmt.Fprintf(os.Stderr, "nexus-cni-exec: setup forwarding: %v\n", err)
 		os.Exit(1)
 	}
@@ -66,7 +71,7 @@ func teardownForwarding() {
 		os.Exit(1)
 	}
 
-	if err := teardownForwardChain(ipt, bridge); err != nil {
+	if err := teardownChains(ipt, bridge); err != nil {
 		fmt.Fprintf(os.Stderr, "nexus-cni-exec: teardown forwarding: %v\n", err)
 		os.Exit(1)
 	}
@@ -85,36 +90,60 @@ func raiseForwardingCaps() {
 	raiseAmbientCap(unix.CAP_NET_RAW) //nolint:errcheck
 }
 
-func setupForwardChain(ipt *iptables.IPTables, bridge string) error {
-	// Flush existing rules to ensure idempotent state (ClearChain creates if needed).
-	if err := ipt.ClearChain("filter", nexusChain); err != nil {
-		return fmt.Errorf("clear chain: %w", err)
+func setupChains(ipt *iptables.IPTables, bridge string) error {
+	// --- FORWARD chain: VM ↔ internet ---
+
+	// ClearChain creates the chain if it doesn't exist, then flushes it.
+	if err := ipt.ClearChain("filter", nexusForwardChain); err != nil {
+		return fmt.Errorf("clear forward chain: %w", err)
 	}
 
-	// Rule 1: Accept all traffic coming FROM the bridge (VM → internet).
-	if err := ipt.AppendUnique("filter", nexusChain,
+	// Accept all traffic coming FROM the bridge (VM → internet).
+	if err := ipt.AppendUnique("filter", nexusForwardChain,
 		"-i", bridge, "-j", "ACCEPT"); err != nil {
 		return fmt.Errorf("add forward-in rule: %w", err)
 	}
 
-	// Rule 2: Accept return traffic going TO the bridge (internet → VM).
-	if err := ipt.AppendUnique("filter", nexusChain,
+	// Accept return traffic going TO the bridge (internet → VM).
+	if err := ipt.AppendUnique("filter", nexusForwardChain,
 		"-o", bridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED",
 		"-j", "ACCEPT"); err != nil {
 		return fmt.Errorf("add forward-out rule: %w", err)
 	}
 
-	// Insert jump at top of FORWARD chain (if not already present).
-	exists, err := ipt.Exists("filter", "FORWARD", "-j", nexusChain)
-	if err != nil {
-		return fmt.Errorf("check forward jump: %w", err)
-	}
-	if !exists {
-		if err := ipt.Insert("filter", "FORWARD", 1, "-j", nexusChain); err != nil {
-			return fmt.Errorf("insert forward jump: %w", err)
-		}
+	if err := insertJumpIfMissing(ipt, "FORWARD", nexusForwardChain); err != nil {
+		return err
 	}
 
+	// --- INPUT chain: VM → host services (DNS, API) ---
+
+	if err := ipt.ClearChain("filter", nexusInputChain); err != nil {
+		return fmt.Errorf("clear input chain: %w", err)
+	}
+
+	// Accept all traffic from VMs to the host via the bridge.
+	if err := ipt.AppendUnique("filter", nexusInputChain,
+		"-i", bridge, "-j", "ACCEPT"); err != nil {
+		return fmt.Errorf("add input rule: %w", err)
+	}
+
+	if err := insertJumpIfMissing(ipt, "INPUT", nexusInputChain); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func insertJumpIfMissing(ipt *iptables.IPTables, parent, child string) error {
+	exists, err := ipt.Exists("filter", parent, "-j", child)
+	if err != nil {
+		return fmt.Errorf("check %s jump: %w", parent, err)
+	}
+	if !exists {
+		if err := ipt.Insert("filter", parent, 1, "-j", child); err != nil {
+			return fmt.Errorf("insert %s jump: %w", parent, err)
+		}
+	}
 	return nil
 }
 
@@ -154,13 +183,15 @@ func ensureXtablesLock() {
 	os.Setenv("XTABLES_LOCKFILE", filepath.Join(lockDir, "xtables.lock"))
 }
 
-func teardownForwardChain(ipt *iptables.IPTables, bridge string) error {
-	// Remove jump from FORWARD chain (ignore error if not present).
-	ipt.DeleteIfExists("filter", "FORWARD", "-j", nexusChain) //nolint:errcheck
-
-	// Flush and delete the chain (ignore errors if chain doesn't exist).
-	ipt.ClearChain("filter", nexusChain)  //nolint:errcheck
-	ipt.DeleteChain("filter", nexusChain) //nolint:errcheck
-
+func teardownChains(ipt *iptables.IPTables, bridge string) error {
+	// Remove jumps and delete chains. Ignore errors (chain may not exist).
+	for _, chain := range []struct{ parent, child string }{
+		{"FORWARD", nexusForwardChain},
+		{"INPUT", nexusInputChain},
+	} {
+		ipt.DeleteIfExists("filter", chain.parent, "-j", chain.child) //nolint:errcheck
+		ipt.ClearChain("filter", chain.child)                         //nolint:errcheck
+		ipt.DeleteChain("filter", chain.child)                        //nolint:errcheck
+	}
 	return nil
 }

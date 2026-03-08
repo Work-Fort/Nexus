@@ -61,7 +61,9 @@ requires `CAP_NET_RAW` for raw socket access; `iptables-nft` only needs
 
 ### Firewall Rules
 
-Creates a `NEXUS-FORWARD` chain in the filter table:
+Creates two chains in the filter table:
+
+**NEXUS-FORWARD** — VM ↔ internet (forwarded traffic):
 
 ```
 -N NEXUS-FORWARD
@@ -70,7 +72,15 @@ Creates a `NEXUS-FORWARD` chain in the filter table:
 -I FORWARD 1 -j NEXUS-FORWARD
 ```
 
-Inserted at position 1 in FORWARD, runs before UFW/firewalld rules.
+**NEXUS-INPUT** — VM → host services (DNS, API):
+
+```
+-N NEXUS-INPUT
+-A NEXUS-INPUT -i nexus0 -j ACCEPT
+-I INPUT 1 -j NEXUS-INPUT
+```
+
+Both inserted at position 1, running before UFW/firewalld rules.
 
 ### Teardown
 
@@ -78,6 +88,9 @@ Inserted at position 1 in FORWARD, runs before UFW/firewalld rules.
 -D FORWARD -j NEXUS-FORWARD
 -F NEXUS-FORWARD
 -X NEXUS-FORWARD
+-D INPUT -j NEXUS-INPUT
+-F NEXUS-INPUT
+-X NEXUS-INPUT
 ```
 
 ### Properties
