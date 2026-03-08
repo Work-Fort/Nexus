@@ -32,26 +32,27 @@ echo "  $CNI_EXEC      → CAP_NET_ADMIN,CAP_NET_RAW,CAP_SYS_ADMIN"
 echo "  $QUOTA_HELPER  → CAP_SYS_ADMIN"
 echo "  $BTRFS_HELPER  → CAP_SYS_ADMIN,CAP_FOWNER"
 echo "  $DNS_HELPER    → CAP_NET_BIND_SERVICE"
+echo "  $PROJECT_ROOT/.e2e-bin-* → E2E test binaries (same caps)"
+
+set_caps_on_dir() {
+    local dir="$1"
+    [ -f "$dir/nexus-netns" ]    && setcap cap_sys_admin+ep "$dir/nexus-netns" 2>/dev/null || true
+    [ -f "$dir/nexus-cni-exec" ] && setcap cap_net_admin,cap_net_raw,cap_sys_admin+ep "$dir/nexus-cni-exec" 2>/dev/null || true
+    [ -f "$dir/nexus-quota" ]    && setcap cap_sys_admin+ep "$dir/nexus-quota" 2>/dev/null || true
+    [ -f "$dir/nexus-btrfs" ]    && setcap cap_sys_admin,cap_fowner+ep "$dir/nexus-btrfs" 2>/dev/null || true
+    [ -f "$dir/nexus-dns" ]      && setcap cap_net_bind_service+ep "$dir/nexus-dns" 2>/dev/null || true
+}
 
 while true; do
-    if [ -f "$NETNS_HELPER" ]; then
-        setcap cap_sys_admin+ep "$NETNS_HELPER" 2>/dev/null || true
-    fi
-    if [ -f "$CNI_EXEC" ]; then
-        # +ep: permitted and effective are set at execve.
-        # The binary programmatically adds caps to the inheritable set
-        # and raises them as ambient before exec-ing the real CNI plugin.
-        setcap cap_net_admin,cap_net_raw,cap_sys_admin+ep "$CNI_EXEC" 2>/dev/null || true
-    fi
-    if [ -f "$QUOTA_HELPER" ]; then
-        setcap cap_sys_admin+ep "$QUOTA_HELPER" 2>/dev/null || true
-    fi
-    if [ -f "$BTRFS_HELPER" ]; then
-        setcap cap_sys_admin,cap_fowner+ep "$BTRFS_HELPER" 2>/dev/null || true
-    fi
-    if [ -f "$DNS_HELPER" ]; then
-        setcap cap_net_bind_service+ep "$DNS_HELPER" 2>/dev/null || true
-    fi
+    # Set caps on build/ binaries.
+    set_caps_on_dir "$BUILD_DIR"
+
+    # Set caps on E2E test binaries (built to project root, not /tmp,
+    # because /tmp is nosuid which silently ignores file capabilities).
+    for e2e_dir in "$PROJECT_ROOT"/.e2e-bin-*; do
+        [ -d "$e2e_dir" ] && set_caps_on_dir "$e2e_dir"
+    done
+
     echo "[$(date +%H:%M:%S)] Capabilities set"
     sleep 2
 done

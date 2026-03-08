@@ -22,19 +22,21 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	tmpDir, err := os.MkdirTemp("", "nexus-e2e-bin-*")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "create temp dir: %v\n", err)
-		os.Exit(1)
-	}
-	defer os.RemoveAll(tmpDir)
-
 	wd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "getwd: %v\n", err)
 		os.Exit(1)
 	}
 	projectRoot := filepath.Join(wd, "..", "..")
+
+	// Build into the project tree (not /tmp) so file capabilities work.
+	// /tmp is typically mounted nosuid, which silently ignores setcap.
+	tmpDir, err := os.MkdirTemp(projectRoot, ".e2e-bin-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create temp dir: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(tmpDir)
 
 	// Build targets: main binary + helpers.
 	targets := []struct {
@@ -64,6 +66,32 @@ func TestMain(m *testing.M) {
 	nexusBin = filepath.Join(tmpDir, "nexus")
 	binDir = tmpDir
 	os.Exit(m.Run())
+}
+
+// requireNetworkCaps waits up to 5s for the setcap loop to set capabilities
+// on the E2E-built binaries. Networking tests require CAP_NET_ADMIN on
+// nexus-cni-exec and CAP_NET_BIND_SERVICE on nexus-dns. The dev-setcap-loop.sh
+// script (run with sudo in a separate terminal) sets these every 2 seconds.
+func requireNetworkCaps(t *testing.T) {
+	t.Helper()
+	cniExec := filepath.Join(binDir, "nexus-cni-exec")
+
+	// Verify the binary is NOT on a nosuid filesystem (caps are silently
+	// ignored on nosuid mounts like /tmp).
+	out, err := exec.Command("findmnt", "-n", "-o", "OPTIONS", "--target", binDir).Output()
+	if err == nil && strings.Contains(string(out), "nosuid") {
+		t.Fatalf("E2E binaries are on a nosuid filesystem (%s); file capabilities will not work — build to project root instead", binDir)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := exec.Command("getcap", cniExec).Output()
+		if err == nil && strings.Contains(string(out), "cap_net_admin") {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Skipf("networking capabilities not set on %s — run: sudo ./scripts/dev-setcap-loop.sh", binDir)
 }
 
 // startDaemon is a test helper that starts a daemon and registers cleanup.
@@ -196,7 +224,8 @@ func TestExecVM(t *testing.T) {
 }
 
 func TestOutboundConnectivity(t *testing.T) {
-	_, c := startDaemon(t)
+	requireNetworkCaps(t)
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true))
 
 	vm, err := c.CreateVMWithImage("test-ping", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {
@@ -226,7 +255,8 @@ func TestOutboundConnectivity(t *testing.T) {
 }
 
 func TestOutboundTCP(t *testing.T) {
-	_, c := startDaemon(t)
+	requireNetworkCaps(t)
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true))
 
 	vm, err := c.CreateVMWithImage("test-tcp", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {
@@ -257,7 +287,8 @@ func TestOutboundTCP(t *testing.T) {
 }
 
 func TestDNSResolution(t *testing.T) {
-	_, c := startDaemon(t)
+	requireNetworkCaps(t)
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithDNSEnabled(true))
 
 	vm, err := c.CreateVMWithImage("test-dns", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {
@@ -300,7 +331,8 @@ func TestDNSResolution(t *testing.T) {
 }
 
 func TestHTTPDownload(t *testing.T) {
-	_, c := startDaemon(t)
+	requireNetworkCaps(t)
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithDNSEnabled(true))
 
 	vm, err := c.CreateVMWithImage("test-http", "agent", "docker.io/library/nginx:alpine")
 	if err != nil {

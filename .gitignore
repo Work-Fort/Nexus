@@ -5,6 +5,7 @@
 
 # Built binaries (go build output)
 /build/
+/.e2e-bin-*/
 /nexus
 /nexusctl
 /nexus-netns
