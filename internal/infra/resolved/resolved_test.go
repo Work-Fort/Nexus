@@ -6,7 +6,10 @@ import (
 )
 
 func TestBuildDNSPayload(t *testing.T) {
-	got := buildDNSPayload("127.0.0.100")
+	got, err := buildDNSPayload("127.0.0.100")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got[0].Family != 2 {
 		t.Errorf("family = %d, want 2", got[0].Family)
 	}
@@ -18,6 +21,20 @@ func TestBuildDNSPayload(t *testing.T) {
 		if b != want[i] {
 			t.Errorf("address[%d] = %d, want %d", i, b, want[i])
 		}
+	}
+}
+
+func TestBuildDNSPayloadInvalidIP(t *testing.T) {
+	_, err := buildDNSPayload("not-an-ip")
+	if err == nil {
+		t.Error("expected error for invalid IP")
+	}
+}
+
+func TestBuildDNSPayloadIPv6(t *testing.T) {
+	_, err := buildDNSPayload("::1")
+	if err == nil {
+		t.Error("expected error for IPv6 address")
 	}
 }
 

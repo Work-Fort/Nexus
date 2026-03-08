@@ -121,9 +121,11 @@ func newDaemonCmd() *cobra.Command {
 				}
 
 				// Parse DNS domains — ensure "nexus" is always present.
-				dnsDomains := strings.Split(viper.GetString("dns-domains"), ",")
-				for i := range dnsDomains {
-					dnsDomains[i] = strings.TrimSpace(dnsDomains[i])
+				var dnsDomains []string
+				for _, d := range strings.Split(viper.GetString("dns-domains"), ",") {
+					if d = strings.TrimSpace(d); d != "" {
+						dnsDomains = append(dnsDomains, d)
+					}
 				}
 				hasNexus := false
 				for _, d := range dnsDomains {

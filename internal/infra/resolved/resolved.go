@@ -48,7 +48,10 @@ func Register(ifname, dnsIP string, domains []string) error {
 	obj := conn.Object(resolvedDest, dbus.ObjectPath(resolvedPath))
 	ifindex := int32(iface.Index)
 
-	dns := buildDNSPayload(dnsIP)
+	dns, err := buildDNSPayload(dnsIP)
+	if err != nil {
+		return fmt.Errorf("build DNS payload: %w", err)
+	}
 	if err := obj.Call(resolvedInterface+".SetLinkDNS", 0, ifindex, dns).Err; err != nil {
 		return fmt.Errorf("SetLinkDNS: %w", err)
 	}
@@ -83,9 +86,16 @@ func Revert(ifname string) error {
 }
 
 // buildDNSPayload creates the D-Bus payload for SetLinkDNS.
-func buildDNSPayload(ip string) []dnsEntry {
-	parsed := net.ParseIP(ip).To4()
-	return []dnsEntry{{Family: 2, Address: parsed}} // AF_INET = 2
+func buildDNSPayload(ip string) ([]dnsEntry, error) {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return nil, fmt.Errorf("invalid IP address: %q", ip)
+	}
+	v4 := parsed.To4()
+	if v4 == nil {
+		return nil, fmt.Errorf("IPv6 not supported: %q", ip)
+	}
+	return []dnsEntry{{Family: 2, Address: v4}}, nil // AF_INET = 2
 }
 
 // buildDomainsPayload creates the D-Bus payload for SetLinkDomains.
