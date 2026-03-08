@@ -69,6 +69,19 @@ func (r *Runtime) nsCtx(ctx context.Context) context.Context {
 	return namespaces.WithNamespace(ctx, r.namespace)
 }
 
+// pullImage ensures the image is available locally. It first checks the local
+// content store (fast path for images already pulled by DetectDistro), and
+// falls back to a full Pull if the image is not found locally.
+func (r *Runtime) pullImage(ctx context.Context, image string) (client.Image, error) {
+	if img, err := r.client.GetImage(ctx, image); err == nil {
+		return img, nil
+	}
+	return r.client.Pull(ctx, image,
+		client.WithPullUnpack,
+		client.WithPullSnapshotter(r.snapshotter),
+	)
+}
+
 // Create pulls the given image (if not already present) and creates a
 // container with the specified runtime handler.
 //
@@ -84,10 +97,7 @@ func (r *Runtime) nsCtx(ctx context.Context) context.Context {
 func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, opts ...domain.CreateOpt) error {
 	ctx = r.nsCtx(ctx)
 
-	img, err := r.client.Pull(ctx, image,
-		client.WithPullUnpack,
-		client.WithPullSnapshotter(r.snapshotter),
-	)
+	img, err := r.pullImage(ctx, image)
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", image, err)
 	}
@@ -273,10 +283,7 @@ func (r *Runtime) SetSnapshotQuota(ctx context.Context, snapName string, sizeByt
 func (r *Runtime) DetectDistro(ctx context.Context, image string) (string, error) {
 	ctx = r.nsCtx(ctx)
 
-	img, err := r.client.Pull(ctx, image,
-		client.WithPullUnpack,
-		client.WithPullSnapshotter(r.snapshotter),
-	)
+	img, err := r.pullImage(ctx, image)
 	if err != nil {
 		return "", fmt.Errorf("pull image %s: %w", image, err)
 	}
