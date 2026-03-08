@@ -170,7 +170,7 @@ forwarded traffic by default.
 
 ## 16. Host DNS Resolution for `.nexus`
 
-[Design](plans/2026-03-07-host-dns-design.md)
+[Design](plans/2026-03-07-host-dns-design.md) · [Plan](plans/2026-03-07-host-dns.md)
 
 Resolve `*.nexus` from the host so tools like `curl`, `ping`, and browsers
 can reach VMs by name. Split DNS — only `.nexus` queries route to CoreDNS,
