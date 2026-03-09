@@ -234,6 +234,24 @@ func newDaemonCmd() *cobra.Command {
 			svcOpts = append(svcOpts, app.WithTemplateStore(store))
 			svcOpts = append(svcOpts, app.WithSnapshotStore(store))
 
+			kataKernelVersion := viper.GetString("kata-kernel-version")
+			var healthChecks []app.HealthCheck
+			healthChecks = append(healthChecks, app.NewContainerdCheck(runtime, 15*time.Second))
+			healthChecks = append(healthChecks, app.NewDiskSpaceCheck(
+				[]string{config.GlobalPaths.StateDir},
+				60*time.Second,
+				100*1024*1024,
+				10*1024*1024,
+			))
+			if kataKernelVersion != "" {
+				healthChecks = append(healthChecks, app.NewKataKernelCheck(kataKernelVersion, 30*time.Second))
+			}
+			health := app.NewHealthService(healthChecks...)
+			health.Start(context.Background())
+			defer health.Stop()
+
+			svcOpts = append(svcOpts, app.WithHealth(health))
+
 			svc := app.NewVMService(store, runtime, network, svcOpts...)
 
 			if err := svc.SyncDNS(context.Background()); err != nil {
@@ -248,7 +266,7 @@ func newDaemonCmd() *cobra.Command {
 
 			mux := http.NewServeMux()
 			mux.Handle("/mcp", nexusmcp.NewHandler(svc))
-			mux.Handle("/", httpapi.NewHandler(svc))
+			mux.Handle("/", httpapi.NewHandler(svc, health))
 
 			httpServer := &http.Server{
 				Addr:         addr,
@@ -318,8 +336,9 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("dns-loopback", config.DefaultDNSLoopback, "Loopback IP for host DNS resolution (empty to disable)")
 	cmd.Flags().String("dns-domains", config.DefaultDNSDomains, "Comma-separated DNS domains (nexus is always included)")
 	cmd.Flags().String("node-exporter-path", config.DefaultNodeExporterPath, "Path to node_exporter binary for in-VM metrics (empty to disable)")
+	cmd.Flags().String("kata-kernel-version", "", "Expected Anvil kernel version for Kata health check (empty to skip)")
 
-	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "bridge-name", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "dns-loopback", "dns-domains", "node-exporter-path"} {
+	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "bridge-name", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "dns-loopback", "dns-domains", "node-exporter-path", "kata-kernel-version"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}

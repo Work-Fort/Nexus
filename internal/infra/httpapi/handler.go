@@ -6,6 +6,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -391,6 +392,8 @@ func mapDomainError(err error) error {
 		return huma.NewError(http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrValidation):
 		return huma.NewError(http.StatusBadRequest, err.Error())
+	case errors.Is(err, domain.ErrUnavailable):
+		return huma.NewError(http.StatusServiceUnavailable, err.Error())
 	default:
 		log.Error("internal error", "err", err)
 		return huma.NewError(http.StatusInternalServerError, "internal server error")
@@ -401,7 +404,7 @@ func mapDomainError(err error) error {
 
 // NewHandler returns an http.Handler with all Nexus API routes and OpenAPI docs.
 // OpenAPI spec is served at /openapi, interactive docs at /docs.
-func NewHandler(svc *app.VMService) http.Handler {
+func NewHandler(svc *app.VMService, health *app.HealthService) http.Handler {
 	mux := http.NewServeMux()
 	config := huma.DefaultConfig("Nexus API", "1.0.0")
 	api := humago.New(mux, config)
@@ -418,7 +421,31 @@ func NewHandler(svc *app.VMService) http.Handler {
 	// WebSocket endpoints (not supported by huma).
 	mux.HandleFunc("GET /v1/vms/{id}/console", handleConsole(svc))
 
+	// Health endpoint uses raw HandleFunc — huma doesn't support conditional
+	// status codes (200/218/503) from a single operation.
+	mux.HandleFunc("GET /health", handleHealth(health))
+
 	return mux
+}
+
+func handleHealth(health *app.HealthService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		report := health.Status()
+
+		var statusCode int
+		switch report.Status {
+		case app.StatusHealthy:
+			statusCode = http.StatusOK
+		case app.StatusDegraded:
+			statusCode = 218
+		default:
+			statusCode = http.StatusServiceUnavailable
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		json.NewEncoder(w).Encode(report) //nolint:errcheck
+	}
 }
 
 // --- VM routes ---

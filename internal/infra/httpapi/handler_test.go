@@ -229,7 +229,9 @@ func setupHandler() http.Handler {
 	store := newMockStore()
 	rt := newMockRuntime()
 	svc := app.NewVMService(store, rt, &cni.NoopNetwork{})
-	return httpapi.NewHandler(svc)
+	health := app.NewHealthService()
+	health.Start(context.Background())
+	return httpapi.NewHandler(svc, health)
 }
 
 func doRequest(handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {

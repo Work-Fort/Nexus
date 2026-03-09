@@ -35,6 +35,7 @@ const (
 	DefaultDNSDomains       = "nexus"
 	DefaultNodeExporterPath = "node_exporter" // resolved via PATH; install:local puts it in ~/.local/bin
 	DefaultMetricsPort      = 9100
+	DefaultKataKernelVersion = "6.19.6"
 )
 
 // Paths holds XDG-compliant directory paths.
@@ -115,6 +116,7 @@ func InitViper() {
 	viper.SetDefault("dns-loopback", DefaultDNSLoopback)
 	viper.SetDefault("dns-domains", DefaultDNSDomains)
 	viper.SetDefault("node-exporter-path", DefaultNodeExporterPath)
+	viper.SetDefault("kata-kernel-version", DefaultKataKernelVersion)
 	viper.SetDefault("metrics.listen-port", DefaultMetricsPort)
 	viper.SetDefault("metrics.collectors", []string{
 		"cpu", "meminfo", "diskstats", "filesystem", "loadavg", "netdev",
