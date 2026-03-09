@@ -39,6 +39,12 @@ package() {
     install -Dm755 "$srcdir/nexus-dns" "${pkgdir}/usr/bin/nexus-dns"
     install -Dm644 "$_projroot/dist/nexus.service" "${pkgdir}/usr/lib/systemd/user/nexus.service"
     install -Dm755 "${srcdir}/node_exporter-${_node_exporter_ver}.linux-"*/node_exporter "${pkgdir}/usr/bin/node_exporter"
+
+    # Use local kernel for test build if available.
+    if [ -f "/tmp/vmlinux-6.19.6-x86_64" ]; then
+        install -Dm644 "/tmp/vmlinux-6.19.6-x86_64" "${pkgdir}/usr/share/nexus/vmlinux"
+    fi
+    install -Dm644 "$_projroot/dist/kata-configuration.toml" "${pkgdir}/etc/kata-containers/configuration.toml"
 }
 PKGBUILD_EOF
 
