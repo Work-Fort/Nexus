@@ -223,3 +223,18 @@ stderr, so users see streaming output during execution.
 - Notification-sending `io.Writer` wrappers in the MCP handler
 - `handleStreamingNotification` in mcp-bridge to intercept and display chunks
 - Tool result still returns full buffered output for standard MCP clients
+
+## 19. Health Service
+
+[Design](health-service-design.md)
+
+Global health service that tracks system component status with periodic
+background checks. Provides degraded service — if Kata is misconfigured,
+block Kata/Firecracker VMs but allow runc.
+
+- `HealthCheck` interface with name, interval, and check method
+- Background goroutines per check, cached results behind RWMutex
+- `GET /health` endpoint: 200 healthy, 218 degraded, 503 unhealthy
+- Initial checks: Kata kernel (Anvil 6.19.6), containerd, disk space
+- VM creation gates on runtime health before proceeding
+- AUR package ships Anvil kernel and Kata config override
