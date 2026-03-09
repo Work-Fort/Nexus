@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Clean up leaked E2E containerd namespaces"
+set -euo pipefail
+
+echo "Cleaning E2E namespaces..."
+for ns in $(ctr namespaces list -q | grep ^nexus-e2e- 2>/dev/null); do
+  echo "  Cleaning namespace: $ns"
+  for c in $(ctr -n "$ns" containers list -q 2>/dev/null); do
+    ctr -n "$ns" tasks kill "$c" 2>/dev/null || true
+    ctr -n "$ns" tasks delete "$c" 2>/dev/null || true
+    ctr -n "$ns" containers delete "$c" 2>/dev/null || true
+  done
+  for img in $(ctr -n "$ns" images list -q 2>/dev/null); do
+    ctr -n "$ns" images remove "$img" 2>/dev/null || true
+  done
+  ctr -n "$ns" content prune references 2>/dev/null || true
+  ctr namespaces remove "$ns" 2>/dev/null || true
+done
+
+# Clean up the E2E bridge interface (if it exists).
+if ip link show nexus-e2e &>/dev/null; then
+  echo "  Deleting bridge: nexus-e2e"
+  sudo ip link delete nexus-e2e 2>/dev/null || true
+fi
+
+echo "✓ E2E cleanup done"

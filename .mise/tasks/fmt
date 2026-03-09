@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Format Go code with gofmt"
+set -euo pipefail
+
+echo "Formatting Go code..."
+find . -name "*.go" -not -path "./vendor/*" -exec gofmt -w {} +
+echo "✓ Code formatted"

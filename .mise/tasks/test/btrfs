@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Run btrfs package tests"
+set -euo pipefail
+
+echo "Running btrfs tests..."
+go test -v ./pkg/btrfs/
+echo "✓ Btrfs tests passed"

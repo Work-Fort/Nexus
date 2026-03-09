@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Build all binaries (static release)"
+#MISE depends=["build:deps"]
+set -euo pipefail
+
+GIT_SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+export CGO_ENABLED=0
+
+echo "Building release binaries..."
+go build -ldflags="-s -w -X github.com/Work-Fort/Nexus/cmd.Version=dev-$GIT_SHORT_SHA" -o build/nexus .
+go build -ldflags="-s -w -X main.Version=dev-$GIT_SHORT_SHA" -o build/nexusctl ./cmd/nexusctl/
+go build -ldflags="-s -w" -o build/nexus-netns ./cmd/nexus-netns/
+go build -ldflags="-s -w" -o build/nexus-cni-exec ./cmd/nexus-cni-exec/
+go build -ldflags="-s -w" -o build/nexus-quota ./cmd/nexus-quota/
+go build -ldflags="-s -w" -o build/nexus-btrfs ./cmd/nexus-btrfs/
+go build -ldflags="-s -w" -o build/nexus-dns ./cmd/nexus-dns/
+echo "✓ Release build complete"

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Run all CI checks (lint + unit tests)"
+#MISE depends=["check", "test:unit"]
+set -euo pipefail

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Install all binaries to ~/.local/bin, set capabilities, install systemd unit"
+#MISE depends=["build:release"]
+set -euo pipefail
+
+echo "Installing Nexus binaries to ~/.local/bin/"
+mkdir -p ~/.local/bin
+cp build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota \
+   build/nexus-btrfs build/nexus-dns build/nexusctl build/node_exporter ~/.local/bin/
+
+echo "Setting capabilities (requires sudo)..."
+sudo setcap cap_sys_admin+ep ~/.local/bin/nexus-netns
+sudo setcap cap_net_admin,cap_net_raw,cap_sys_admin+ep ~/.local/bin/nexus-cni-exec
+sudo setcap cap_sys_admin+ep ~/.local/bin/nexus-quota
+sudo setcap cap_sys_admin,cap_fowner+ep ~/.local/bin/nexus-btrfs
+sudo setcap cap_net_bind_service+ep ~/.local/bin/nexus-dns
+
+echo "Installing systemd user service"
+mkdir -p ~/.config/systemd/user
+cp dist/nexus.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+
+echo "✓ Done. Enable with: systemctl --user enable --now nexus"

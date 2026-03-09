@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Export OpenAPI spec from running daemon"
+set -euo pipefail
+
+curl -sf http://127.0.0.1:9600/openapi -o docs/openapi.json
+echo "✓ Exported to docs/openapi.json"

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Remove all Nexus binaries, capabilities, and systemd unit"
+set -euo pipefail
+
+if systemctl --user is-active --quiet nexus 2>/dev/null; then
+    echo "Stopping nexus service"
+    systemctl --user stop nexus
+fi
+if systemctl --user is-enabled --quiet nexus 2>/dev/null; then
+    echo "Disabling nexus service"
+    systemctl --user disable nexus
+fi
+
+echo "Removing systemd unit"
+rm -f ~/.config/systemd/user/nexus.service
+systemctl --user daemon-reload
+
+echo "Removing binaries from ~/.local/bin/"
+rm -f ~/.local/bin/nexus ~/.local/bin/nexusctl ~/.local/bin/nexus-netns \
+      ~/.local/bin/nexus-cni-exec ~/.local/bin/nexus-quota ~/.local/bin/nexus-btrfs \
+      ~/.local/bin/nexus-dns ~/.local/bin/node_exporter
+
+echo "✓ Nexus uninstalled"

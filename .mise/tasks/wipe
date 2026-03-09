@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Remove all Nexus state (database, config, logs)"
+set -euo pipefail
+
+echo "Cleaning Nexus state..."
+
+if command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user is-active --quiet nexus 2>/dev/null; then
+        echo "  Stopping systemd service"
+        systemctl --user stop nexus
+    fi
+fi
+
+if [ -f "$HOME/.local/state/nexus/nexus.db" ]; then
+    echo "  Removing database"
+    rm -f "$HOME/.local/state/nexus/nexus.db"
+    rm -f "$HOME/.local/state/nexus/nexus.db-shm"
+    rm -f "$HOME/.local/state/nexus/nexus.db-wal"
+fi
+
+if [ -f "$HOME/.local/state/nexus/debug.log" ]; then
+    echo "  Removing logs"
+    rm -f "$HOME/.local/state/nexus/debug.log"
+fi
+
+if [ -f "$HOME/.config/nexus/config.yaml" ]; then
+    echo "  Removing config"
+    rm -f "$HOME/.config/nexus/config.yaml"
+fi
+
+if command -v ctr >/dev/null 2>&1; then
+    echo "  Cleaning containerd nexus namespace"
+    for c in $(sudo ctr -n nexus containers list -q 2>/dev/null); do
+        echo "    Removing container: $c"
+        sudo ctr -n nexus tasks kill "$c" 2>/dev/null || true
+        sudo ctr -n nexus tasks delete "$c" 2>/dev/null || true
+        sudo ctr -n nexus containers delete "$c" 2>/dev/null || true
+    done
+fi
+
+echo "✓ Nexus state cleaned"

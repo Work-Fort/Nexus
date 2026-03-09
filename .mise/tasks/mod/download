@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Download Go modules"
+set -euo pipefail
+
+echo "Downloading Go modules..."
+go mod download
+echo "✓ Modules downloaded"

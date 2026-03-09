@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Remove build artifacts"
+set -euo pipefail
+
+echo "Cleaning build artifacts..."
+rm -f build/nexus build/nexus-netns build/nexus-cni-exec build/nexus-quota \
+      build/nexus-btrfs build/nexus-dns build/nexusctl build/node_exporter
+echo "✓ Build artifacts cleaned"

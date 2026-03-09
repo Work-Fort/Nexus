@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Vet and lint"
+set -euo pipefail
+
+echo "Running go vet..."
+go vet ./...
+echo "✓ Vet passed"

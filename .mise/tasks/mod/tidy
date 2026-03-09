@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Tidy Go modules"
+set -euo pipefail
+
+echo "Tidying Go modules..."
+go mod tidy
+echo "✓ Modules tidied"

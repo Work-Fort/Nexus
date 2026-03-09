@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Run nexus daemon"
+#MISE depends=["build"]
+set -euo pipefail
+
+export PATH="$(pwd)/build:$PATH"
+exec build/nexus daemon "$@"

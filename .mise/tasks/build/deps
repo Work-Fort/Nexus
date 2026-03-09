@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Download external dependencies to build/"
+set -euo pipefail
+
+mkdir -p build
+if [ ! -f build/node_exporter ]; then
+    NODE_EXPORTER_VERSION="1.10.2"
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64)  ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+    esac
+    TARBALL="node_exporter-${NODE_EXPORTER_VERSION}.linux-${ARCH}.tar.gz"
+    URL="https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VERSION}/${TARBALL}"
+    echo "Downloading node_exporter v${NODE_EXPORTER_VERSION}..."
+    TMPDIR=$(mktemp -d)
+    curl -sL "$URL" | tar xz -C "$TMPDIR" --strip-components=1
+    cp "$TMPDIR/node_exporter" build/
+    rm -rf "$TMPDIR"
+    echo "✓ Installed node_exporter to build/"
+fi

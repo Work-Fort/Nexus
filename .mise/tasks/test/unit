@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#MISE description="Run unit tests only (skip integration)"
+set -euo pipefail
+
+echo "Running unit tests..."
+go test -short ./...
+echo "✓ Unit tests passed"
