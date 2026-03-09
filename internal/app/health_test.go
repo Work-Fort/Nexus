@@ -112,3 +112,53 @@ func TestHealthServicePeriodicUpdate(t *testing.T) {
 		t.Fatalf("expected degraded after update, got %s", report.Status)
 	}
 }
+
+func TestRuntimeHealthyKataDegraded(t *testing.T) {
+	containerd := newStubCheck("containerd", 50*time.Millisecond, app.StatusHealthy, "ok")
+	kataKernel := newStubCheck("kata-kernel", 50*time.Millisecond, app.StatusDegraded, "kernel missing")
+
+	svc := app.NewHealthService(containerd, kataKernel)
+	svc.Start(context.Background())
+	defer svc.Stop()
+
+	// runc should work even when kata-kernel is degraded.
+	if err := svc.RuntimeHealthy("io.containerd.runc.v2"); err != nil {
+		t.Fatalf("runc should be healthy, got: %v", err)
+	}
+
+	// kata should fail because kata-kernel is degraded.
+	if err := svc.RuntimeHealthy("io.containerd.kata.v2"); err == nil {
+		t.Fatal("kata should be unhealthy when kata-kernel is degraded")
+	}
+}
+
+func TestRuntimeHealthyContainerdUnhealthy(t *testing.T) {
+	containerd := newStubCheck("containerd", 50*time.Millisecond, app.StatusUnhealthy, "connection refused")
+	kataKernel := newStubCheck("kata-kernel", 50*time.Millisecond, app.StatusHealthy, "ok")
+
+	svc := app.NewHealthService(containerd, kataKernel)
+	svc.Start(context.Background())
+	defer svc.Stop()
+
+	// ALL runtimes should fail when containerd is unhealthy.
+	if err := svc.RuntimeHealthy("io.containerd.runc.v2"); err == nil {
+		t.Fatal("runc should fail when containerd is unhealthy")
+	}
+	if err := svc.RuntimeHealthy("io.containerd.kata.v2"); err == nil {
+		t.Fatal("kata should fail when containerd is unhealthy")
+	}
+}
+
+func TestRuntimeHealthyAllHealthy(t *testing.T) {
+	containerd := newStubCheck("containerd", 50*time.Millisecond, app.StatusHealthy, "ok")
+	kataKernel := newStubCheck("kata-kernel", 50*time.Millisecond, app.StatusHealthy, "ok")
+
+	svc := app.NewHealthService(containerd, kataKernel)
+	svc.Start(context.Background())
+	defer svc.Stop()
+
+	// kata should work when everything is healthy.
+	if err := svc.RuntimeHealthy("io.containerd.kata.v2"); err != nil {
+		t.Fatalf("kata should be healthy, got: %v", err)
+	}
+}

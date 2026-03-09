@@ -44,6 +44,7 @@ type VMService struct {
 	templateStore domain.TemplateStore
 	snapshotStore domain.SnapshotStore
 	config        VMServiceConfig
+	health        *HealthService
 }
 
 // NewVMService creates a VMService with the given ports and config.
@@ -107,6 +108,13 @@ func WithSnapshotStore(ss domain.SnapshotStore) func(*VMService) {
 	}
 }
 
+// WithHealth enables runtime health gating for VM creation.
+func WithHealth(h *HealthService) func(*VMService) {
+	return func(s *VMService) {
+		s.health = h
+	}
+}
+
 // MetricsPort returns the configured node_exporter listen port.
 func (s *VMService) MetricsPort() int {
 	if s.config.Metrics.ListenPort == 0 {
@@ -139,6 +147,11 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 	}
 	if params.Runtime == "" {
 		params.Runtime = s.config.DefaultRuntime
+	}
+	if s.health != nil {
+		if err := s.health.RuntimeHealthy(params.Runtime); err != nil {
+			return nil, fmt.Errorf("%w: %w", domain.ErrUnavailable, err)
+		}
 	}
 	if params.RootSize < 0 {
 		return nil, fmt.Errorf("root_size must be positive: %w", domain.ErrValidation)

@@ -4,6 +4,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,6 +112,27 @@ func (h *HealthService) Status() HealthReport {
 		Status: aggregate,
 		Checks: checks,
 	}
+}
+
+// RuntimeHealthy returns nil if the given runtime can be used, or an error
+// describing why it's unavailable.
+func (h *HealthService) RuntimeHealthy(runtime string) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	// If containerd is unhealthy, nothing works.
+	if r, ok := h.results["containerd"]; ok && r.Status == StatusUnhealthy {
+		return fmt.Errorf("containerd unavailable: %s", r.Message)
+	}
+
+	// If Kata kernel is degraded, block Kata runtimes.
+	if strings.Contains(runtime, "kata") {
+		if r, ok := h.results["kata-kernel"]; ok && r.Status != StatusHealthy {
+			return fmt.Errorf("runtime %s unavailable: %s", runtime, r.Message)
+		}
+	}
+
+	return nil
 }
 
 // runCheck periodically evaluates a health check and updates the cached result.

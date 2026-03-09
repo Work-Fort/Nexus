@@ -105,4 +105,5 @@ var (
 	ErrAlreadyExists = errors.New("already exists")
 	ErrInvalidState  = errors.New("invalid state transition")
 	ErrValidation    = errors.New("validation error")
+	ErrUnavailable   = errors.New("service unavailable")
 )
