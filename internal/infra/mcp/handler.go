@@ -21,7 +21,7 @@ import (
 )
 
 // NewHandler creates an http.Handler that serves the Nexus MCP endpoint.
-func NewHandler(svc *app.VMService) http.Handler {
+func NewHandler(svc *app.VMService, health *app.HealthService) http.Handler {
 	s := server.NewMCPServer(
 		"nexus",
 		"1.0.0",
@@ -36,6 +36,7 @@ func NewHandler(svc *app.VMService) http.Handler {
 	registerDeviceTools(s, svc)
 	registerTemplateTools(s, svc)
 	registerSnapshotTools(s, svc)
+	registerHealthTools(s, health)
 
 	return server.NewStreamableHTTPServer(s)
 }
@@ -801,5 +802,16 @@ func registerSnapshotTools(s *server.MCPServer, svc *app.VMService) {
 			return errResult(err)
 		}
 		return jsonResult(vm)
+	})
+}
+
+// registerHealthTools registers the health tool.
+func registerHealthTools(s *server.MCPServer, health *app.HealthService) {
+	s.AddTool(mcp.Tool{
+		Name:        "health",
+		Description: "Get Nexus health status",
+	}, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		report := health.Status()
+		return jsonResult(report)
 	})
 }

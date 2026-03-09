@@ -265,7 +265,7 @@ func newDaemonCmd() *cobra.Command {
 			svc.StartCrashMonitor(monitorCtx)
 
 			mux := http.NewServeMux()
-			mux.Handle("/mcp", nexusmcp.NewHandler(svc))
+			mux.Handle("/mcp", nexusmcp.NewHandler(svc, health))
 			mux.Handle("/", httpapi.NewHandler(svc, health))
 
 			httpServer := &http.Server{
