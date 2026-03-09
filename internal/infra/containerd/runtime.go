@@ -64,6 +64,12 @@ func (r *Runtime) Close() error {
 	return r.client.Close()
 }
 
+// Ping verifies that containerd is reachable by calling Version().
+func (r *Runtime) Ping(ctx context.Context) error {
+	_, err := r.client.Version(r.nsCtx(ctx))
+	return err
+}
+
 // nsCtx returns a context with the containerd namespace set.
 func (r *Runtime) nsCtx(ctx context.Context) context.Context {
 	return namespaces.WithNamespace(ctx, r.namespace)
