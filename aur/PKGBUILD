@@ -75,6 +75,5 @@ package() {
     fi
 
     # Kata config override pointing to the Anvil kernel.
-    cd "${startdir}/.."
-    install -Dm644 dist/kata-configuration.toml "${pkgdir}/etc/kata-containers/configuration.toml"
+    install -Dm644 "${srcdir}/Nexus-${pkgver}/dist/kata-configuration.toml" "${pkgdir}/etc/kata-containers/configuration.toml"
 }
