@@ -3,5 +3,6 @@ src/
 pkg/
 *.pkg.tar.zst
 *.tar.gz
+*.xz
 *.log
 PKGBUILD.bak
