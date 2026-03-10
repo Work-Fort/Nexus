@@ -168,7 +168,7 @@ forwarded traffic by default.
 - Own `NEXUS-FORWARD` chain inserted at top of FORWARD
 - Remove obsolete `nexus setup` command (superseded by helper binaries)
 
-## 16. Host DNS Resolution for `.nexus`
+## 16. Host DNS Resolution for `.nexus` ✅
 
 [Design](plans/2026-03-07-host-dns-design.md) · [Plan](plans/2026-03-07-host-dns.md)
 
@@ -210,7 +210,7 @@ helper that checks `GetImage` (local) before falling back to `Pull`.
 Both `Create` and `DetectDistro` use it — second call is a fast local
 lookup instead of a registry round-trip.
 
-## 18. MCP Streaming Exec
+## 18. MCP Streaming Exec ✅
 
 [Design](mcp-streaming-exec-design.md) · [Plan](plans/2026-03-08-mcp-streaming-exec.md)
 
@@ -224,7 +224,7 @@ stderr, so users see streaming output during execution.
 - `handleStreamingNotification` in mcp-bridge to intercept and display chunks
 - Tool result still returns full buffered output for standard MCP clients
 
-## 19. Health Service
+## 19. Health Service ✅
 
 [Design](health-service-design.md)
 
