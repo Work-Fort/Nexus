@@ -269,11 +269,14 @@ func newDaemonCmd() *cobra.Command {
 			mux.Handle("/", httpapi.NewHandler(svc, health))
 
 			httpServer := &http.Server{
-				Addr:         addr,
-				Handler:      mux,
-				ReadTimeout:  10 * time.Second,
-				WriteTimeout: 30 * time.Second,
-				IdleTimeout:  60 * time.Second,
+				Addr:        addr,
+				Handler:     mux,
+				ReadTimeout: 10 * time.Second,
+				IdleTimeout: 60 * time.Second,
+				// No WriteTimeout — handlers like VM creation pull images
+				// that can take arbitrarily long depending on size and
+				// network speed. A fixed timeout silently kills the
+				// connection mid-operation.
 			}
 
 			sigCh := make(chan os.Signal, 1)

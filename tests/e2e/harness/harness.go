@@ -546,6 +546,20 @@ func (c *Client) CreateVMWithImage(name, tag, image string) (*VM, error) {
 	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
 }
 
+func (c *Client) CreateVMWithInit(name, image string) (*VM, error) {
+	body := fmt.Sprintf(`{"name":%q,"image":%q,"init":true}`, name, image)
+	resp, err := c.post("/v1/vms", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
+}
+
 func (c *Client) CreateVMWithRestartPolicy(name, tag, policy, strategy string) (*VM, error) {
 	tagsJSON, _ := json.Marshal([]string{tag})
 	body := fmt.Sprintf(`{"name":%q,"tags":%s,"restart_policy":%q,"restart_strategy":%q}`,

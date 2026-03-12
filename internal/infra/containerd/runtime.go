@@ -4,6 +4,7 @@
 package containerd
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
@@ -18,15 +19,19 @@ import (
 	apievents "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/containerd/containerd/v2/core/content"
+	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/images/archive"
 	"github.com/containerd/containerd/v2/core/leases"
 	"github.com/containerd/containerd/v2/pkg/cio"
+	"github.com/containerd/containerd/v2/pkg/archive/compression"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/containerd/typeurl/v2"
 	"github.com/Work-Fort/Nexus/pkg/nxid"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
@@ -286,9 +291,10 @@ func (r *Runtime) SetSnapshotQuota(ctx context.Context, snapName string, sizeByt
 	return r.setSnapshotQuota(r.nsCtx(ctx), snapName, sizeBytes)
 }
 
-// DetectDistro reads /etc/os-release from the image filesystem and returns
-// the distro ID. It pulls the image if needed, creates a temporary snapshot
-// to inspect the filesystem, then cleans up.
+// DetectDistro reads /etc/os-release from the image's layer tarballs and
+// returns the distro ID. It pulls the image if needed, then reads layer
+// content directly from containerd's content store via gRPC — no mount
+// syscall or filesystem permissions required.
 func (r *Runtime) DetectDistro(ctx context.Context, image string) (string, error) {
 	ctx = r.nsCtx(ctx)
 
@@ -297,57 +303,79 @@ func (r *Runtime) DetectDistro(ctx context.Context, image string) (string, error
 		return "", fmt.Errorf("pull image %s: %w", image, err)
 	}
 
-	// Create a temporary view (read-only snapshot) of the image.
-	snapName := "distro-detect-" + nxid.New()
 	diffIDs, err := img.RootFS(ctx)
 	if err != nil {
 		return "", fmt.Errorf("rootfs: %w", err)
 	}
-	chainID := diffIDs[len(diffIDs)-1]
-	parent := chainID.String()
 
-	snapshotter := r.client.SnapshotService(r.snapshotter)
-	mounts, err := snapshotter.View(ctx, snapName, parent)
+	store := img.ContentStore()
+	manifest, err := images.Manifest(ctx, store, img.Target(), platforms.Default())
 	if err != nil {
-		return "", fmt.Errorf("snapshot view: %w", err)
+		return "", fmt.Errorf("manifest: %w", err)
 	}
-	defer snapshotter.Remove(ctx, snapName) //nolint:errcheck
 
-	// Mount the snapshot to a temp dir.
-	tmpDir, err := os.MkdirTemp("", "nexus-distro-*")
-	if err != nil {
-		return "", fmt.Errorf("tmpdir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	for _, m := range mounts {
-		if err := syscall.Mount(m.Source, tmpDir, m.Type, 0, strings.Join(m.Options, ",")); err != nil {
-			return "", fmt.Errorf("mount: %w", err)
+	// Search layers bottom-up (base layer first) for /etc/os-release.
+	// The OS release file is almost always in the base image layer,
+	// so searching from layer 0 avoids scanning large derived layers.
+	for i := 0; i < len(manifest.Layers); i++ {
+		data, err := readFileFromLayer(ctx, store, manifest.Layers[i], "etc/os-release")
+		if err != nil {
+			continue
 		}
-		defer syscall.Unmount(tmpDir, 0) //nolint:errcheck
-		break // only need first mount
-	}
-
-	// Try /etc/os-release first.
-	data, err := os.ReadFile(tmpDir + "/etc/os-release")
-	if err == nil {
-		if id := parseOSReleaseID(string(data)); id != "" {
-			return id, nil
+		if distro := parseOSReleaseID(string(data)); distro != "" {
+			return distro, nil
 		}
 	}
 
-	// Fallback: check for known package managers.
-	if _, err := os.Stat(tmpDir + "/sbin/apk"); err == nil {
-		return "alpine", nil
+	// Fallback: check for known package manager paths in layers.
+	fallbacks := []struct {
+		path   string
+		distro string
+	}{
+		{"sbin/apk", "alpine"},
+		{"usr/bin/apt", "ubuntu"},
+		{"usr/bin/pacman", "arch"},
 	}
-	if _, err := os.Stat(tmpDir + "/usr/bin/apt"); err == nil {
-		return "ubuntu", nil
-	}
-	if _, err := os.Stat(tmpDir + "/usr/bin/pacman"); err == nil {
-		return "arch", nil
+	for _, fb := range fallbacks {
+		for i := 0; i < len(manifest.Layers); i++ {
+			if _, err := readFileFromLayer(ctx, store, manifest.Layers[i], fb.path); err == nil {
+				return fb.distro, nil
+			}
+		}
 	}
 
+	_ = diffIDs // used by identity.ChainID in previous version; layers accessed via manifest now
 	return "", fmt.Errorf("unable to detect distro from image %s", image)
+}
+
+// readFileFromLayer reads a single file from a content-store layer blob.
+// The layer is a (possibly compressed) tar archive.
+func readFileFromLayer(ctx context.Context, store content.Store, desc ocispec.Descriptor, path string) ([]byte, error) {
+	ra, err := store.ReaderAt(ctx, desc)
+	if err != nil {
+		return nil, err
+	}
+	defer ra.Close()
+
+	r, err := compression.DecompressStream(content.NewReader(ra))
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			return nil, err
+		}
+		// Tar paths may have leading "./" or "/" — normalize.
+		name := strings.TrimPrefix(hdr.Name, "./")
+		name = strings.TrimPrefix(name, "/")
+		if name == path {
+			return io.ReadAll(tr)
+		}
+	}
 }
 
 // parseOSReleaseID extracts the ID= field from /etc/os-release content.

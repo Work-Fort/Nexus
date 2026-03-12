@@ -168,6 +168,24 @@ func TestCreateVM(t *testing.T) {
 	}
 }
 
+func TestCreateVMWithInit(t *testing.T) {
+	_, c := startDaemon(t)
+
+	// Use a multi-layer image to exercise chain ID computation
+	// in DetectDistro (single-layer images mask the bug since
+	// diffID == chainID for the first layer).
+	vm, err := c.CreateVMWithInit("test-init", "docker.io/library/node:22-alpine")
+	if err != nil {
+		t.Fatalf("create VM with init: %v", err)
+	}
+	if vm.ID == "" {
+		t.Fatal("expected non-empty VM ID")
+	}
+	if vm.State != "created" {
+		t.Errorf("state = %q, want %q", vm.State, "created")
+	}
+}
+
 func TestStartStopVM(t *testing.T) {
 	_, c := startDaemon(t)
 
