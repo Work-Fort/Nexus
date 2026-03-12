@@ -183,13 +183,33 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 	}
 
 	if createCfg.InitScriptPath != "" {
-		specOpts = append(specOpts, oci.WithMounts([]specs.Mount{{
-			Destination: "/nexus-init.sh",
-			Type:        "bind",
-			Source:      createCfg.InitScriptPath,
-			Options:     []string{"rbind", "ro"},
-		}}))
+		specOpts = append(specOpts, oci.WithMounts([]specs.Mount{
+			{
+				Destination: "/nexus-init.sh",
+				Type:        "bind",
+				Source:      createCfg.InitScriptPath,
+				Options:     []string{"rbind", "ro"},
+			},
+			{
+				// systemd requires a writable cgroup2 hierarchy.
+				// The default spec does not include a cgroup mount.
+				Destination: "/sys/fs/cgroup",
+				Type:        "cgroup2",
+				Source:      "cgroup2",
+				Options:     []string{"rw", "nosuid", "nodev", "noexec"},
+			},
+		}))
 		specOpts = append(specOpts, oci.WithProcessArgs("/bin/sh", "/nexus-init.sh"))
+		// Init systems need a writable /sys and cgroup filesystem,
+		// CAP_SYS_ADMIN (for PrivateTmp, ProtectHome, etc.) and
+		// CAP_MKNOD (for PrivateDevices), and shared mount propagation.
+		// See https://systemd.io/CONTAINER_INTERFACE/
+		specOpts = append(specOpts,
+			oci.WithWriteableSysfs,
+			oci.WithWriteableCgroupfs,
+			oci.WithAddedCapabilities([]string{"CAP_SYS_ADMIN", "CAP_MKNOD"}),
+			withSharedPropagation,
+		)
 	}
 
 	_, err = r.client.NewContainer(ctx, id,
@@ -214,6 +234,17 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 		}
 	}
 
+	return nil
+}
+
+// withSharedPropagation sets rootfs mount propagation to "shared" so that
+// init systems like systemd can manage mounts correctly.
+// See https://systemd.io/CONTAINER_INTERFACE/
+func withSharedPropagation(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
+	if s.Linux == nil {
+		s.Linux = &specs.Linux{}
+	}
+	s.Linux.RootfsPropagation = "shared"
 	return nil
 }
 

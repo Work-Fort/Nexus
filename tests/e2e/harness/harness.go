@@ -396,7 +396,7 @@ func cleanupNamespace(ns string) {
 	}
 	ids := strings.Fields(strings.TrimSpace(string(out)))
 	for _, id := range ids {
-		exec.Command("ctr", "-n", ns, "tasks", "kill", id).Run()
+		exec.Command("ctr", "-n", ns, "tasks", "kill", "--signal", "KILL", id).Run()
 		exec.Command("ctr", "-n", ns, "tasks", "delete", id).Run()
 		exec.Command("ctr", "-n", ns, "snapshots", "rm", id+"-snap").Run()
 		exec.Command("ctr", "-n", ns, "containers", "delete", id).Run()

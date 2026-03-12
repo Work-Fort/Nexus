@@ -34,6 +34,7 @@ exec /sbin/init`,
 if [ ! -d /run/systemd/system ]; then
     apt-get update -qq && apt-get install -y -qq systemd-sysv dbus >/dev/null 2>&1
 fi
+export container=docker
 exec /lib/systemd/systemd`,
 	},
 	{
@@ -43,6 +44,7 @@ exec /lib/systemd/systemd`,
 if [ ! -d /run/systemd/system ]; then
     pacman -Sy --noconfirm systemd >/dev/null 2>&1
 fi
+export container=docker
 exec /lib/systemd/systemd`,
 	},
 }
