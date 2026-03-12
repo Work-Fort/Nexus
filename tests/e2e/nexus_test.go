@@ -186,6 +186,76 @@ func TestCreateVMWithInit(t *testing.T) {
 	}
 }
 
+func TestInitOpenRC(t *testing.T) {
+	requireNetworkCaps(t)
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithDNSEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithDNSLoopback(e2eLoopback), harness.WithBridgeName(e2eBridgeName))
+
+	vm, err := c.CreateVMWithInit("test-openrc", "docker.io/library/alpine:latest")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// The init script installs OpenRC (apk add) then exec's /sbin/init.
+	// Wait for rc-status to succeed, which means OpenRC booted.
+	var result *harness.ExecResult
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"rc-status"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if err != nil {
+		t.Fatalf("exec rc-status: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("rc-status exit code = %d, want 0 (stderr: %s)", result.ExitCode, result.Stderr)
+	}
+	t.Logf("rc-status output:\n%s", result.Stdout)
+}
+
+func TestInitSystemD(t *testing.T) {
+	requireNetworkCaps(t)
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithDNSEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithDNSLoopback(e2eLoopback), harness.WithBridgeName(e2eBridgeName))
+
+	vm, err := c.CreateVMWithInit("test-systemd", "docker.io/library/ubuntu:latest")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// The init script installs systemd (apt-get install systemd-sysv dbus)
+	// then exec's /lib/systemd/systemd. The apt-get can take 2-3 minutes
+	// on a cold cache. Wait for systemctl is-system-running to report
+	// "running" or "degraded" (degraded means some non-critical units failed).
+	var result *harness.ExecResult
+	var status string
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"systemctl", "is-system-running"})
+		if err == nil {
+			status = strings.TrimSpace(result.Stdout)
+			if status == "running" || status == "degraded" {
+				break
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if err != nil {
+		t.Fatalf("exec systemctl: %v", err)
+	}
+	if status != "running" && status != "degraded" {
+		t.Fatalf("systemctl is-system-running = %q, want running or degraded", status)
+	}
+	t.Logf("systemd status: %s", status)
+}
+
 func TestStartStopVM(t *testing.T) {
 	_, c := startDaemon(t)
 
