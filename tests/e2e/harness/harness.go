@@ -4,6 +4,7 @@ package harness
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -114,11 +115,11 @@ func WithBridgeName(name string) DaemonOption {
 }
 
 type Daemon struct {
-	cmd       *exec.Cmd
-	addr      string
-	xdgDir    string
-	namespace string
-	stderr    *bytes.Buffer
+	cmd        *exec.Cmd
+	addr       string
+	xdgDir     string
+	namespace  string
+	stderrFile *os.File // temp file for stderr capture (data race detection)
 }
 
 func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, error) {
@@ -189,7 +190,16 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 		args = append(args, "--bridge-name", cfg.bridgeName)
 	}
 
-	var stderrBuf bytes.Buffer
+	// Write stderr to a temp file so we can check for data races after
+	// the daemon exits. Using an *os.File (not an io.Writer) avoids
+	// exec.Cmd creating a pipe+goroutine — child processes (containerd
+	// shims) inheriting a pipe's write end would prevent cmd.Wait() from
+	// returning even after the daemon is killed.
+	stderrFile, err := os.CreateTemp("", "nexus-e2e-stderr-*")
+	if err != nil {
+		os.RemoveAll(xdgDir)
+		return nil, fmt.Errorf("create stderr temp file: %w", err)
+	}
 
 	cmd := exec.Command(binary, args...)
 	cmd.Env = append(os.Environ(),
@@ -198,9 +208,11 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 		"PATH="+binDir+":"+os.Getenv("PATH"),
 	)
 	cmd.Stdout = os.Stderr
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+	cmd.Stderr = stderrFile
 
 	if err := cmd.Start(); err != nil {
+		stderrFile.Close()
+		os.Remove(stderrFile.Name())
 		os.RemoveAll(xdgDir)
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
@@ -211,11 +223,11 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 		if err == nil {
 			conn.Close()
 			return &Daemon{
-				cmd:       cmd,
-				addr:      addr,
-				xdgDir:    xdgDir,
-				namespace: namespace,
-				stderr:    &stderrBuf,
+				cmd:        cmd,
+				addr:       addr,
+				xdgDir:     xdgDir,
+				namespace:  namespace,
+				stderrFile: stderrFile,
 			}, nil
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -223,6 +235,8 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 
 	cmd.Process.Kill()
 	cmd.Wait()
+	stderrFile.Close()
+	os.Remove(stderrFile.Name())
 	os.RemoveAll(xdgDir)
 	return nil, fmt.Errorf("daemon did not become ready on %s within 10s", addr)
 }
@@ -280,7 +294,15 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 		args = append(args, "--bridge-name", cfg.bridgeName)
 	}
 
-	var stderrBuf bytes.Buffer
+	// Write stderr to a temp file so we can check for data races after
+	// the daemon exits. Using an *os.File (not an io.Writer) avoids
+	// exec.Cmd creating a pipe+goroutine — child processes (containerd
+	// shims) inheriting a pipe's write end would prevent cmd.Wait() from
+	// returning even after the daemon is killed.
+	stderrFile, err := os.CreateTemp("", "nexus-e2e-stderr-*")
+	if err != nil {
+		return nil, fmt.Errorf("create stderr temp file: %w", err)
+	}
 
 	cmd := exec.Command(binary, args...)
 	cmd.Env = append(os.Environ(),
@@ -289,9 +311,11 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 		"PATH="+binDir+":"+os.Getenv("PATH"),
 	)
 	cmd.Stdout = os.Stderr
-	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+	cmd.Stderr = stderrFile
 
 	if err := cmd.Start(); err != nil {
+		stderrFile.Close()
+		os.Remove(stderrFile.Name())
 		return nil, fmt.Errorf("start daemon: %w", err)
 	}
 
@@ -301,11 +325,11 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 		if err == nil {
 			conn.Close()
 			return &Daemon{
-				cmd:       cmd,
-				addr:      addr,
-				xdgDir:    xdgDir,
-				namespace: namespace,
-				stderr:    &stderrBuf,
+				cmd:        cmd,
+				addr:       addr,
+				xdgDir:     xdgDir,
+				namespace:  namespace,
+				stderrFile: stderrFile,
 			}, nil
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -313,6 +337,8 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 
 	cmd.Process.Kill()
 	cmd.Wait()
+	stderrFile.Close()
+	os.Remove(stderrFile.Name())
 	return nil, fmt.Errorf("daemon did not become ready on %s within 10s", addr)
 }
 
@@ -325,8 +351,13 @@ func (d *Daemon) StopFatal(t testing.TB) {
 	if err := d.Stop(); err != nil {
 		t.Logf("daemon stop: %v", err)
 	}
-	if d.stderr != nil && strings.Contains(d.stderr.String(), "DATA RACE") {
-		t.Fatal("data race detected in daemon (see stderr output above)")
+	if d.stderrFile != nil {
+		data, _ := os.ReadFile(d.stderrFile.Name())
+		d.stderrFile.Close()
+		os.Remove(d.stderrFile.Name())
+		if strings.Contains(string(data), "DATA RACE") {
+			t.Fatal("data race detected in daemon (see stderr output above)")
+		}
 	}
 }
 
@@ -390,26 +421,40 @@ func (d *Daemon) cleanup() {
 func cleanupNamespace(ns string) {
 	// Kill all tasks, delete all containers, remove images/snapshots, then namespace.
 	// Errors are ignored — best-effort cleanup.
-	out, err := exec.Command("ctr", "-n", ns, "containers", "list", "-q").Output()
+	// Each command gets a timeout so a stuck shim can't hang the test process.
+	const timeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ctr", "-n", ns, "containers", "list", "-q").Output()
 	if err != nil {
 		return
 	}
 	ids := strings.Fields(strings.TrimSpace(string(out)))
 	for _, id := range ids {
-		exec.Command("ctr", "-n", ns, "tasks", "kill", "--signal", "KILL", id).Run()
-		exec.Command("ctr", "-n", ns, "tasks", "delete", id).Run()
-		exec.Command("ctr", "-n", ns, "snapshots", "rm", id+"-snap").Run()
-		exec.Command("ctr", "-n", ns, "containers", "delete", id).Run()
+		ctrRun(timeout, "ctr", "-n", ns, "tasks", "kill", "--signal", "KILL", id)
+		ctrRun(timeout, "ctr", "-n", ns, "tasks", "delete", id)
+		ctrRun(timeout, "ctr", "-n", ns, "snapshots", "rm", id+"-snap")
+		ctrRun(timeout, "ctr", "-n", ns, "containers", "delete", id)
 	}
 	// Remove images pulled into this namespace.
-	imgOut, _ := exec.Command("ctr", "-n", ns, "images", "list", "-q").Output()
+	imgCtx, imgCancel := context.WithTimeout(context.Background(), timeout)
+	defer imgCancel()
+	imgOut, _ := exec.CommandContext(imgCtx, "ctr", "-n", ns, "images", "list", "-q").Output()
 	for _, img := range strings.Fields(strings.TrimSpace(string(imgOut))) {
-		exec.Command("ctr", "-n", ns, "images", "remove", img).Run()
+		ctrRun(timeout, "ctr", "-n", ns, "images", "remove", img)
 	}
 	// Note: we intentionally do NOT run "content prune references" here because
 	// it operates globally across namespaces and can remove content that a
 	// concurrent or subsequent test still needs for image export.
-	exec.Command("ctr", "namespaces", "remove", ns).Run()
+	ctrRun(timeout, "ctr", "namespaces", "remove", ns)
+}
+
+// ctrRun runs a command with a timeout, ignoring errors.
+func ctrRun(timeout time.Duration, name string, args ...string) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	exec.CommandContext(ctx, name, args...).Run()
 }
 
 // --- Helpers ---
