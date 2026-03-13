@@ -142,7 +142,8 @@ func New(cfg Config) (*Network, error) {
         "type": "host-local",
         "subnet": %q,
         "dataDir": %q,
-        "routes": [{"dst": "0.0.0.0/0"}]
+        "routes": [{"dst": "0.0.0.0/0"}],
+        "capabilities": {"ips": true}
       }
     }
   ]
@@ -225,6 +226,11 @@ func (n *Network) Close() error {
 // Setup creates a network namespace for the given VM ID, configures it
 // with CNI, and returns the assigned IP/gateway.
 func (n *Network) Setup(ctx context.Context, id string, opts ...domain.SetupOpt) (*domain.NetworkInfo, error) {
+	var cfg domain.SetupConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	nsPath := filepath.Join(n.netnsDir, id)
 
 	out, err := exec.CommandContext(ctx, n.helperBin, "create", nsPath).CombinedOutput()
@@ -236,6 +242,11 @@ func (n *Network) Setup(ctx context.Context, id string, opts ...domain.SetupOpt)
 		ContainerID: id,
 		NetNS:       nsPath,
 		IfName:      "eth0",
+	}
+	if cfg.PreferredIP != "" {
+		rt.CapabilityArgs = map[string]interface{}{
+			"ips": []string{cfg.PreferredIP},
+		}
 	}
 
 	result, err := n.cni.AddNetworkList(ctx, n.confList, rt)
