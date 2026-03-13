@@ -83,53 +83,67 @@ func (s *VMService) RestoreVMs(ctx context.Context) {
 // migrateNetworks tears down and rebuilds network namespaces for all VMs
 // when the CNI config has changed.
 func (s *VMService) migrateNetworks(ctx context.Context, vms []*domain.VM) {
-	var migrated, failed int
+	// Phase 1: Tear down all existing network namespaces.
+	type migrationVM struct {
+		vm     *domain.VM
+		prevIP string
+	}
+	var toMigrate []migrationVM
 	for _, vm := range vms {
 		if vm.NetNSPath == "" {
 			continue
 		}
+		toMigrate = append(toMigrate, migrationVM{vm: vm, prevIP: vm.IP})
 
-		prevIP := vm.IP
-
-		// Teardown old namespace (best-effort).
 		if err := s.network.Teardown(ctx, vm.ID); err != nil {
 			log.Warn("migrate: teardown", "id", vm.ID, "name", vm.Name, "err", err)
 		}
+	}
 
-		// Setup new namespace with current config.
-		var opts []domain.SetupOpt
-		if prevIP != "" {
-			opts = append(opts, domain.WithPreferredIP(prevIP))
+	// Phase 2: Reset the bridge and IPAM state so the new config can
+	// create a fresh bridge with the correct subnet/gateway address.
+	if len(toMigrate) > 0 {
+		if err := s.network.ResetNetwork(ctx); err != nil {
+			log.Warn("migrate: reset network", "err", err)
 		}
-		info, err := s.network.Setup(ctx, vm.ID, opts...)
+	}
+
+	// Phase 3: Set up new namespaces with the current config.
+	var migrated, failed int
+	for _, m := range toMigrate {
+		var opts []domain.SetupOpt
+		if m.prevIP != "" {
+			opts = append(opts, domain.WithPreferredIP(m.prevIP))
+		}
+		info, err := s.network.Setup(ctx, m.vm.ID, opts...)
 		if err != nil {
-			log.Error("migrate: setup", "id", vm.ID, "name", vm.Name, "err", err)
+			log.Error("migrate: setup", "id", m.vm.ID, "name", m.vm.Name, "err", err)
 			// Clear network fields so state is honest.
-			s.store.UpdateNetwork(ctx, vm.ID, "", "", "") //nolint:errcheck
+			s.store.UpdateNetwork(ctx, m.vm.ID, "", "", "") //nolint:errcheck
 			failed++
 			continue
 		}
 
 		// Update DB with new network info.
-		if err := s.store.UpdateNetwork(ctx, vm.ID, info.IP, info.Gateway, info.NetNSPath); err != nil {
-			log.Error("migrate: update network", "id", vm.ID, "err", err)
+		if err := s.store.UpdateNetwork(ctx, m.vm.ID, info.IP, info.Gateway, info.NetNSPath); err != nil {
+			log.Error("migrate: update network", "id", m.vm.ID, "err", err)
 			failed++
 			continue
 		}
 
 		// Update in-memory VM for subsequent RestoreVMs logic.
-		vm.IP = info.IP
-		vm.Gateway = info.Gateway
-		vm.NetNSPath = info.NetNSPath
+		m.vm.IP = info.IP
+		m.vm.Gateway = info.Gateway
+		m.vm.NetNSPath = info.NetNSPath
 
 		// Update DNS record.
-		s.dns.AddRecord(ctx, vm.Name, info.IP) //nolint:errcheck
+		s.dns.AddRecord(ctx, m.vm.Name, info.IP) //nolint:errcheck
 
 		migrated++
-		if info.IP != prevIP {
-			log.Info("vm network migrated", "id", vm.ID, "name", vm.Name, "old_ip", prevIP, "new_ip", info.IP)
+		if info.IP != m.prevIP {
+			log.Info("vm network migrated", "id", m.vm.ID, "name", m.vm.Name, "old_ip", m.prevIP, "new_ip", info.IP)
 		} else {
-			log.Info("vm network migrated", "id", vm.ID, "name", vm.Name, "ip", info.IP)
+			log.Info("vm network migrated", "id", m.vm.ID, "name", m.vm.Name, "ip", info.IP)
 		}
 	}
 
