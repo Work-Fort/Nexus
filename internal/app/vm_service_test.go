@@ -157,6 +157,17 @@ func (m *mockStore) UpdateShell(_ context.Context, id, shell string) error {
 	return nil
 }
 
+func (m *mockStore) UpdateNetwork(_ context.Context, id, ip, gateway, netnsPath string) error {
+	vm, ok := m.vms[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	vm.IP = ip
+	vm.Gateway = gateway
+	vm.NetNSPath = netnsPath
+	return nil
+}
+
 func (m *mockStore) Delete(_ context.Context, id string) error {
 	delete(m.vms, id)
 	return nil

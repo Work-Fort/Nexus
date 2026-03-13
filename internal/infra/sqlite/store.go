@@ -312,6 +312,15 @@ func (s *Store) UpdateShell(ctx context.Context, id, shell string) error {
 	})
 }
 
+func (s *Store) UpdateNetwork(ctx context.Context, id, ip, gateway, netnsPath string) error {
+	return s.q.UpdateVMNetwork(ctx, UpdateVMNetworkParams{
+		Ip:        ip,
+		Gateway:   gateway,
+		NetnsPath: netnsPath,
+		ID:        id,
+	})
+}
+
 func (s *Store) SetTags(ctx context.Context, vmID string, tags []string) error {
 	if err := s.q.DeleteTagsByVM(ctx, vmID); err != nil {
 		return fmt.Errorf("delete tags: %w", err)

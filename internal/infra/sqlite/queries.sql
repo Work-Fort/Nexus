@@ -180,3 +180,6 @@ SELECT id, vm_id, name, created_at FROM snapshots WHERE vm_id = ? ORDER BY creat
 
 -- name: DeleteSnapshotByID :exec
 DELETE FROM snapshots WHERE id = ?;
+
+-- name: UpdateVMNetwork :exec
+UPDATE vms SET ip = ?, gateway = ?, netns_path = ? WHERE id = ?;

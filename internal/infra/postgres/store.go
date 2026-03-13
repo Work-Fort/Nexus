@@ -217,6 +217,13 @@ func (s *Store) UpdateShell(ctx context.Context, id, shell string) error {
 	return err
 }
 
+func (s *Store) UpdateNetwork(ctx context.Context, id, ip, gateway, netnsPath string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE vms SET ip = $1, gateway = $2, netns_path = $3 WHERE id = $4`,
+		ip, gateway, netnsPath, id)
+	return err
+}
+
 func (s *Store) SetTags(ctx context.Context, vmID string, tags []string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM vm_tags WHERE vm_id = $1`, vmID); err != nil {
 		return fmt.Errorf("delete tags: %w", err)

@@ -1015,6 +1015,27 @@ func (q *Queries) UpdateVMInit(ctx context.Context, arg UpdateVMInitParams) erro
 	return err
 }
 
+const updateVMNetwork = `-- name: UpdateVMNetwork :exec
+UPDATE vms SET ip = ?, gateway = ?, netns_path = ? WHERE id = ?
+`
+
+type UpdateVMNetworkParams struct {
+	Ip        string `json:"ip"`
+	Gateway   string `json:"gateway"`
+	NetnsPath string `json:"netns_path"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateVMNetwork(ctx context.Context, arg UpdateVMNetworkParams) error {
+	_, err := q.db.ExecContext(ctx, updateVMNetwork,
+		arg.Ip,
+		arg.Gateway,
+		arg.NetnsPath,
+		arg.ID,
+	)
+	return err
+}
+
 const updateVMRestartPolicy = `-- name: UpdateVMRestartPolicy :exec
 UPDATE vms SET restart_policy = ?, restart_strategy = ? WHERE id = ?
 `
