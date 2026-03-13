@@ -14,19 +14,31 @@ import (
 // --- mock network for restart tests ---
 
 type mockNetworkForRestart struct {
-	mu              sync.Mutex
-	configChanged   bool
-	teardownCalls   []string // VM IDs
-	setupCalls      []string // VM IDs
-	saveHashCalled  bool
-	setupResult     *domain.NetworkInfo
-	setupErr        error
+	mu               sync.Mutex
+	configChanged    bool
+	teardownCalls    []string // VM IDs
+	setupCalls       []string // VM IDs
+	setupPreferredIP map[string]string // VM ID → requested preferred IP
+	saveHashCalled   bool
+	resetCalled      bool
+	setupResult      *domain.NetworkInfo
+	setupErr         error
 }
 
-func (m *mockNetworkForRestart) Setup(_ context.Context, id string, _ ...domain.SetupOpt) (*domain.NetworkInfo, error) {
+func (m *mockNetworkForRestart) Setup(_ context.Context, id string, opts ...domain.SetupOpt) (*domain.NetworkInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.setupCalls = append(m.setupCalls, id)
+	var cfg domain.SetupConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if cfg.PreferredIP != "" {
+		if m.setupPreferredIP == nil {
+			m.setupPreferredIP = make(map[string]string)
+		}
+		m.setupPreferredIP[id] = cfg.PreferredIP
+	}
 	if m.setupErr != nil {
 		return nil, m.setupErr
 	}
@@ -41,6 +53,9 @@ func (m *mockNetworkForRestart) Teardown(_ context.Context, id string) error {
 }
 
 func (m *mockNetworkForRestart) ResetNetwork(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetCalled = true
 	return nil
 }
 
@@ -185,8 +200,19 @@ func TestRestoreVMsWithNetworkMigration(t *testing.T) {
 	if len(net.setupCalls) != 2 {
 		t.Fatalf("expected 2 setup calls, got %d", len(net.setupCalls))
 	}
+	if !net.resetCalled {
+		t.Fatal("expected ResetNetwork to be called")
+	}
 	if !net.saveHashCalled {
 		t.Fatal("expected SaveConfigHash to be called")
+	}
+
+	// Verify WithPreferredIP was passed with the previous IP.
+	if ip, ok := net.setupPreferredIP["vm-001"]; !ok || ip != "172.16.0.10" {
+		t.Errorf("vm-001 preferred IP: got %q, want %q", ip, "172.16.0.10")
+	}
+	if ip, ok := net.setupPreferredIP["vm-002"]; !ok || ip != "172.16.0.11" {
+		t.Errorf("vm-002 preferred IP: got %q, want %q", ip, "172.16.0.11")
 	}
 
 	// Verify store was updated with new network info.

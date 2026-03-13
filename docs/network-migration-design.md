@@ -26,17 +26,20 @@ Migration runs inside `RestoreVMs()`, before any VMs are started:
 
 1. Call `network.ConfigChanged()` to compare hashes.
 2. If unchanged, skip to normal RestoreVMs logic.
-3. If changed:
-   a. For each VM in the store with a `NetNSPath`:
-      - Read the VM's current IP from the DB.
-      - `network.Teardown(ctx, vm.ID)` — CNI Del + delete namespace file.
-      - `network.Setup(ctx, vm.ID, WithPreferredIP(prevIP))` — create fresh
-        namespace with current config, requesting the previous IP.
-      - Update the VM record with new `NetNSPath`, `IP`, `Gateway` via
-        `store.UpdateNetwork()`.
-      - Update DNS record if DNS is enabled.
-   b. Write the new hash to the fingerprint file.
-   c. Log summary: "network migration complete, migrated=N, failed=M".
+3. If changed, run a 3-phase migration (all teardowns before any setups,
+   because the CNI bridge plugin retains the old gateway IP and rejects
+   a new subnet's gateway if the bridge interface still exists):
+   a. **Phase 1 — Teardown:** For each VM with a `NetNSPath`, record its
+      previous IP and call `network.Teardown(ctx, vm.ID)`.
+   b. **Phase 2 — Reset:** Call `network.ResetNetwork(ctx)` to delete the
+      bridge interface and clear IPAM/cache state.
+   c. **Phase 3 — Setup:** For each torn-down VM, call
+      `network.Setup(ctx, vm.ID, WithPreferredIP(prevIP))` to create a
+      fresh namespace with the current config. Update the VM record with
+      new `NetNSPath`, `IP`, `Gateway` via `store.UpdateNetwork()`.
+      Update DNS record if DNS is enabled.
+   d. Write the new hash to the fingerprint file.
+   e. Log summary: "network migration complete, migrated=N, failed=M".
 4. Proceed with normal RestoreVMs logic (start VMs per restart policy).
 
 Migration happens before any VMs are started, so there is no window where a
