@@ -251,3 +251,10 @@ Needed behavior:
 - On restart, detect network config changes (CNI plugin list, subnet, etc.)
 - Rebuild network namespaces for existing VMs with the new config
 - Restart VMs that were running before shutdown
+
+## Notes
+
+- `TestKill9ThenStartNonePolicy` in `tests/e2e/restart_test.go` may be flaky
+  under load. Passed 10/10 in isolation but failed once during a full suite run.
+  The test calls `StartVM` then immediately `GetVM` expecting `state=running` —
+  may need a polling loop. Needs further investigation to confirm.
