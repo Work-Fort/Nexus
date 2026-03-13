@@ -7,21 +7,60 @@ echo "Cleaning E2E namespaces..."
 for ns in $(ctr namespaces list -q | grep ^nexus-e2e- 2>/dev/null); do
   echo "  Cleaning namespace: $ns"
   for c in $(ctr -n "$ns" containers list -q 2>/dev/null); do
-    ctr -n "$ns" tasks kill "$c" 2>/dev/null || true
+    ctr -n "$ns" tasks kill --signal KILL "$c" 2>/dev/null || true
+  done
+  sleep 1
+  for c in $(ctr -n "$ns" containers list -q 2>/dev/null); do
     ctr -n "$ns" tasks delete "$c" 2>/dev/null || true
+    ctr -n "$ns" snapshots rm "${c}-snap" 2>/dev/null || true
     ctr -n "$ns" containers delete "$c" 2>/dev/null || true
   done
   for img in $(ctr -n "$ns" images list -q 2>/dev/null); do
     ctr -n "$ns" images remove "$img" 2>/dev/null || true
   done
-  ctr -n "$ns" content prune references 2>/dev/null || true
-  ctr namespaces remove "$ns" 2>/dev/null || true
+  # Remove all remaining snapshots (image layer chains survive image removal).
+  for snap in $(ctr -n "$ns" snapshots list 2>/dev/null | awk 'NR>1{print $1}'); do
+    ctr -n "$ns" snapshots rm "$snap" 2>/dev/null || true
+  done
+  # Remove leases (which hold references preventing content/snapshot GC).
+  for lease in $(ctr -n "$ns" leases list 2>/dev/null | awk 'NR>1{print $1}'); do
+    ctr -n "$ns" leases delete "$lease" 2>/dev/null || true
+  done
+  # Remove remaining content blobs.
+  for digest in $(ctr -n "$ns" content list 2>/dev/null | awk 'NR>1{print $1}'); do
+    ctr -n "$ns" content delete "$digest" 2>/dev/null || true
+  done
+  # Retry namespace removal — content deletion may still be propagating.
+  for _ in 1 2 3; do
+    ctr namespaces remove "$ns" 2>/dev/null && break
+    sleep 0.5
+  done
 done
+
+# Report orphaned containerd shims whose namespaces were already removed.
+# These are root-owned and can only be cleaned by restarting containerd.
+orphan_shims=$(pgrep -f 'containerd-shim.*nexus-e2e' 2>/dev/null || true)
+if [ -n "$orphan_shims" ]; then
+  echo "  WARNING: orphaned root-owned shims detected (restart containerd to reap):"
+  echo "$orphan_shims" | while read -r pid; do
+    ns=$(tr '\0' '\n' < /proc/"$pid"/cmdline 2>/dev/null | grep -oP 'nexus-e2e-\w+' || true)
+    echo "    PID $pid ($ns)"
+  done
+fi
+
+# Kill orphaned coredns processes from e2e test runs.
+for pid in $(pgrep -f 'coredns.*e2e-state' 2>/dev/null); do
+  echo "  Killing orphaned coredns (PID $pid)"
+  kill "$pid" 2>/dev/null || true
+done
+
+# Clean up e2e state directories.
+rm -rf .e2e-state-* 2>/dev/null || true
 
 # Clean up the E2E bridge interface (if it exists).
 if ip link show nexus-e2e &>/dev/null; then
   echo "  Deleting bridge: nexus-e2e"
-  sudo ip link delete nexus-e2e 2>/dev/null || true
+  nexus-cni-exec delete-bridge nexus-e2e 2>/dev/null || true
 fi
 
 echo "✓ E2E cleanup done"
