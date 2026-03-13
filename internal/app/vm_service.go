@@ -233,7 +233,7 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		if s.templateStore == nil {
 			return nil, fmt.Errorf("templates not enabled: %w", domain.ErrValidation)
 		}
-		initPath, templateID, err := s.resolveInitScript(ctx, vm.ID, params.Image, params.TemplateName)
+		initPath, templateID, stopSignal, err := s.resolveInitScript(ctx, vm.ID, params.Image, params.TemplateName)
 		if err != nil {
 			s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
 			s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
@@ -243,6 +243,9 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		vm.Init = true
 		vm.TemplateID = templateID
 		createOpts = append(createOpts, domain.WithInitScript(initPath))
+		if stopSignal != 0 {
+			createOpts = append(createOpts, domain.WithStopSignal(stopSignal))
+		}
 	}
 
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
@@ -966,6 +969,9 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 				return fmt.Errorf("write init script: %w", err)
 			}
 			createOpts = append(createOpts, domain.WithInitScript(path))
+			if sig := initStopSignal(script); sig != 0 {
+				createOpts = append(createOpts, domain.WithStopSignal(sig))
+			}
 		}
 	}
 
@@ -1146,23 +1152,22 @@ func (s *VMService) UpdateScriptOverride(ctx context.Context, ref, script string
 
 // resolveInitScript determines the effective init script for a VM, writes it
 // to a temp file, and returns the file path and template ID.
-func (s *VMService) resolveInitScript(ctx context.Context, vmID, image, templateName string) (string, string, error) {
+func (s *VMService) resolveInitScript(ctx context.Context, vmID, image, templateName string) (path, templateID string, stopSignal int, err error) {
 	var tmpl *domain.Template
-	var err error
 
 	if templateName != "" {
 		tmpl, err = s.templateStore.ResolveTemplate(ctx, templateName)
 		if err != nil {
-			return "", "", fmt.Errorf("resolve template %q: %w", templateName, err)
+			return "", "", 0, fmt.Errorf("resolve template %q: %w", templateName, err)
 		}
 	} else {
 		distro, err := s.runtime.DetectDistro(ctx, image)
 		if err != nil {
-			return "", "", fmt.Errorf("detect distro: %w", err)
+			return "", "", 0, fmt.Errorf("detect distro: %w", err)
 		}
 		tmpl, err = s.templateStore.GetTemplateByDistro(ctx, distro)
 		if err != nil {
-			return "", "", fmt.Errorf("no template for distro %q: %w", distro, err)
+			return "", "", 0, fmt.Errorf("no template for distro %q: %w", distro, err)
 		}
 	}
 
@@ -1171,11 +1176,11 @@ func (s *VMService) resolveInitScript(ctx context.Context, vmID, image, template
 		script = injectMetricsService(script, tmpl.Distro, s.config.Metrics)
 	}
 
-	path, err := s.writeInitScript(vmID, script)
+	scriptPath, err := s.writeInitScript(vmID, script)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
-	return path, tmpl.ID, nil
+	return scriptPath, tmpl.ID, initStopSignal(script), nil
 }
 
 // writeInitScript writes a shell script to a temp file for bind-mounting.
@@ -1190,6 +1195,20 @@ func (s *VMService) writeInitScript(vmID, script string) (string, error) {
 		return "", fmt.Errorf("write init script: %w", err)
 	}
 	return path, nil
+}
+
+// initStopSignal returns the signal number to send when stopping a container
+// running the given init script. systemd requires SIGRTMIN+3 (37); busybox
+// init (Alpine/OpenRC) accepts SIGUSR2 (12) for poweroff. Returns 0 if the
+// init system is unknown (falls back to SIGTERM).
+func initStopSignal(script string) int {
+	if strings.Contains(script, "systemd") {
+		return 37 // SIGRTMIN+3
+	}
+	if strings.Contains(script, "/sbin/init") {
+		return 12 // SIGUSR2 — busybox init poweroff
+	}
+	return 0
 }
 
 // injectMetricsService inserts a node_exporter service definition into an

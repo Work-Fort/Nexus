@@ -51,6 +51,7 @@ type CreateConfig struct {
 	ResolvConfPath string
 	RootSize       int64  // bytes, 0 = no quota
 	InitScriptPath string // host path to init bootstrap script
+	StopSignal     int    // signal number for stopping the container; 0 = SIGTERM
 }
 
 // CreateOpt is a functional option for Runtime.Create.
@@ -140,6 +141,15 @@ func WithRootSize(size int64) CreateOpt {
 func WithInitScript(path string) CreateOpt {
 	return func(c *CreateConfig) {
 		c.InitScriptPath = path
+	}
+}
+
+// WithStopSignal sets the signal number to use when stopping the container.
+// 0 (the default) means SIGTERM. Init containers need a specific signal
+// because PID 1 ignores SIGTERM (e.g. 37 = SIGRTMIN+3 for systemd).
+func WithStopSignal(sig int) CreateOpt {
+	return func(c *CreateConfig) {
+		c.StopSignal = sig
 	}
 }
 

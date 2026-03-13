@@ -38,6 +38,16 @@ import (
 	"github.com/Work-Fort/Nexus/internal/domain"
 )
 
+const (
+	// labelStopSignal stores the numeric signal to send when stopping
+	// a container. Init containers need a specific signal because PID 1
+	// ignores SIGTERM:
+	//   - systemd: SIGRTMIN+3 (37) for orderly shutdown
+	//   - busybox init (Alpine): SIGUSR2 (12) for poweroff
+	// Non-init containers omit this label and get SIGTERM.
+	labelStopSignal = "nexus/stop-signal"
+)
+
 // Runtime implements domain.Runtime backed by containerd.
 type Runtime struct {
 	client      *client.Client
@@ -212,13 +222,20 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 		)
 	}
 
-	_, err = r.client.NewContainer(ctx, id,
+	containerOpts := []client.NewContainerOpts{
 		client.WithImage(img),
 		client.WithSnapshotter(r.snapshotter),
 		client.WithNewSnapshot(id+"-snap", img),
 		client.WithRuntime(runtimeHandler, nil),
 		client.WithNewSpec(specOpts...),
-	)
+	}
+	if createCfg.StopSignal != 0 {
+		containerOpts = append(containerOpts,
+			client.WithAdditionalContainerLabels(map[string]string{
+				labelStopSignal: strconv.Itoa(createCfg.StopSignal),
+			}))
+	}
+	_, err = r.client.NewContainer(ctx, id, containerOpts...)
 	if err != nil {
 		return fmt.Errorf("create container %s: %w", id, err)
 	}
@@ -580,7 +597,17 @@ func (r *Runtime) Stop(ctx context.Context, id string) error {
 		return fmt.Errorf("wait task %s: %w", id, err)
 	}
 
-	if err := task.Kill(ctx, syscall.SIGTERM); err != nil {
+	// Init containers run a full init system as PID 1 which ignores
+	// SIGTERM. The stop signal label stores the correct signal number.
+	sig := syscall.Signal(syscall.SIGTERM)
+	labels, _ := container.Labels(ctx)
+	if s := labels[labelStopSignal]; s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			sig = syscall.Signal(n)
+		}
+	}
+
+	if err := task.Kill(ctx, sig); err != nil {
 		if !errdefs.IsNotFound(err) {
 			return fmt.Errorf("kill task %s: %w", id, err)
 		}

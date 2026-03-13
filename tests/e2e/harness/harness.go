@@ -404,7 +404,7 @@ func (d *Daemon) Stop() error {
 	case err := <-done:
 		d.cleanup()
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second):
 		d.cmd.Process.Kill()
 		<-done
 		d.cleanup()
