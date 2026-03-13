@@ -238,3 +238,16 @@ block Kata/Firecracker VMs but allow runc.
 - Initial checks: Kata kernel (Anvil 6.19.6), containerd, disk space
 - VM creation gates on runtime health before proceeding
 - AUR package ships Anvil kernel and Kata config override
+
+## 20. Network Migration on Restart
+
+When Nexus restarts with network configuration changes (e.g. adding the
+loopback CNI plugin), existing VMs retain their old network namespace
+configuration. VMs created before the change are stuck without the fix
+until manually recreated.
+
+Needed behavior:
+- Gracefully shut down running VMs when Nexus stops
+- On restart, detect network config changes (CNI plugin list, subnet, etc.)
+- Rebuild network namespaces for existing VMs with the new config
+- Restart VMs that were running before shutdown
