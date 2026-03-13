@@ -249,11 +249,15 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 		o(cfg)
 	}
 
+	logLevel := "disabled"
+	if cfg.logLevel != "" {
+		logLevel = cfg.logLevel
+	}
 	args := []string{
 		"daemon",
 		"--listen", addr,
 		"--namespace", namespace,
-		"--log-level", "disabled",
+		"--log-level", logLevel,
 		fmt.Sprintf("--network-enabled=%t", cfg.networkEnabled),
 		fmt.Sprintf("--dns-enabled=%t", cfg.dnsEnabled),
 	}
