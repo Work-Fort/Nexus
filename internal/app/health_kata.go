@@ -6,11 +6,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
+
+// linuxVersionRe matches the "Linux version X.Y.Z" string embedded in kernel binaries.
+var linuxVersionRe = regexp.MustCompile(`Linux version (\S+)`)
 
 type hypervisorConfig struct {
 	Kernel string `toml:"kernel"`
@@ -101,24 +106,70 @@ func (k *KataKernelCheck) Check(_ context.Context) CheckResult {
 		}
 	}
 
-	// Check the kernel file exists.
-	if _, err := os.Stat(kernelPath); err != nil {
+	// Read the kernel binary and extract the embedded version string.
+	data, err = os.ReadFile(kernelPath)
+	if err != nil {
 		return CheckResult{
 			Status:  StatusDegraded,
 			Message: fmt.Sprintf("kernel not found: %s", kernelPath),
 		}
 	}
 
-	// Verify the kernel path contains the expected version.
-	if !strings.Contains(kernelPath, k.expectedVersion) {
+	match := linuxVersionRe.FindSubmatch(data)
+	if match == nil {
 		return CheckResult{
 			Status:  StatusDegraded,
-			Message: fmt.Sprintf("kernel %s does not match expected version %s", kernelPath, k.expectedVersion),
+			Message: fmt.Sprintf("could not extract version from kernel %s", kernelPath),
+		}
+	}
+
+	foundVersion := string(match[1])
+	if !versionAtLeast(foundVersion, k.expectedVersion) {
+		return CheckResult{
+			Status:  StatusDegraded,
+			Message: fmt.Sprintf("kernel %s has version %s, minimum required %s", kernelPath, foundVersion, k.expectedVersion),
 		}
 	}
 
 	return CheckResult{
 		Status:  StatusHealthy,
-		Message: fmt.Sprintf("Anvil kernel %s configured", kernelPath),
+		Message: fmt.Sprintf("Anvil kernel %s (%s)", kernelPath, foundVersion),
 	}
+}
+
+// versionAtLeast returns true if version >= minimum, comparing numeric
+// components (e.g. "6.19.7" >= "6.19.6"). Suffixes like "-anvil" are
+// stripped before comparison.
+func versionAtLeast(version, minimum string) bool {
+	parse := func(s string) []int {
+		// Strip any suffix after the numeric part (e.g. "6.19.6-anvil" → "6.19.6").
+		if idx := strings.IndexFunc(s, func(r rune) bool {
+			return r != '.' && (r < '0' || r > '9')
+		}); idx > 0 {
+			s = s[:idx]
+		}
+		var parts []int
+		for _, p := range strings.Split(s, ".") {
+			n, _ := strconv.Atoi(p)
+			parts = append(parts, n)
+		}
+		return parts
+	}
+
+	v := parse(version)
+	m := parse(minimum)
+
+	for i := 0; i < len(m); i++ {
+		vi := 0
+		if i < len(v) {
+			vi = v[i]
+		}
+		if vi < m[i] {
+			return false
+		}
+		if vi > m[i] {
+			return true
+		}
+	}
+	return true
 }

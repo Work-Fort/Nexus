@@ -4,17 +4,23 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
+// fakeKernel returns bytes that mimic a real kernel's embedded version string.
+func fakeKernel(version string) []byte {
+	return []byte(fmt.Sprintf("\x00Linux version %s (builder@host) #1 SMP\x00", version))
+}
+
 func TestKataKernelCheckHealthy(t *testing.T) {
 	dir := t.TempDir()
 
-	kernelPath := filepath.Join(dir, "vmlinux-6.19.5-anvil")
-	if err := os.WriteFile(kernelPath, []byte("fake-kernel"), 0o644); err != nil {
+	kernelPath := filepath.Join(dir, "vmlinux")
+	if err := os.WriteFile(kernelPath, fakeKernel("6.19.5"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -40,8 +46,8 @@ kernel = "` + kernelPath + `"
 func TestKataKernelCheckDegradedWrongVersion(t *testing.T) {
 	dir := t.TempDir()
 
-	kernelPath := filepath.Join(dir, "vmlinux.container")
-	if err := os.WriteFile(kernelPath, []byte("fake-kernel"), 0o644); err != nil {
+	kernelPath := filepath.Join(dir, "vmlinux")
+	if err := os.WriteFile(kernelPath, fakeKernel("6.18.0"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -67,7 +73,7 @@ kernel = "` + kernelPath + `"
 func TestKataKernelCheckDegradedMissingFile(t *testing.T) {
 	dir := t.TempDir()
 
-	kernelPath := filepath.Join(dir, "vmlinux-6.19.5-anvil")
+	kernelPath := filepath.Join(dir, "vmlinux")
 
 	configPath := filepath.Join(dir, "configuration.toml")
 	config := `[hypervisor.qemu]
@@ -103,8 +109,8 @@ func TestKataKernelCheckDegradedNoConfig(t *testing.T) {
 func TestKataKernelCheckFirecrackerHypervisor(t *testing.T) {
 	dir := t.TempDir()
 
-	kernelPath := filepath.Join(dir, "vmlinux-6.19.5-anvil")
-	if err := os.WriteFile(kernelPath, []byte("fake-kernel"), 0o644); err != nil {
+	kernelPath := filepath.Join(dir, "vmlinux")
+	if err := os.WriteFile(kernelPath, fakeKernel("6.19.5"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,5 +130,53 @@ kernel = "` + kernelPath + `"
 	}
 	if result.Message == "" {
 		t.Fatal("expected non-empty message")
+	}
+}
+
+func TestKataKernelCheckNewerVersionHealthy(t *testing.T) {
+	dir := t.TempDir()
+
+	kernelPath := filepath.Join(dir, "vmlinux")
+	if err := os.WriteFile(kernelPath, fakeKernel("6.20.0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(dir, "configuration.toml")
+	config := `[hypervisor.qemu]
+kernel = "` + kernelPath + `"
+`
+	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	chk := NewKataKernelCheck("6.19.5", 30*time.Second, configPath)
+	result := chk.Check(context.Background())
+
+	if result.Status != StatusHealthy {
+		t.Fatalf("expected healthy for newer kernel, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestKataKernelCheckNoVersionInBinary(t *testing.T) {
+	dir := t.TempDir()
+
+	kernelPath := filepath.Join(dir, "vmlinux")
+	if err := os.WriteFile(kernelPath, []byte("not-a-real-kernel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(dir, "configuration.toml")
+	config := `[hypervisor.qemu]
+kernel = "` + kernelPath + `"
+`
+	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	chk := NewKataKernelCheck("6.19.5", 30*time.Second, configPath)
+	result := chk.Check(context.Background())
+
+	if result.Status != StatusDegraded {
+		t.Fatalf("expected degraded, got %s: %s", result.Status, result.Message)
 	}
 }
