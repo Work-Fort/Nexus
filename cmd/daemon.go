@@ -197,8 +197,9 @@ func newDaemonCmd() *cobra.Command {
 
 			var svcOpts []func(*app.VMService)
 			svcOpts = append(svcOpts, app.WithConfig(app.VMServiceConfig{
-				DefaultImage:   viper.GetString("agent-image"),
-				DefaultRuntime: viper.GetString("runtime"),
+				DefaultImage:       viper.GetString("agent-image"),
+				DefaultRuntime:     viper.GetString("runtime"),
+				NetworkAutoMigrate: viper.GetBool("network-auto-migrate"),
 				Metrics: app.MetricsConfig{
 					NodeExporterPath: nodeExporterPath,
 					ListenPort:       viper.GetInt("metrics.listen-port"),
@@ -340,8 +341,9 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("dns-domains", config.DefaultDNSDomains, "Comma-separated DNS domains (nexus is always included)")
 	cmd.Flags().String("node-exporter-path", config.DefaultNodeExporterPath, "Path to node_exporter binary for in-VM metrics (empty to disable)")
 	cmd.Flags().String("kata-kernel-version", "", "Expected Anvil kernel version for Kata health check (empty to skip)")
+	cmd.Flags().Bool("network-auto-migrate", true, "Auto-rebuild network namespaces when CNI config changes")
 
-	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "bridge-name", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "dns-loopback", "dns-domains", "node-exporter-path", "kata-kernel-version"} {
+	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "bridge-name", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "dns-loopback", "dns-domains", "node-exporter-path", "kata-kernel-version", "network-auto-migrate"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}

@@ -117,6 +117,7 @@ func InitViper() {
 	viper.SetDefault("dns-domains", DefaultDNSDomains)
 	viper.SetDefault("node-exporter-path", DefaultNodeExporterPath)
 	viper.SetDefault("kata-kernel-version", DefaultKataKernelVersion)
+	viper.SetDefault("network-auto-migrate", true)
 	viper.SetDefault("metrics.listen-port", DefaultMetricsPort)
 	viper.SetDefault("metrics.collectors", []string{
 		"cpu", "meminfo", "diskstats", "filesystem", "loadavg", "netdev",
