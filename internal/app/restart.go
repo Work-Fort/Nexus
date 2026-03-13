@@ -20,6 +20,23 @@ func (s *VMService) RestoreVMs(ctx context.Context) {
 		return
 	}
 
+	// Network migration: detect CNI config drift and rebuild namespaces.
+	if s.network.ConfigChanged() {
+		if s.config.NetworkAutoMigrate {
+			s.migrateNetworks(ctx, vms)
+		} else {
+			log.Warn("network config changed but auto-migrate is disabled")
+			if err := s.network.SaveConfigHash(); err != nil {
+				log.Error("save config hash", "err", err)
+			}
+		}
+	} else {
+		// Config unchanged — ensure hash file exists for next comparison.
+		if err := s.network.SaveConfigHash(); err != nil {
+			log.Error("save config hash", "err", err)
+		}
+	}
+
 	var restored, cleaned int
 	for _, vm := range vms {
 		switch vm.RestartPolicy {
@@ -61,6 +78,67 @@ func (s *VMService) RestoreVMs(ctx context.Context) {
 	if restored > 0 || cleaned > 0 {
 		log.Info("boot recovery complete", "restored", restored, "cleaned", cleaned)
 	}
+}
+
+// migrateNetworks tears down and rebuilds network namespaces for all VMs
+// when the CNI config has changed.
+func (s *VMService) migrateNetworks(ctx context.Context, vms []*domain.VM) {
+	var migrated, failed int
+	for _, vm := range vms {
+		if vm.NetNSPath == "" {
+			continue
+		}
+
+		prevIP := vm.IP
+
+		// Teardown old namespace (best-effort).
+		if err := s.network.Teardown(ctx, vm.ID); err != nil {
+			log.Warn("migrate: teardown", "id", vm.ID, "name", vm.Name, "err", err)
+		}
+
+		// Setup new namespace with current config.
+		var opts []domain.SetupOpt
+		if prevIP != "" {
+			opts = append(opts, domain.WithPreferredIP(prevIP))
+		}
+		info, err := s.network.Setup(ctx, vm.ID, opts...)
+		if err != nil {
+			log.Error("migrate: setup", "id", vm.ID, "name", vm.Name, "err", err)
+			// Clear network fields so state is honest.
+			s.store.UpdateNetwork(ctx, vm.ID, "", "", "") //nolint:errcheck
+			failed++
+			continue
+		}
+
+		// Update DB with new network info.
+		if err := s.store.UpdateNetwork(ctx, vm.ID, info.IP, info.Gateway, info.NetNSPath); err != nil {
+			log.Error("migrate: update network", "id", vm.ID, "err", err)
+			failed++
+			continue
+		}
+
+		// Update in-memory VM for subsequent RestoreVMs logic.
+		vm.IP = info.IP
+		vm.Gateway = info.Gateway
+		vm.NetNSPath = info.NetNSPath
+
+		// Update DNS record.
+		s.dns.AddRecord(ctx, vm.Name, info.IP) //nolint:errcheck
+
+		migrated++
+		if info.IP != prevIP {
+			log.Info("vm network migrated", "id", vm.ID, "name", vm.Name, "old_ip", prevIP, "new_ip", info.IP)
+		} else {
+			log.Info("vm network migrated", "id", vm.ID, "name", vm.Name, "ip", info.IP)
+		}
+	}
+
+	// Save the new config hash now that migration is complete.
+	if err := s.network.SaveConfigHash(); err != nil {
+		log.Error("migrate: save config hash", "err", err)
+	}
+
+	log.Info("network migration complete", "migrated", migrated, "failed", failed)
 }
 
 // Shutdown gracefully stops all running VMs so containerd tasks are cleaned up.

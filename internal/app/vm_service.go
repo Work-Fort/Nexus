@@ -20,9 +20,10 @@ import (
 
 // VMServiceConfig holds configurable defaults for the VM service.
 type VMServiceConfig struct {
-	DefaultImage   string
-	DefaultRuntime string
-	Metrics        MetricsConfig
+	DefaultImage       string
+	DefaultRuntime     string
+	NetworkAutoMigrate bool
+	Metrics            MetricsConfig
 }
 
 // MetricsConfig controls in-VM node_exporter provisioning.
