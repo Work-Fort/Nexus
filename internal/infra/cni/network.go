@@ -129,6 +129,9 @@ func New(cfg Config) (*Network, error) {
   "name": "nexus",
   "plugins": [
     {
+      "type": "loopback"
+    },
+    {
       "type": "bridge",
       "bridge": %q,
       "isGateway": true,

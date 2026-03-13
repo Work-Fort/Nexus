@@ -390,6 +390,51 @@ func TestOutboundTCP(t *testing.T) {
 	t.Logf("TCP outbound OK: nc -z 1.1.1.1 443 succeeded")
 }
 
+func TestLoopbackInterface(t *testing.T) {
+	requireNetworkCaps(t)
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithBridgeName(e2eBridgeName))
+
+	vm, err := c.CreateVMWithImage("test-lo", "agent", "docker.io/library/nginx:alpine")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Wait for exec readiness.
+	var result *harness.ExecResult
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"ip", "link", "show", "lo"})
+		if err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("exec ip link show lo: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("lo interface not found (exit %d): stderr=%s", result.ExitCode, result.Stderr)
+	}
+	if !strings.Contains(result.Stdout, "UP") {
+		t.Fatalf("lo interface not UP: %s", result.Stdout)
+	}
+	t.Logf("lo interface: %s", strings.TrimSpace(result.Stdout))
+
+	// Verify 127.0.0.1 is reachable.
+	result, err = c.ExecVM(vm.ID, []string{"ping", "-c", "1", "-W", "2", "127.0.0.1"})
+	if err != nil {
+		t.Fatalf("exec ping 127.0.0.1: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ping 127.0.0.1 failed (exit %d): stdout=%s stderr=%s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+	t.Logf("loopback ping OK: %s", strings.TrimSpace(result.Stdout))
+}
+
 func TestDNSResolution(t *testing.T) {
 	requireNetworkCaps(t)
 	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithDNSEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithDNSLoopback(e2eLoopback), harness.WithBridgeName(e2eBridgeName))
