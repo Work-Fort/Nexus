@@ -1080,6 +1080,13 @@ type MCPToolResult struct {
 // MCPInit sends an MCP initialize request to establish a session.
 // It is called automatically by MCPCall if no session exists.
 func (c *Client) MCPInit() error {
+	_, err := c.MCPInitRaw()
+	return err
+}
+
+// MCPInitRaw sends an MCP initialize request and returns the raw JSON-RPC
+// result object (the InitializeResult). It also establishes the session.
+func (c *Client) MCPInitRaw() (json.RawMessage, error) {
 	initReq := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      0,
@@ -1096,17 +1103,17 @@ func (c *Client) MCPInit() error {
 
 	body, err := json.Marshal(initReq)
 	if err != nil {
-		return fmt.Errorf("marshal init request: %w", err)
+		return nil, fmt.Errorf("marshal init request: %w", err)
 	}
 
 	resp, err := c.http.Post(c.base+"/mcp", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("MCP init request: %w", err)
+		return nil, fmt.Errorf("MCP init request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("MCP init: unexpected status %d", resp.StatusCode)
+		return nil, fmt.Errorf("MCP init: unexpected status %d", resp.StatusCode)
 	}
 
 	// Capture the session ID from the response header.
@@ -1114,7 +1121,26 @@ func (c *Client) MCPInit() error {
 		c.mcpSession = sid
 	}
 
-	return nil
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read MCP init response: %w", err)
+	}
+
+	var rpcResp struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+		return nil, fmt.Errorf("decode MCP init response: %w", err)
+	}
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("MCP init error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
+	}
+
+	return rpcResp.Result, nil
 }
 
 // MCPCall invokes an MCP tool via JSON-RPC at /mcp.
@@ -1229,6 +1255,69 @@ func (c *Client) MCPCall(toolName string, args map[string]any) (*MCPToolResult, 
 		Content: content,
 		IsError: rpcResp.Result.IsError,
 	}, nil
+}
+
+// MCPListTools sends a tools/list request and returns the raw JSON-RPC
+// result object (the "result" field, containing "tools": [...]).
+// The session is auto-initialized if needed.
+func (c *Client) MCPListTools() (json.RawMessage, error) {
+	if c.mcpSession == "" {
+		if err := c.MCPInit(); err != nil {
+			return nil, fmt.Errorf("MCP auto-init: %w", err)
+		}
+	}
+
+	listReq := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/list",
+	}
+
+	body, err := json.Marshal(listReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshal tools/list request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.base+"/mcp", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.mcpSession != "" {
+		req.Header.Set("Mcp-Session-Id", c.mcpSession)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("MCP tools/list request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("MCP tools/list: status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read MCP tools/list response: %w", err)
+	}
+
+	var rpcResp struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+		return nil, fmt.Errorf("decode MCP tools/list response: %w", err)
+	}
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("MCP tools/list error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
+	}
+
+	return rpcResp.Result, nil
 }
 
 // --- internal helpers ---

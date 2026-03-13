@@ -14,6 +14,7 @@ import (
 
 	"github.com/Work-Fort/nexus-e2e/harness"
 	"github.com/gorilla/websocket"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 var (
@@ -48,8 +49,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "create temp dir: %v\n", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(tmpDir)
-
 	// Build targets: main binary + helpers.
 	targets := []struct {
 		name string
@@ -77,7 +76,9 @@ func TestMain(m *testing.M) {
 
 	nexusBin = filepath.Join(tmpDir, "nexus")
 	binDir = tmpDir
-	os.Exit(m.Run())
+	code := m.Run()
+	os.RemoveAll(tmpDir)
+	os.Exit(code)
 }
 
 // requireNetworkCaps waits up to 5s for the setcap loop to set capabilities
@@ -1483,6 +1484,80 @@ func TestMCPVMLifecycle(t *testing.T) {
 	}
 	if len(vmList) != 0 {
 		t.Errorf("expected 0 VMs after delete, got %d", len(vmList))
+	}
+}
+
+func TestMCPSchemaCompliance(t *testing.T) {
+	_, c := startDaemon(t)
+
+	schemaFile := filepath.Join("testdata", "mcp-schema-2025-03-26.json")
+	schemaData, err := os.ReadFile(schemaFile)
+	if err != nil {
+		t.Fatalf("read MCP schema: %v", err)
+	}
+
+	schemaDoc, err := jsonschema.UnmarshalJSON(strings.NewReader(string(schemaData)))
+	if err != nil {
+		t.Fatalf("parse MCP schema: %v", err)
+	}
+
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("mcp.json", schemaDoc); err != nil {
+		t.Fatalf("add MCP schema resource: %v", err)
+	}
+
+	// Validate InitializeResult.
+	initRefDoc, err := jsonschema.UnmarshalJSON(strings.NewReader(
+		`{"$ref": "mcp.json#/definitions/InitializeResult"}`))
+	if err != nil {
+		t.Fatalf("parse InitializeResult ref: %v", err)
+	}
+	if err := compiler.AddResource("init-ref.json", initRefDoc); err != nil {
+		t.Fatalf("add init ref resource: %v", err)
+	}
+	initSchema, err := compiler.Compile("init-ref.json")
+	if err != nil {
+		t.Fatalf("compile InitializeResult schema: %v", err)
+	}
+
+	initResult, err := c.MCPInitRaw()
+	if err != nil {
+		t.Fatalf("MCP init: %v", err)
+	}
+
+	var initObj any
+	if err := json.Unmarshal(initResult, &initObj); err != nil {
+		t.Fatalf("unmarshal init result: %v", err)
+	}
+	if err := initSchema.Validate(initObj); err != nil {
+		t.Errorf("InitializeResult schema validation failed:\n%v", err)
+	}
+
+	// Validate ListToolsResult.
+	toolsRefDoc, err := jsonschema.UnmarshalJSON(strings.NewReader(
+		`{"$ref": "mcp.json#/definitions/ListToolsResult"}`))
+	if err != nil {
+		t.Fatalf("parse ListToolsResult ref: %v", err)
+	}
+	if err := compiler.AddResource("tools-ref.json", toolsRefDoc); err != nil {
+		t.Fatalf("add tools ref resource: %v", err)
+	}
+	toolsSchema, err := compiler.Compile("tools-ref.json")
+	if err != nil {
+		t.Fatalf("compile ListToolsResult schema: %v", err)
+	}
+
+	toolsResult, err := c.MCPListTools()
+	if err != nil {
+		t.Fatalf("MCP tools/list: %v", err)
+	}
+
+	var toolsObj any
+	if err := json.Unmarshal(toolsResult, &toolsObj); err != nil {
+		t.Fatalf("unmarshal tools/list result: %v", err)
+	}
+	if err := toolsSchema.Validate(toolsObj); err != nil {
+		t.Errorf("ListToolsResult schema validation failed:\n%v", err)
 	}
 }
 

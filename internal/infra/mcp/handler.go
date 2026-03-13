@@ -807,10 +807,9 @@ func registerSnapshotTools(s *server.MCPServer, svc *app.VMService) {
 
 // registerHealthTools registers the health tool.
 func registerHealthTools(s *server.MCPServer, health *app.HealthService) {
-	s.AddTool(mcp.Tool{
-		Name:        "health",
-		Description: "Get Nexus health status",
-	}, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(mcp.NewTool("health",
+		mcp.WithDescription("Get Nexus health status"),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		report := health.Status()
 		return jsonResult(report)
 	})
