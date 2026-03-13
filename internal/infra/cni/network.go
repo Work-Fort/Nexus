@@ -49,6 +49,8 @@ type Network struct {
 	cniExecBin  string // resolved path to the nexus-cni-exec binary
 	ipamDataDir string // host-local IPAM allocation directory
 	cacheDir    string // CNI result cache directory
+	confHash    string // SHA-256 of the conflist JSON
+	hashFile    string // path to the stored config hash
 }
 
 // New creates a CNI-backed Network adapter. It creates a wrapper directory
@@ -146,6 +148,9 @@ func New(cfg Config) (*Network, error) {
   ]
 }`, cfg.BridgeName, cfg.Subnet, ipamDataDir)
 
+	confHashVal := configHash(confJSON)
+	hashFilePath := filepath.Join(nsDir, ".cni-config-hash")
+
 	confPath := filepath.Join(confDir, "10-nexus.conflist")
 	if err := os.WriteFile(confPath, []byte(confJSON), 0644); err != nil {
 		os.RemoveAll(confDir)
@@ -201,6 +206,8 @@ func New(cfg Config) (*Network, error) {
 		cniExecBin:  cniExecAbs,
 		ipamDataDir: ipamDataDir,
 		cacheDir:    cacheDir,
+		confHash:    confHashVal,
+		hashFile:    hashFilePath,
 	}, nil
 }
 
@@ -294,13 +301,13 @@ func (n *Network) ResetNetwork(ctx context.Context) error {
 // ConfigChanged reports whether the CNI configuration has changed since the
 // last call to SaveConfigHash.
 func (n *Network) ConfigChanged() bool {
-	return false // stub — implemented later
+	return configChangedCheck(n.hashFile, n.confHash)
 }
 
-// SaveConfigHash persists a hash of the current CNI configuration so that
+// SaveConfigHash writes the current config hash to disk so that
 // ConfigChanged can detect future changes.
 func (n *Network) SaveConfigHash() error {
-	return nil // stub — implemented later
+	return writeConfigHash(n.hashFile, n.confHash)
 }
 
 // clearDir removes all entries inside dir without removing dir itself.
