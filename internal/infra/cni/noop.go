@@ -13,7 +13,7 @@ import (
 // is disabled or during testing.
 type NoopNetwork struct{}
 
-func (n *NoopNetwork) Setup(_ context.Context, _ string) (*domain.NetworkInfo, error) {
+func (n *NoopNetwork) Setup(_ context.Context, _ string, _ ...domain.SetupOpt) (*domain.NetworkInfo, error) {
 	return &domain.NetworkInfo{}, nil
 }
 
@@ -22,5 +22,13 @@ func (n *NoopNetwork) Teardown(_ context.Context, _ string) error {
 }
 
 func (n *NoopNetwork) ResetNetwork(_ context.Context) error {
+	return nil
+}
+
+func (n *NoopNetwork) ConfigChanged() bool {
+	return false
+}
+
+func (n *NoopNetwork) SaveConfigHash() error {
 	return nil
 }

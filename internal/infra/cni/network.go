@@ -217,7 +217,7 @@ func (n *Network) Close() error {
 
 // Setup creates a network namespace for the given VM ID, configures it
 // with CNI, and returns the assigned IP/gateway.
-func (n *Network) Setup(ctx context.Context, id string) (*domain.NetworkInfo, error) {
+func (n *Network) Setup(ctx context.Context, id string, opts ...domain.SetupOpt) (*domain.NetworkInfo, error) {
 	nsPath := filepath.Join(n.netnsDir, id)
 
 	out, err := exec.CommandContext(ctx, n.helperBin, "create", nsPath).CombinedOutput()
@@ -289,6 +289,18 @@ func (n *Network) ResetNetwork(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// ConfigChanged reports whether the CNI configuration has changed since the
+// last call to SaveConfigHash.
+func (n *Network) ConfigChanged() bool {
+	return false // stub — implemented later
+}
+
+// SaveConfigHash persists a hash of the current CNI configuration so that
+// ConfigChanged can detect future changes.
+func (n *Network) SaveConfigHash() error {
+	return nil // stub — implemented later
 }
 
 // clearDir removes all entries inside dir without removing dir itself.

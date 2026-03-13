@@ -71,11 +71,26 @@ type NetworkInfo struct {
 	NetNSPath string
 }
 
+// SetupConfig holds optional parameters for network setup.
+type SetupConfig struct {
+	PreferredIP string
+}
+
+// SetupOpt configures optional network setup behavior.
+type SetupOpt func(*SetupConfig)
+
+// WithPreferredIP requests a specific IP from IPAM (best-effort).
+func WithPreferredIP(ip string) SetupOpt {
+	return func(c *SetupConfig) { c.PreferredIP = ip }
+}
+
 // Network manages network namespaces and CNI for VMs.
 type Network interface {
-	Setup(ctx context.Context, id string) (*NetworkInfo, error)
+	Setup(ctx context.Context, id string, opts ...SetupOpt) (*NetworkInfo, error)
 	Teardown(ctx context.Context, id string) error
 	ResetNetwork(ctx context.Context) error
+	ConfigChanged() bool
+	SaveConfigHash() error
 }
 
 // ErrNetworkInUse is returned when a network reset is attempted while VMs exist.
