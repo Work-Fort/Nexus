@@ -2,6 +2,8 @@
 package e2e
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -439,4 +441,231 @@ func TestNetworkNoMigrationSameConfig(t *testing.T) {
 		t.Fatalf("expected IP preserved as %s, got %s", origIP, got.IP)
 	}
 	t.Logf("IP preserved after same-config restart: %s", got.IP)
+}
+
+// wipeNetnsDir removes all network namespace files and the config hash file
+// from XDG_RUNTIME_DIR to simulate a system reboot wiping /run (tmpfs).
+// Namespace files are bind mounts, so they must be unmounted before deletion.
+func wipeNetnsDir(t *testing.T) {
+	t.Helper()
+	xdgRuntime := os.Getenv("XDG_RUNTIME_DIR")
+	if xdgRuntime == "" {
+		xdgRuntime = fmt.Sprintf("/tmp/nexus-netns-%d", os.Getuid())
+	}
+	netnsDir := filepath.Join(xdgRuntime, "nexus", "netns")
+
+	// Unmount and delete each namespace file using the helper binary
+	// (which has CAP_SYS_ADMIN for unmount).
+	netnsHelper := filepath.Join(binDir, "nexus-netns")
+	entries, err := os.ReadDir(netnsDir)
+	if err != nil {
+		t.Logf("read netns dir %s: %v", netnsDir, err)
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue // skip .ipam, .cache, .cni-config-hash
+		}
+		nsPath := filepath.Join(netnsDir, e.Name())
+		if out, err := exec.Command(netnsHelper, "delete", nsPath).CombinedOutput(); err != nil {
+			t.Logf("delete netns %s: %v: %s", nsPath, err, out)
+		}
+	}
+
+	// Remove the entire directory (including .ipam, .cache, .cni-config-hash).
+	if err := os.RemoveAll(netnsDir); err != nil {
+		t.Logf("wipe netns dir %s: %v", netnsDir, err)
+	}
+	t.Logf("wiped netns dir: %s", netnsDir)
+}
+
+// TestCleanRebootAlwaysPolicy simulates a full system reboot where /run (tmpfs)
+// is wiped. After reboot, the network namespace files are gone but the database
+// persists. A VM with restart_policy=always should auto-start because RestoreVMs
+// must recreate its namespace before starting.
+func TestCleanRebootAlwaysPolicy(t *testing.T) {
+	requireNetworkCaps(t)
+
+	bridge := "nexreboot0"
+	cleanBridge(t, bridge)
+	t.Cleanup(func() { cleanBridge(t, bridge) })
+
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d1, err := harness.StartDaemon(nexusBin, binDir, addr,
+		harness.WithNetworkEnabled(true),
+		harness.WithNetworkSubnet("10.99.0.0/24"),
+		harness.WithBridgeName(bridge),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := harness.NewClient(addr)
+	vm, err := c.CreateVMWithRestartPolicy("test-reboot-always", "agent", "always", "immediate")
+	if err != nil {
+		d1.Stop()
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		d1.Stop()
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Verify VM is running and has a network namespace.
+	got, err := c.GetVM(vm.ID)
+	if err != nil {
+		d1.Stop()
+		t.Fatalf("get VM: %v", err)
+	}
+	if got.IP == "" {
+		d1.Stop()
+		t.Fatal("VM has no IP after start")
+	}
+	t.Logf("VM running with IP %s", got.IP)
+
+	// Graceful shutdown.
+	if err := d1.GracefulStop(); err != nil {
+		t.Logf("graceful stop: %v", err)
+	}
+
+	// Simulate reboot: wipe the netns dir (tmpfs contents).
+	wipeNetnsDir(t)
+	cleanBridge(t, bridge)
+
+	// Restart daemon with same persistent state but cleared runtime state.
+	d2, err := harness.StartDaemonWithNamespace(nexusBin, binDir, addr, d1.Namespace(), d1.XDGDir(),
+		harness.WithNetworkEnabled(true),
+		harness.WithNetworkSubnet("10.99.0.0/24"),
+		harness.WithBridgeName(bridge),
+	)
+	if err != nil {
+		t.Fatalf("start second daemon: %v", err)
+	}
+	defer d2.StopFatal(t)
+
+	// VM should auto-start (policy=always) with namespace recreated.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err = c.GetVM(vm.ID)
+		if err == nil && got.State == "running" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	got, err = c.GetVM(vm.ID)
+	if err != nil {
+		t.Fatalf("get VM after reboot: %v", err)
+	}
+	if got.State != "running" {
+		t.Fatalf("expected state=running after clean reboot (policy=always), got %s", got.State)
+	}
+	if got.IP == "" {
+		t.Fatal("VM has no IP after clean reboot")
+	}
+	t.Logf("VM auto-started after clean reboot with IP %s", got.IP)
+}
+
+// TestCleanRebootNonePolicyManualStart simulates a full system reboot and
+// verifies that a VM with restart_policy=none can be manually started
+// afterward. The namespace must be recreated even though the VM isn't
+// auto-started.
+func TestCleanRebootNonePolicyManualStart(t *testing.T) {
+	requireNetworkCaps(t)
+
+	bridge := "nexreboot1"
+	cleanBridge(t, bridge)
+	t.Cleanup(func() { cleanBridge(t, bridge) })
+
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d1, err := harness.StartDaemon(nexusBin, binDir, addr,
+		harness.WithNetworkEnabled(true),
+		harness.WithNetworkSubnet("10.99.0.0/24"),
+		harness.WithBridgeName(bridge),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := harness.NewClient(addr)
+	vm, err := c.CreateVM("test-reboot-none", "agent")
+	if err != nil {
+		d1.Stop()
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		d1.Stop()
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// Verify VM is running and has a network namespace.
+	got, err := c.GetVM(vm.ID)
+	if err != nil {
+		d1.Stop()
+		t.Fatalf("get VM: %v", err)
+	}
+	if got.IP == "" {
+		d1.Stop()
+		t.Fatal("VM has no IP after start")
+	}
+	t.Logf("VM running with IP %s", got.IP)
+
+	// Graceful shutdown.
+	if err := d1.GracefulStop(); err != nil {
+		t.Logf("graceful stop: %v", err)
+	}
+
+	// Simulate reboot: wipe the netns dir (tmpfs contents).
+	wipeNetnsDir(t)
+	cleanBridge(t, bridge)
+
+	// Restart daemon with same persistent state but cleared runtime state.
+	d2, err := harness.StartDaemonWithNamespace(nexusBin, binDir, addr, d1.Namespace(), d1.XDGDir(),
+		harness.WithNetworkEnabled(true),
+		harness.WithNetworkSubnet("10.99.0.0/24"),
+		harness.WithBridgeName(bridge),
+	)
+	if err != nil {
+		t.Fatalf("start second daemon: %v", err)
+	}
+	defer d2.StopFatal(t)
+
+	// VM should be stopped (policy=none, was running before "reboot").
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err = c.GetVM(vm.ID)
+		if err == nil && got.State == "stopped" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	got, err = c.GetVM(vm.ID)
+	if err != nil {
+		t.Fatalf("get VM: %v", err)
+	}
+	if got.State != "stopped" {
+		t.Fatalf("expected state=stopped (policy=none), got %s", got.State)
+	}
+
+	// The critical test: manually starting the VM should succeed.
+	// The namespace must have been recreated during RestoreVMs.
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("manual start after clean reboot: %v", err)
+	}
+	got, err = c.GetVM(vm.ID)
+	if err != nil {
+		t.Fatalf("get VM after manual start: %v", err)
+	}
+	if got.State != "running" {
+		t.Fatalf("expected state=running after manual start, got %s", got.State)
+	}
+	t.Logf("VM manually started after clean reboot with IP %s", got.IP)
 }
