@@ -136,8 +136,11 @@ func (s *VMService) migrateNetworks(ctx context.Context, vms []*domain.VM) {
 		m.vm.Gateway = info.Gateway
 		m.vm.NetNSPath = info.NetNSPath
 
-		// Update DNS record.
+		// Update DNS record and regenerate resolv.conf (also on tmpfs).
 		s.dns.AddRecord(ctx, m.vm.Name, info.IP) //nolint:errcheck
+		if _, err := s.dns.GenerateResolvConf(m.vm.ID, m.vm.DNSConfig); err != nil {
+			log.Warn("migrate: regenerate resolv.conf", "id", m.vm.ID, "err", err)
+		}
 
 		migrated++
 		if info.IP != m.prevIP {
