@@ -70,7 +70,7 @@ func requireString(req mcp.CallToolRequest, key string) (string, *mcp.CallToolRe
 func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 	// vm_create
 	s.AddTool(mcp.NewTool("vm_create",
-		mcp.WithDescription("Create a new VM"),
+		mcp.WithDescription("Create a new VM. Usage: vm_create(name: \"myvm\", image: \"alpine:latest\", restart_policy: \"always\")"),
 		mcp.WithString("name", mcp.Description("VM name"), mcp.Required()),
 		mcp.WithString("image", mcp.Description("OCI image")),
 		mcp.WithString("runtime", mcp.Description("Container runtime handler")),
@@ -131,7 +131,7 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 
 	// vm_get
 	s.AddTool(mcp.NewTool("vm_get",
-		mcp.WithDescription("Get a VM by ID or name"),
+		mcp.WithDescription("Get a VM by ID or name. Usage: vm_get(id: \"myvm\")"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -147,7 +147,7 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 
 	// vm_delete
 	s.AddTool(mcp.NewTool("vm_delete",
-		mcp.WithDescription("Delete a VM"),
+		mcp.WithDescription("Delete a VM. Usage: vm_delete(id: \"myvm\")"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -162,7 +162,7 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 
 	// vm_start
 	s.AddTool(mcp.NewTool("vm_start",
-		mcp.WithDescription("Start a VM"),
+		mcp.WithDescription("Start a VM. Usage: vm_start(id: \"myvm\")"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -177,7 +177,7 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 
 	// vm_stop
 	s.AddTool(mcp.NewTool("vm_stop",
-		mcp.WithDescription("Stop a VM"),
+		mcp.WithDescription("Stop a VM. Usage: vm_stop(id: \"myvm\")"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -195,7 +195,7 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 func registerVMExecTools(s *server.MCPServer, svc *app.VMService) {
 	// vm_exec
 	s.AddTool(mcp.NewTool("vm_exec",
-		mcp.WithDescription("Execute a command in a running VM"),
+		mcp.WithDescription("Execute a command in a running VM. Usage: vm_exec(id: \"myvm\", cmd: [\"ls\", \"-la\"])"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
 		mcp.WithString("cmd", mcp.Description("Command as JSON array (e.g. [\"ls\",\"-la\"])"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -233,7 +233,7 @@ func registerVMExecTools(s *server.MCPServer, svc *app.VMService) {
 func registerVMManagementTools(s *server.MCPServer, svc *app.VMService) {
 	// vm_patch — expand root size
 	s.AddTool(mcp.NewTool("vm_patch",
-		mcp.WithDescription("Expand the root filesystem size of a VM"),
+		mcp.WithDescription("Expand the root filesystem size of a VM. Usage: vm_patch(id: \"myvm\", root_size: \"2G\")"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
 		mcp.WithString("root_size", mcp.Description("New root size (e.g. 2G) — must be larger than current"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -264,7 +264,7 @@ func registerVMManagementTools(s *server.MCPServer, svc *app.VMService) {
 
 	// vm_restart_policy
 	s.AddTool(mcp.NewTool("vm_restart_policy",
-		mcp.WithDescription("Update the restart policy and strategy for a VM"),
+		mcp.WithDescription("Update the restart policy and strategy for a VM. Usage: vm_restart_policy(id: \"myvm\", restart_policy: \"always\", restart_strategy: \"backoff\")"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
 		mcp.WithString("restart_policy", mcp.Description("Restart policy (none, on-boot, always)"), mcp.Required()),
 		mcp.WithString("restart_strategy", mcp.Description("Restart strategy (immediate, backoff, fixed)"), mcp.Required()),
@@ -293,7 +293,7 @@ func registerVMManagementTools(s *server.MCPServer, svc *app.VMService) {
 
 	// vm_sync_shell
 	s.AddTool(mcp.NewTool("vm_sync_shell",
-		mcp.WithDescription("Detect and sync the root user's default shell from a running VM"),
+		mcp.WithDescription("Detect and sync the root user's default shell from a running VM. Usage: vm_sync_shell(id: \"myvm\")"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -312,7 +312,7 @@ func registerVMManagementTools(s *server.MCPServer, svc *app.VMService) {
 func registerBackupTools(s *server.MCPServer, svc *app.VMService) {
 	// vm_export
 	s.AddTool(mcp.NewTool("vm_export",
-		mcp.WithDescription("Export a stopped VM as a base64-encoded tar.zst archive"),
+		mcp.WithDescription("Export a stopped VM as a base64-encoded tar.zst archive. Usage: vm_export(id: \"myvm\")"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
 		mcp.WithBoolean("include_devices", mcp.Description("Include device mappings in export")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -336,7 +336,7 @@ func registerBackupTools(s *server.MCPServer, svc *app.VMService) {
 
 	// vm_import
 	s.AddTool(mcp.NewTool("vm_import",
-		mcp.WithDescription("Import a VM from a base64-encoded tar.zst archive"),
+		mcp.WithDescription("Import a VM from a base64-encoded tar.zst archive. Usage: vm_import(archive_base64: \"...\")"),
 		mcp.WithString("archive_base64", mcp.Description("Base64-encoded archive data"), mcp.Required()),
 		mcp.WithBoolean("strict_devices", mcp.Description("Fail if device mappings cannot be restored")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -364,7 +364,7 @@ func registerBackupTools(s *server.MCPServer, svc *app.VMService) {
 func registerDriveTools(s *server.MCPServer, svc *app.VMService) {
 	// drive_create
 	s.AddTool(mcp.NewTool("drive_create",
-		mcp.WithDescription("Create a new persistent data drive"),
+		mcp.WithDescription("Create a new persistent data drive. Usage: drive_create(name: \"data\", size: \"1G\", mount_path: \"/data\")"),
 		mcp.WithString("name", mcp.Description("Drive name"), mcp.Required()),
 		mcp.WithString("size", mcp.Description("Size (e.g. 1G, 500Mi)"), mcp.Required()),
 		mcp.WithString("mount_path", mcp.Description("Mount path inside VM (e.g. /data)"), mcp.Required()),
@@ -406,7 +406,7 @@ func registerDriveTools(s *server.MCPServer, svc *app.VMService) {
 
 	// drive_get
 	s.AddTool(mcp.NewTool("drive_get",
-		mcp.WithDescription("Get a drive by ID or name"),
+		mcp.WithDescription("Get a drive by ID or name. Usage: drive_get(id: \"data\")"),
 		mcp.WithString("id", mcp.Description("Drive ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -422,7 +422,7 @@ func registerDriveTools(s *server.MCPServer, svc *app.VMService) {
 
 	// drive_delete
 	s.AddTool(mcp.NewTool("drive_delete",
-		mcp.WithDescription("Delete a drive (must be detached)"),
+		mcp.WithDescription("Delete a drive (must be detached). Usage: drive_delete(id: \"data\")"),
 		mcp.WithString("id", mcp.Description("Drive ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -437,7 +437,7 @@ func registerDriveTools(s *server.MCPServer, svc *app.VMService) {
 
 	// drive_attach
 	s.AddTool(mcp.NewTool("drive_attach",
-		mcp.WithDescription("Attach a drive to a stopped VM"),
+		mcp.WithDescription("Attach a drive to a stopped VM. Usage: drive_attach(id: \"data\", vm_id: \"myvm\")"),
 		mcp.WithString("id", mcp.Description("Drive ID or name"), mcp.Required()),
 		mcp.WithString("vm_id", mcp.Description("VM ID or name to attach to"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -457,7 +457,7 @@ func registerDriveTools(s *server.MCPServer, svc *app.VMService) {
 
 	// drive_detach
 	s.AddTool(mcp.NewTool("drive_detach",
-		mcp.WithDescription("Detach a drive from its VM"),
+		mcp.WithDescription("Detach a drive from its VM. Usage: drive_detach(id: \"data\")"),
 		mcp.WithString("id", mcp.Description("Drive ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -476,7 +476,7 @@ func registerDriveTools(s *server.MCPServer, svc *app.VMService) {
 func registerDeviceTools(s *server.MCPServer, svc *app.VMService) {
 	// device_create
 	s.AddTool(mcp.NewTool("device_create",
-		mcp.WithDescription("Register a new host device mapping"),
+		mcp.WithDescription("Register a new host device mapping. Usage: device_create(name: \"gpu\", host_path: \"/dev/dri/renderD128\", container_path: \"/dev/dri/renderD128\", permissions: \"rw\")"),
 		mcp.WithString("name", mcp.Description("Device mapping name"), mcp.Required()),
 		mcp.WithString("host_path", mcp.Description("Host device path (e.g. /dev/dri/renderD128)"), mcp.Required()),
 		mcp.WithString("container_path", mcp.Description("Path inside the container"), mcp.Required()),
@@ -528,7 +528,7 @@ func registerDeviceTools(s *server.MCPServer, svc *app.VMService) {
 
 	// device_get
 	s.AddTool(mcp.NewTool("device_get",
-		mcp.WithDescription("Get a device by ID or name"),
+		mcp.WithDescription("Get a device by ID or name. Usage: device_get(id: \"gpu\")"),
 		mcp.WithString("id", mcp.Description("Device ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -544,7 +544,7 @@ func registerDeviceTools(s *server.MCPServer, svc *app.VMService) {
 
 	// device_delete
 	s.AddTool(mcp.NewTool("device_delete",
-		mcp.WithDescription("Delete a device (must be detached)"),
+		mcp.WithDescription("Delete a device (must be detached). Usage: device_delete(id: \"gpu\")"),
 		mcp.WithString("id", mcp.Description("Device ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -559,7 +559,7 @@ func registerDeviceTools(s *server.MCPServer, svc *app.VMService) {
 
 	// device_attach
 	s.AddTool(mcp.NewTool("device_attach",
-		mcp.WithDescription("Attach a device to a stopped VM"),
+		mcp.WithDescription("Attach a device to a stopped VM. Usage: device_attach(id: \"gpu\", vm_id: \"myvm\")"),
 		mcp.WithString("id", mcp.Description("Device ID or name"), mcp.Required()),
 		mcp.WithString("vm_id", mcp.Description("VM ID or name to attach to"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -579,7 +579,7 @@ func registerDeviceTools(s *server.MCPServer, svc *app.VMService) {
 
 	// device_detach
 	s.AddTool(mcp.NewTool("device_detach",
-		mcp.WithDescription("Detach a device from its VM"),
+		mcp.WithDescription("Detach a device from its VM. Usage: device_detach(id: \"gpu\")"),
 		mcp.WithString("id", mcp.Description("Device ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
@@ -598,7 +598,7 @@ func registerDeviceTools(s *server.MCPServer, svc *app.VMService) {
 func registerTemplateTools(s *server.MCPServer, svc *app.VMService) {
 	// template_create
 	s.AddTool(mcp.NewTool("template_create",
-		mcp.WithDescription("Create a provisioning template"),
+		mcp.WithDescription("Create a provisioning template. Usage: template_create(name: \"alpine\", distro: \"alpine\", script: \"#!/bin/sh\\n...\")"),
 		mcp.WithString("name", mcp.Description("Template name"), mcp.Required()),
 		mcp.WithString("distro", mcp.Description("Distro identifier (matches /etc/os-release ID)"), mcp.Required()),
 		mcp.WithString("script", mcp.Description("Provisioning script content"), mcp.Required()),
@@ -640,7 +640,7 @@ func registerTemplateTools(s *server.MCPServer, svc *app.VMService) {
 
 	// template_get
 	s.AddTool(mcp.NewTool("template_get",
-		mcp.WithDescription("Get template by ID or name"),
+		mcp.WithDescription("Get template by ID or name. Usage: template_get(ref: \"alpine\")"),
 		mcp.WithString("ref", mcp.Description("Template ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		ref, errRes := requireString(req, "ref")
@@ -656,7 +656,7 @@ func registerTemplateTools(s *server.MCPServer, svc *app.VMService) {
 
 	// template_update
 	s.AddTool(mcp.NewTool("template_update",
-		mcp.WithDescription("Update a template"),
+		mcp.WithDescription("Update a template. Usage: template_update(ref: \"alpine\", script: \"#!/bin/sh\\n...\")"),
 		mcp.WithString("ref", mcp.Description("Template ID or name"), mcp.Required()),
 		mcp.WithString("name", mcp.Description("New template name")),
 		mcp.WithString("distro", mcp.Description("New distro identifier")),
@@ -682,7 +682,7 @@ func registerTemplateTools(s *server.MCPServer, svc *app.VMService) {
 
 	// template_delete
 	s.AddTool(mcp.NewTool("template_delete",
-		mcp.WithDescription("Delete a template"),
+		mcp.WithDescription("Delete a template. Usage: template_delete(ref: \"alpine\")"),
 		mcp.WithString("ref", mcp.Description("Template ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		ref, errRes := requireString(req, "ref")
@@ -707,7 +707,7 @@ func parseByteSize(s string) (int64, error) {
 
 func registerSnapshotTools(s *server.MCPServer, svc *app.VMService) {
 	s.AddTool(mcp.NewTool("snapshot_create",
-		mcp.WithDescription("Create a point-in-time snapshot of a VM"),
+		mcp.WithDescription("Create a point-in-time snapshot of a VM. Usage: snapshot_create(vm_id: \"myvm\", name: \"before-upgrade\")"),
 		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
 		mcp.WithString("name", mcp.Description("Snapshot name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -727,7 +727,7 @@ func registerSnapshotTools(s *server.MCPServer, svc *app.VMService) {
 	})
 
 	s.AddTool(mcp.NewTool("snapshot_list",
-		mcp.WithDescription("List snapshots for a VM"),
+		mcp.WithDescription("List snapshots for a VM. Usage: snapshot_list(vm_id: \"myvm\")"),
 		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		vmRef, errRes := requireString(req, "vm_id")
@@ -742,7 +742,7 @@ func registerSnapshotTools(s *server.MCPServer, svc *app.VMService) {
 	})
 
 	s.AddTool(mcp.NewTool("snapshot_delete",
-		mcp.WithDescription("Delete a VM snapshot"),
+		mcp.WithDescription("Delete a VM snapshot. Usage: snapshot_delete(vm_id: \"myvm\", id: \"before-upgrade\")"),
 		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
 		mcp.WithString("id", mcp.Description("Snapshot ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -761,7 +761,7 @@ func registerSnapshotTools(s *server.MCPServer, svc *app.VMService) {
 	})
 
 	s.AddTool(mcp.NewTool("snapshot_restore",
-		mcp.WithDescription("Restore a stopped VM to a previous snapshot"),
+		mcp.WithDescription("Restore a stopped VM to a previous snapshot. Usage: snapshot_restore(vm_id: \"myvm\", id: \"before-upgrade\")"),
 		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
 		mcp.WithString("id", mcp.Description("Snapshot ID or name"), mcp.Required()),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -780,7 +780,7 @@ func registerSnapshotTools(s *server.MCPServer, svc *app.VMService) {
 	})
 
 	s.AddTool(mcp.NewTool("snapshot_clone",
-		mcp.WithDescription("Clone a VM from a snapshot"),
+		mcp.WithDescription("Clone a VM from a snapshot. Usage: snapshot_clone(vm_id: \"myvm\", id: \"before-upgrade\", name: \"myvm-clone\")"),
 		mcp.WithString("vm_id", mcp.Description("VM ID or name"), mcp.Required()),
 		mcp.WithString("id", mcp.Description("Snapshot ID or name"), mcp.Required()),
 		mcp.WithString("name", mcp.Description("Name for the new VM"), mcp.Required()),
