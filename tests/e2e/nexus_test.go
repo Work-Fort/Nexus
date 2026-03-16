@@ -2,9 +2,12 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,6 +58,7 @@ func TestMain(m *testing.M) {
 		path string
 	}{
 		{"nexus", "."},
+		{"nexusctl", "./cmd/nexusctl/"},
 		{"nexus-netns", "./cmd/nexus-netns/"},
 		{"nexus-cni-exec", "./cmd/nexus-cni-exec/"},
 		{"nexus-quota", "./cmd/nexus-quota/"},
@@ -1603,6 +1607,56 @@ func TestMCPSchemaCompliance(t *testing.T) {
 	}
 	if err := toolsSchema.Validate(toolsObj); err != nil {
 		t.Errorf("ListToolsResult schema validation failed:\n%v", err)
+	}
+}
+
+// TestMCPBridgeTimeoutWhenDaemonUnreachable verifies that the MCP bridge
+// exits with a non-zero status when the Nexus daemon is unreachable, rather
+// than hanging indefinitely waiting for stdin. MCP clients (e.g. Claude Code)
+// expect the bridge process to fail fast so they can report the error.
+func TestMCPBridgeTimeoutWhenDaemonUnreachable(t *testing.T) {
+	nexusctlBin := filepath.Join(binDir, "nexusctl")
+
+	// Get a port that nothing is listening on.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddr := "http://" + ln.Addr().String()
+	ln.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, nexusctlBin, "mcp-bridge", "--addr", deadAddr)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start mcp-bridge: %v", err)
+	}
+
+	// Send an MCP initialize request — the first message any client sends.
+	initMsg := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"test","version":"1.0"}}}`
+	io.WriteString(stdin, initMsg+"\n")
+	stdin.Close()
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("mcp-bridge exited with status 0 — should exit non-zero when daemon is unreachable")
+		}
+		t.Logf("mcp-bridge exited with error (expected): %v", err)
+	case <-ctx.Done():
+		cmd.Process.Kill()
+		t.Fatal("mcp-bridge did not exit within 15 seconds when daemon is unreachable — it hung")
 	}
 }
 

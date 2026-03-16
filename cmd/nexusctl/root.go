@@ -3,8 +3,10 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -24,7 +26,10 @@ var rootCmd = &cobra.Command{
 	Use:   "nexusctl",
 	Short: "Remote CLI for the Nexus daemon",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		apiClient = client.New(viper.GetString("addr"))
+		timeout := viper.GetDuration("timeout")
+		apiClient = client.New(viper.GetString("addr"),
+			client.WithHTTPClient(&http.Client{Timeout: timeout}),
+		)
 		return nil
 	},
 	SilenceUsage:  true,
@@ -33,6 +38,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	viper.SetDefault("addr", "http://127.0.0.1:9600")
+	viper.SetDefault("timeout", 10*time.Second)
 	viper.SetConfigName("nexusctl")
 	viper.SetConfigType("toml")
 
@@ -53,8 +59,10 @@ func init() {
 	viper.ReadInConfig() //nolint:errcheck // config file is optional
 
 	rootCmd.PersistentFlags().String("addr", "", "Nexus daemon address (default http://127.0.0.1:9600)")
+	rootCmd.PersistentFlags().Duration("timeout", 0, "HTTP request timeout (default 10s)")
 	rootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output raw JSON")
-	viper.BindPFlag("addr", rootCmd.PersistentFlags().Lookup("addr")) //nolint:errcheck
+	viper.BindPFlag("addr", rootCmd.PersistentFlags().Lookup("addr"))       //nolint:errcheck
+	viper.BindPFlag("timeout", rootCmd.PersistentFlags().Lookup("timeout")) //nolint:errcheck
 
 	rootCmd.AddCommand(newVMCmd())
 	rootCmd.AddCommand(newExecCmd())

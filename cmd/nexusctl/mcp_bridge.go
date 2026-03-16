@@ -35,6 +35,7 @@ func runMCPBridge() error {
 	// the Mcp-Session-Id response header on initialize; all subsequent
 	// requests must echo it back.
 	var sessionID string
+	connected := false // true after first successful request
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -52,8 +53,12 @@ func runMCPBridge() error {
 		resp, err := hc.Do(req)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "mcp-bridge: POST error: %v\n", err)
+			if !connected {
+				return fmt.Errorf("daemon unreachable: %w", err)
+			}
 			continue
 		}
+		connected = true
 
 		// Capture session ID from response (set on initialize).
 		if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
