@@ -397,6 +397,14 @@ func (d *Daemon) GracefulStop() error {
 // XDGDir returns the XDG temp directory used by this daemon.
 func (d *Daemon) XDGDir() string { return d.xdgDir }
 
+// Logs returns the daemon's stderr output captured so far.
+func (d *Daemon) Logs() ([]byte, error) {
+	if d.stderrFile == nil {
+		return nil, nil
+	}
+	return os.ReadFile(d.stderrFile.Name())
+}
+
 func (d *Daemon) Stop() error {
 	if d.cmd.Process == nil {
 		return nil
@@ -597,6 +605,22 @@ func (c *Client) CreateVMWithImage(name, tag, image string) (*VM, error) {
 
 func (c *Client) CreateVMWithInit(name, image string) (*VM, error) {
 	body := fmt.Sprintf(`{"name":%q,"image":%q,"init":true}`, name, image)
+	resp, err := c.post("/v1/vms", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
+}
+
+func (c *Client) CreateVMWithImageAndRestartPolicy(name, tag, image, policy, strategy string) (*VM, error) {
+	tagsJSON, _ := json.Marshal([]string{tag})
+	body := fmt.Sprintf(`{"name":%q,"tags":%s,"image":%q,"restart_policy":%q,"restart_strategy":%q}`,
+		name, tagsJSON, image, policy, strategy)
 	resp, err := c.post("/v1/vms", body)
 	if err != nil {
 		return nil, err

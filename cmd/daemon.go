@@ -100,6 +100,9 @@ func newDaemonCmd() *cobra.Command {
 			}
 
 			var dnsManager domain.DNSManager
+			var dnsProcess *dns.Manager   // non-nil when CoreDNS needs starting
+			var dnsLoopback string        // loopback IP for host DNS
+			var dnsDomains []string       // domains to register with resolved
 			if viper.GetBool("network-enabled") && viper.GetBool("dns-enabled") {
 				gatewayIP, err := cni.GatewayIP(viper.GetString("network-subnet"))
 				if err != nil {
@@ -122,7 +125,6 @@ func newDaemonCmd() *cobra.Command {
 				}
 
 				// Parse DNS domains — ensure "nexus" is always present.
-				var dnsDomains []string
 				for _, d := range strings.Split(viper.GetString("dns-domains"), ",") {
 					if d = strings.TrimSpace(d); d != "" {
 						dnsDomains = append(dnsDomains, d)
@@ -139,7 +141,7 @@ func newDaemonCmd() *cobra.Command {
 					dnsDomains = append([]string{"nexus"}, dnsDomains...)
 				}
 
-				dnsLoopback := viper.GetString("dns-loopback")
+				dnsLoopback = viper.GetString("dns-loopback")
 
 				dm, err := dns.New(dns.Config{
 					CoreDNSBin: viper.GetString("coredns-bin"),
@@ -154,27 +156,9 @@ func newDaemonCmd() *cobra.Command {
 					return fmt.Errorf("init dns: %w", err)
 				}
 
-				if err := dm.Start(context.Background()); err != nil {
-					return fmt.Errorf("start dns: %w", err)
-				}
-				defer dm.Stop()
 				dnsManager = dm
+				dnsProcess = dm
 				log.Info("dns enabled", "gateway", gatewayIP)
-
-				// Best-effort: register split DNS with systemd-resolved
-				// so the host can resolve *.nexus (and vanity domains).
-				if dnsLoopback != "" {
-					if err := resolved.Register("nexus0", dnsLoopback, dnsDomains); err != nil {
-						log.Warn("host dns: could not register with resolved", "err", err)
-					} else {
-						log.Info("host dns registered", "loopback", dnsLoopback, "domains", dnsDomains)
-					}
-					defer func() {
-						if err := resolved.Revert("nexus0"); err != nil {
-							log.Warn("host dns: could not revert resolved", "err", err)
-						}
-					}()
-				}
 			} else {
 				dnsManager = domain.NoopDNSManager{}
 			}
@@ -260,6 +244,30 @@ func newDaemonCmd() *cobra.Command {
 			}
 
 			svc.RestoreVMs(context.Background())
+
+			// Start CoreDNS after RestoreVMs so the bridge has its
+			// gateway IP assigned (CNI assigns it during migration).
+			if dnsProcess != nil {
+				if err := dnsProcess.Start(context.Background()); err != nil {
+					return fmt.Errorf("start dns: %w", err)
+				}
+				defer dnsProcess.Stop()
+
+				// Best-effort: register split DNS with systemd-resolved
+				// so the host can resolve *.nexus (and vanity domains).
+				if dnsLoopback != "" {
+					if err := resolved.Register("nexus0", dnsLoopback, dnsDomains); err != nil {
+						log.Warn("host dns: could not register with resolved", "err", err)
+					} else {
+						log.Info("host dns registered", "loopback", dnsLoopback, "domains", dnsDomains)
+					}
+					defer func() {
+						if err := resolved.Revert("nexus0"); err != nil {
+							log.Warn("host dns: could not revert resolved", "err", err)
+						}
+					}()
+				}
+			}
 
 			monitorCtx, monitorCancel := context.WithCancel(context.Background())
 			defer monitorCancel()

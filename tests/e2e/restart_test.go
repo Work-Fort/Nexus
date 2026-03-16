@@ -505,7 +505,7 @@ func TestCleanRebootAlwaysPolicy(t *testing.T) {
 	}
 
 	c := harness.NewClient(addr)
-	vm, err := c.CreateVMWithRestartPolicy("test-reboot-always", "agent", "always", "immediate")
+	vm, err := c.CreateVMWithImageAndRestartPolicy("test-reboot-always", "agent", "docker.io/library/nginx:alpine", "always", "immediate")
 	if err != nil {
 		d1.Stop()
 		t.Fatalf("create VM: %v", err)
@@ -542,6 +542,7 @@ func TestCleanRebootAlwaysPolicy(t *testing.T) {
 		harness.WithNetworkEnabled(true),
 		harness.WithNetworkSubnet("10.99.0.0/24"),
 		harness.WithBridgeName(bridge),
+		harness.WithLogLevel("info"),
 	)
 	if err != nil {
 		t.Fatalf("start second daemon: %v", err)
@@ -569,6 +570,38 @@ func TestCleanRebootAlwaysPolicy(t *testing.T) {
 		t.Fatal("VM has no IP after clean reboot")
 	}
 	t.Logf("VM auto-started after clean reboot with IP %s", got.IP)
+
+	// Verify VM is actually functional (not just state=running in DB).
+	var result *harness.ExecResult
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"echo", "alive"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		// Try multiple log paths.
+		for _, logPath := range []string{
+			filepath.Join(d2.XDGDir(), "state", "nexus", "debug.log"),
+			filepath.Join(d1.XDGDir(), "state", "nexus", "debug.log"),
+		} {
+			if logs, logErr := os.ReadFile(logPath); logErr == nil && len(logs) > 0 {
+				lines := strings.Split(string(logs), "\n")
+				start := 0
+				if len(lines) > 30 {
+					start = len(lines) - 30
+				}
+				t.Logf("daemon log (%s, last 30 lines):\n%s", logPath, strings.Join(lines[start:], "\n"))
+				break
+			} else {
+				t.Logf("log not found at %s: %v", logPath, logErr)
+			}
+		}
+		t.Fatalf("exec after clean reboot: %v", err)
+	}
+	t.Logf("VM exec works after clean reboot: %s", strings.TrimSpace(result.Stdout))
 }
 
 // TestCleanRebootNonePolicyManualStart simulates a full system reboot and
@@ -715,7 +748,7 @@ func TestCleanRebootWithDNS(t *testing.T) {
 	}
 
 	c := harness.NewClient(addr)
-	vm, err := c.CreateVMWithRestartPolicy("test-reboot-dns", "agent", "always", "immediate")
+	vm, err := c.CreateVMWithImageAndRestartPolicy("test-reboot-dns", "agent", "docker.io/library/nginx:alpine", "always", "immediate")
 	if err != nil {
 		d1.Stop()
 		t.Fatalf("create VM: %v", err)
@@ -779,4 +812,120 @@ func TestCleanRebootWithDNS(t *testing.T) {
 		t.Fatalf("expected state=running after clean reboot with DNS, got %s", got.State)
 	}
 	t.Logf("VM auto-started after clean reboot with DNS, IP %s", got.IP)
+}
+
+// TestCleanRebootDNSResolution simulates a full system reboot with DNS enabled
+// and verifies that CoreDNS starts correctly and VMs can resolve names. After
+// a reboot, the bridge has no IP until CNI runs during migration — CoreDNS must
+// not fail to bind before that happens.
+func TestCleanRebootDNSResolution(t *testing.T) {
+	requireNetworkCaps(t)
+
+	bridge := "nexreboot3"
+	cleanBridge(t, bridge)
+	t.Cleanup(func() { cleanBridge(t, bridge) })
+
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d1, err := harness.StartDaemon(nexusBin, binDir, addr,
+		harness.WithNetworkEnabled(true),
+		harness.WithDNSEnabled(true),
+		harness.WithNetworkSubnet("10.99.0.0/24"),
+		harness.WithBridgeName(bridge),
+		harness.WithDNSLoopback("127.0.0.103"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := harness.NewClient(addr)
+	vm, err := c.CreateVMWithImageAndRestartPolicy("test-reboot-dnsres", "agent", "docker.io/library/nginx:alpine", "always", "immediate")
+	if err != nil {
+		d1.Stop()
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		d1.Stop()
+		t.Fatalf("start VM: %v", err)
+	}
+
+	got, err := c.GetVM(vm.ID)
+	if err != nil {
+		d1.Stop()
+		t.Fatalf("get VM: %v", err)
+	}
+	t.Logf("VM running with IP %s", got.IP)
+
+	if err := d1.GracefulStop(); err != nil {
+		t.Logf("graceful stop: %v", err)
+	}
+
+	// Simulate reboot: wipe all runtime state.
+	wipeNetnsDir(t)
+	wipeDNSDir(t)
+	cleanBridge(t, bridge)
+
+	// Restart daemon — CoreDNS must bind successfully even though the
+	// bridge has no IP yet (it gets assigned during migration).
+	d2, err := harness.StartDaemonWithNamespace(nexusBin, binDir, addr, d1.Namespace(), d1.XDGDir(),
+		harness.WithNetworkEnabled(true),
+		harness.WithDNSEnabled(true),
+		harness.WithNetworkSubnet("10.99.0.0/24"),
+		harness.WithBridgeName(bridge),
+		harness.WithDNSLoopback("127.0.0.103"),
+		harness.WithLogLevel("info"),
+	)
+	if err != nil {
+		t.Fatalf("start second daemon: %v", err)
+	}
+	defer d2.StopFatal(t)
+
+	// Wait for VM to auto-start.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err = c.GetVM(vm.ID)
+		if err == nil && got.State == "running" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if got.State != "running" {
+		t.Fatalf("expected state=running after clean reboot, got %s", got.State)
+	}
+
+	// Verify exec works at all first.
+	var result *harness.ExecResult
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"echo", "hello"})
+		if err == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("exec echo after clean reboot: %v", err)
+	}
+	t.Logf("exec works: %s", strings.TrimSpace(result.Stdout))
+
+	// The critical test: DNS resolution must work from inside the VM.
+	// nslookup queries the gateway IP (where CoreDNS should be listening).
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"nslookup", "test-reboot-dnsres.nexus"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("nslookup after clean reboot: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("nslookup failed (exit %d): stdout=%s stderr=%s", result.ExitCode, result.Stdout, result.Stderr)
+	}
+	t.Logf("DNS resolution works after clean reboot: %s", strings.TrimSpace(result.Stdout))
 }
