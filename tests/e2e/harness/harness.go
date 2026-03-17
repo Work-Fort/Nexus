@@ -523,7 +523,8 @@ type VM struct {
 	StoppedAt       *string `json:"stopped_at,omitempty"`
 	RestartPolicy   string  `json:"restart_policy"`
 	RestartStrategy string  `json:"restart_strategy"`
-	Shell           string  `json:"shell"`
+	Shell           string            `json:"shell"`
+	Env             map[string]string `json:"env,omitempty"`
 }
 
 type ExecResult struct {
@@ -603,6 +604,22 @@ func (c *Client) CreateVMWithImage(name, tag, image string) (*VM, error) {
 	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
 }
 
+func (c *Client) CreateVMWithEnv(name, tag, image string, env map[string]string) (*VM, error) {
+	tagsJSON, _ := json.Marshal([]string{tag})
+	envJSON, _ := json.Marshal(env)
+	body := fmt.Sprintf(`{"name":%q,"tags":%s,"image":%q,"env":%s}`, name, tagsJSON, image, envJSON)
+	resp, err := c.post("/v1/vms", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
+}
+
 func (c *Client) CreateVMWithInit(name, image string) (*VM, error) {
 	body := fmt.Sprintf(`{"name":%q,"image":%q,"init":true}`, name, image)
 	resp, err := c.post("/v1/vms", body)
@@ -652,6 +669,21 @@ func (c *Client) CreateVMWithRestartPolicy(name, tag, policy, strategy string) (
 func (c *Client) UpdateRestartPolicy(id, policy, strategy string) (*VM, error) {
 	body := fmt.Sprintf(`{"restart_policy":%q,"restart_strategy":%q}`, policy, strategy)
 	resp, err := c.put("/v1/vms/"+id+"/restart-policy", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
+}
+
+func (c *Client) UpdateEnv(id string, env map[string]string) (*VM, error) {
+	envJSON, _ := json.Marshal(env)
+	body := fmt.Sprintf(`{"env":%s}`, envJSON)
+	resp, err := c.put("/v1/vms/"+id+"/env", body)
 	if err != nil {
 		return nil, err
 	}

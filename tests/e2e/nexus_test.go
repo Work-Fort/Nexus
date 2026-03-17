@@ -903,6 +903,91 @@ func TestDeleteDevice(t *testing.T) {
 	}
 }
 
+func TestVMEnvVars(t *testing.T) {
+	requireNetworkCaps(t)
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithBridgeName(e2eBridgeName))
+
+	// Step 1: Create VM with env vars.
+	env := map[string]string{"MY_VAR": "hello", "OTHER": "world"}
+	vm, err := c.CreateVMWithEnv("test-env", "agent", "docker.io/library/nginx:alpine", env)
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	// Step 2: Start and verify env var via exec.
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	var result *harness.ExecResult
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"printenv", "MY_VAR"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("exec printenv MY_VAR: %v", err)
+	}
+	if got := strings.TrimSpace(result.Stdout); got != "hello" {
+		t.Fatalf("MY_VAR = %q, want %q", got, "hello")
+	}
+
+	// Step 3: Check GetVM response has correct env vars.
+	got, err := c.GetVM(vm.ID)
+	if err != nil {
+		t.Fatalf("get VM: %v", err)
+	}
+	if got.Env["MY_VAR"] != "hello" || got.Env["OTHER"] != "world" {
+		t.Fatalf("env = %v, want MY_VAR=hello OTHER=world", got.Env)
+	}
+
+	// Step 4: Stop VM and update env (replace, not merge).
+	if err := c.StopVM(vm.ID); err != nil {
+		t.Fatalf("stop VM: %v", err)
+	}
+	newEnv := map[string]string{"MY_VAR": "updated", "NEW_KEY": "new_value"}
+	if _, err := c.UpdateEnv(vm.ID, newEnv); err != nil {
+		t.Fatalf("update env: %v", err)
+	}
+
+	// Step 5: Start again and verify updated env.
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM after env update: %v", err)
+	}
+
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"printenv", "MY_VAR"})
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("exec printenv MY_VAR after update: %v", err)
+	}
+	if got := strings.TrimSpace(result.Stdout); got != "updated" {
+		t.Fatalf("MY_VAR = %q after update, want %q", got, "updated")
+	}
+
+	// Step 6: Verify OTHER is gone (replaced, not merged) and NEW_KEY exists.
+	result, err = c.ExecVM(vm.ID, []string{"printenv", "OTHER"})
+	if err == nil && result.ExitCode == 0 {
+		t.Fatalf("OTHER should be gone after env replace, but got: %q", result.Stdout)
+	}
+
+	result, err = c.ExecVM(vm.ID, []string{"printenv", "NEW_KEY"})
+	if err != nil {
+		t.Fatalf("exec printenv NEW_KEY: %v", err)
+	}
+	if got := strings.TrimSpace(result.Stdout); got != "new_value" {
+		t.Fatalf("NEW_KEY = %q, want %q", got, "new_value")
+	}
+}
+
 func TestGetNonexistentVM(t *testing.T) {
 	_, c := startDaemon(t)
 
