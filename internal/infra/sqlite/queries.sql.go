@@ -435,7 +435,7 @@ func (q *Queries) GetTemplateByName(ctx context.Context, name string) (Template,
 }
 
 const getVM = `-- name: GetVM :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env
 FROM vms WHERE id = ?
 `
 
@@ -463,12 +463,13 @@ func (q *Queries) GetVM(ctx context.Context, id string) (Vm, error) {
 		&i.Init,
 		&i.TemplateID,
 		&i.ScriptOverride,
+		&i.Env,
 	)
 	return i, err
 }
 
 const getVMByName = `-- name: GetVMByName :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env
 FROM vms WHERE name = ?
 `
 
@@ -496,6 +497,7 @@ func (q *Queries) GetVMByName(ctx context.Context, name string) (Vm, error) {
 		&i.Init,
 		&i.TemplateID,
 		&i.ScriptOverride,
+		&i.Env,
 	)
 	return i, err
 }
@@ -621,8 +623,8 @@ func (q *Queries) InsertTemplate(ctx context.Context, arg InsertTemplateParams) 
 
 const insertVM = `-- name: InsertVM :exec
 
-INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertVMParams struct {
@@ -644,6 +646,7 @@ type InsertVMParams struct {
 	Init            int64          `json:"init"`
 	TemplateID      sql.NullString `json:"template_id"`
 	ScriptOverride  sql.NullString `json:"script_override"`
+	Env             string         `json:"env"`
 }
 
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -667,6 +670,7 @@ func (q *Queries) InsertVM(ctx context.Context, arg InsertVMParams) error {
 		arg.Init,
 		arg.TemplateID,
 		arg.ScriptOverride,
+		arg.Env,
 	)
 	return err
 }
@@ -811,7 +815,7 @@ func (q *Queries) ListTemplates(ctx context.Context) ([]Template, error) {
 }
 
 const listVMs = `-- name: ListVMs :many
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env
 FROM vms ORDER BY created_at DESC
 `
 
@@ -845,6 +849,7 @@ func (q *Queries) ListVMs(ctx context.Context) ([]Vm, error) {
 			&i.Init,
 			&i.TemplateID,
 			&i.ScriptOverride,
+			&i.Env,
 		); err != nil {
 			return nil, err
 		}
@@ -934,7 +939,7 @@ func (q *Queries) ResolveTemplate(ctx context.Context, arg ResolveTemplateParams
 }
 
 const resolveVM = `-- name: ResolveVM :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env
 FROM vms WHERE id = ? OR name = ?
 `
 
@@ -967,6 +972,7 @@ func (q *Queries) ResolveVM(ctx context.Context, arg ResolveVMParams) (Vm, error
 		&i.Init,
 		&i.TemplateID,
 		&i.ScriptOverride,
+		&i.Env,
 	)
 	return i, err
 }
@@ -991,6 +997,20 @@ func (q *Queries) UpdateTemplate(ctx context.Context, arg UpdateTemplateParams) 
 		arg.UpdatedAt,
 		arg.ID,
 	)
+	return err
+}
+
+const updateVMEnv = `-- name: UpdateVMEnv :exec
+UPDATE vms SET env = ? WHERE id = ?
+`
+
+type UpdateVMEnvParams struct {
+	Env string `json:"env"`
+	ID  string `json:"id"`
+}
+
+func (q *Queries) UpdateVMEnv(ctx context.Context, arg UpdateVMEnvParams) error {
+	_, err := q.db.ExecContext(ctx, updateVMEnv, arg.Env, arg.ID)
 	return err
 }
 

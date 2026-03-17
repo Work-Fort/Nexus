@@ -106,15 +106,20 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 		scriptOverride = sql.NullString{String: vm.ScriptOverride, Valid: true}
 	}
 
+	envJSON := "{}"
+	if len(vm.Env) > 0 {
+		b, _ := json.Marshal(vm.Env)
+		envJSON = string(b)
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path,
 			dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell,
-			init, template_id, script_override)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+			init, template_id, script_override, env)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		vm.ID, vm.Name, vm.Image, vm.Runtime, string(vm.State), vm.CreatedAt.UTC(),
 		vm.IP, vm.Gateway, vm.NetNSPath, dnsServers, dnsSearch, vm.RootSize,
 		string(vm.RestartPolicy), string(vm.RestartStrategy), vm.Shell,
-		vm.Init, templateID, scriptOverride,
+		vm.Init, templateID, scriptOverride, envJSON,
 	)
 	if err != nil {
 		return err
@@ -214,6 +219,16 @@ func (s *Store) UpdateRestartPolicy(ctx context.Context, id string, policy domai
 
 func (s *Store) UpdateShell(ctx context.Context, id, shell string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE vms SET shell = $1 WHERE id = $2`, shell, id)
+	return err
+}
+
+func (s *Store) UpdateEnv(ctx context.Context, id string, env map[string]string) error {
+	envJSON := "{}"
+	if len(env) > 0 {
+		b, _ := json.Marshal(env)
+		envJSON = string(b)
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE vms SET env = $1 WHERE id = $2`, envJSON, id)
 	return err
 }
 
@@ -466,11 +481,11 @@ func (s *Store) CountTemplateRefs(ctx context.Context, templateID string) (int, 
 
 const vmCols = `id, name, image, runtime, state, created_at, started_at, stopped_at,
 	ip, gateway, netns_path, dns_servers, dns_search, root_size,
-	restart_policy, restart_strategy, shell, init, template_id, script_override`
+	restart_policy, restart_strategy, shell, init, template_id, script_override, env`
 
 const vmColsPrefixed = `v.id, v.name, v.image, v.runtime, v.state, v.created_at, v.started_at, v.stopped_at,
 	v.ip, v.gateway, v.netns_path, v.dns_servers, v.dns_search, v.root_size,
-	v.restart_policy, v.restart_strategy, v.shell, v.init, v.template_id, v.script_override`
+	v.restart_policy, v.restart_strategy, v.shell, v.init, v.template_id, v.script_override, v.env`
 
 const driveCols = `id, name, size_bytes, mount_path, vm_id, created_at`
 const deviceCols = `id, name, host_path, container_path, permissions, gid, vm_id, created_at`
@@ -504,13 +519,14 @@ func scanVMRow(s scanner) (*domain.VM, error) {
 	var createdAt time.Time
 	var startedAt, stoppedAt sql.NullTime
 	var dnsServers, dnsSearch, templateID, scriptOverride sql.NullString
+	var envJSON string
 
 	err := s.Scan(
 		&vm.ID, &vm.Name, &vm.Image, &vm.Runtime, &state, &createdAt,
 		&startedAt, &stoppedAt, &vm.IP, &vm.Gateway, &vm.NetNSPath,
 		&dnsServers, &dnsSearch, &vm.RootSize,
 		&restartPolicy, &restartStrategy, &vm.Shell, &vm.Init,
-		&templateID, &scriptOverride,
+		&templateID, &scriptOverride, &envJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -539,6 +555,9 @@ func scanVMRow(s scanner) (*domain.VM, error) {
 		if dnsSearch.Valid {
 			json.Unmarshal([]byte(dnsSearch.String), &vm.DNSConfig.Search)
 		}
+	}
+	if envJSON != "" && envJSON != "{}" {
+		json.Unmarshal([]byte(envJSON), &vm.Env)
 	}
 	return &vm, nil
 }

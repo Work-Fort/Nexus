@@ -136,6 +136,15 @@ func (m *mockStore) UpdateNetwork(_ context.Context, id, ip, gateway, netnsPath 
 	return nil
 }
 
+func (m *mockStore) UpdateEnv(_ context.Context, id string, env map[string]string) error {
+	vm, ok := m.vms[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	vm.Env = env
+	return nil
+}
+
 func (m *mockStore) SetTags(_ context.Context, vmID string, tags []string) error {
 	vm, ok := m.vms[vmID]
 	if !ok {

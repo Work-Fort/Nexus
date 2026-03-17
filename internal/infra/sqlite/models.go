@@ -65,6 +65,7 @@ type Vm struct {
 	Init            int64          `json:"init"`
 	TemplateID      sql.NullString `json:"template_id"`
 	ScriptOverride  sql.NullString `json:"script_override"`
+	Env             string         `json:"env"`
 }
 
 type VmTag struct {

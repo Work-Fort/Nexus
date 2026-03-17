@@ -117,6 +117,11 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 	if vm.ScriptOverride != "" {
 		scriptOverride = sql.NullString{String: vm.ScriptOverride, Valid: true}
 	}
+	envJSON := "{}"
+	if len(vm.Env) > 0 {
+		b, _ := json.Marshal(vm.Env)
+		envJSON = string(b)
+	}
 	if err := s.q.InsertVM(ctx, InsertVMParams{
 		ID:              vm.ID,
 		Name:            vm.Name,
@@ -136,6 +141,7 @@ func (s *Store) Create(ctx context.Context, vm *domain.VM) error {
 		Init:            initVal,
 		TemplateID:      templateID,
 		ScriptOverride:  scriptOverride,
+		Env:             envJSON,
 	}); err != nil {
 		return err
 	}
@@ -221,13 +227,15 @@ func (s *Store) listByTags(ctx context.Context, tags []string, matchMode string)
 	if matchMode == "any" {
 		query = `SELECT DISTINCT v.id, v.name, v.image, v.runtime, v.state,
 			v.created_at, v.started_at, v.stopped_at, v.ip, v.gateway, v.netns_path,
-			v.dns_servers, v.dns_search, v.root_size, v.restart_policy, v.restart_strategy, v.shell
+			v.dns_servers, v.dns_search, v.root_size, v.restart_policy, v.restart_strategy, v.shell,
+			v.init, v.template_id, v.script_override, v.env
 			FROM vms v JOIN vm_tags t ON v.id = t.vm_id
 			WHERE t.tag IN (` + inClause + `) ORDER BY v.created_at DESC`
 	} else {
 		query = `SELECT v.id, v.name, v.image, v.runtime, v.state,
 			v.created_at, v.started_at, v.stopped_at, v.ip, v.gateway, v.netns_path,
-			v.dns_servers, v.dns_search, v.root_size, v.restart_policy, v.restart_strategy, v.shell
+			v.dns_servers, v.dns_search, v.root_size, v.restart_policy, v.restart_strategy, v.shell,
+			v.init, v.template_id, v.script_override, v.env
 			FROM vms v JOIN vm_tags t ON v.id = t.vm_id
 			WHERE t.tag IN (` + inClause + `)
 			GROUP BY v.id HAVING COUNT(DISTINCT t.tag) = ?
@@ -249,7 +257,8 @@ func (s *Store) listByTags(ctx context.Context, tags []string, matchMode string)
 		if err := rows.Scan(&row.ID, &row.Name, &row.Image, &row.Runtime,
 			&row.State, &row.CreatedAt, &row.StartedAt, &row.StoppedAt,
 			&row.Ip, &row.Gateway, &row.NetnsPath, &row.DnsServers,
-			&row.DnsSearch, &row.RootSize, &row.RestartPolicy, &row.RestartStrategy, &row.Shell); err != nil {
+			&row.DnsSearch, &row.RootSize, &row.RestartPolicy, &row.RestartStrategy, &row.Shell,
+			&row.Init, &row.TemplateID, &row.ScriptOverride, &row.Env); err != nil {
 			return nil, fmt.Errorf("scan vm: %w", err)
 		}
 		scanned = append(scanned, row)
@@ -310,6 +319,15 @@ func (s *Store) UpdateShell(ctx context.Context, id, shell string) error {
 		Shell: shell,
 		ID:    id,
 	})
+}
+
+func (s *Store) UpdateEnv(ctx context.Context, id string, env map[string]string) error {
+	envJSON := "{}"
+	if len(env) > 0 {
+		b, _ := json.Marshal(env)
+		envJSON = string(b)
+	}
+	return s.q.UpdateVMEnv(ctx, UpdateVMEnvParams{Env: envJSON, ID: id})
 }
 
 func (s *Store) UpdateNetwork(ctx context.Context, id, ip, gateway, netnsPath string) error {
@@ -626,6 +644,9 @@ func vmFromRow(row Vm) (*domain.VM, error) {
 		Init:            row.Init != 0,
 		TemplateID:      row.TemplateID.String,
 		ScriptOverride:  row.ScriptOverride.String,
+	}
+	if row.Env != "" && row.Env != "{}" {
+		json.Unmarshal([]byte(row.Env), &vm.Env)
 	}
 	var err error
 	vm.CreatedAt, err = time.Parse(timeFormat, row.CreatedAt)

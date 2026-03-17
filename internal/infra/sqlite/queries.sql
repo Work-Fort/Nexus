@@ -1,19 +1,19 @@
 -- SPDX-License-Identifier: GPL-3.0-or-later
 
 -- name: InsertVM :exec
-INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO vms (id, name, image, runtime, state, created_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetVM :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env
 FROM vms WHERE id = ?;
 
 -- name: GetVMByName :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env
 FROM vms WHERE name = ?;
 
 -- name: ListVMs :many
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env
 FROM vms ORDER BY created_at DESC;
 
 -- name: UpdateVMStateCreated :exec
@@ -111,7 +111,7 @@ FROM devices WHERE vm_id = ? ORDER BY host_path;
 DELETE FROM devices WHERE id = ?;
 
 -- name: ResolveVM :one
-SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override
+SELECT id, name, image, runtime, state, created_at, started_at, stopped_at, ip, gateway, netns_path, dns_servers, dns_search, root_size, restart_policy, restart_strategy, shell, init, template_id, script_override, env
 FROM vms WHERE id = ? OR name = ?;
 
 -- name: UpdateVMRestartPolicy :exec
@@ -180,6 +180,9 @@ SELECT id, vm_id, name, created_at FROM snapshots WHERE vm_id = ? ORDER BY creat
 
 -- name: DeleteSnapshotByID :exec
 DELETE FROM snapshots WHERE id = ?;
+
+-- name: UpdateVMEnv :exec
+UPDATE vms SET env = ? WHERE id = ?;
 
 -- name: UpdateVMNetwork :exec
 UPDATE vms SET ip = ?, gateway = ?, netns_path = ? WHERE id = ?;
