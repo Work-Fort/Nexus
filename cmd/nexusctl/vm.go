@@ -26,6 +26,7 @@ func newVMCmd() *cobra.Command {
 		newVMExportCmd(),
 		newVMImportCmd(),
 		newVMSyncShellCmd(),
+		newEnvCmd(),
 	)
 	return cmd
 }

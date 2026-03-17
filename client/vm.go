@@ -33,10 +33,11 @@ type VM struct {
 	RestartPolicy   string     `json:"restart_policy"`
 	RestartStrategy string     `json:"restart_strategy"`
 	Shell           string     `json:"shell,omitempty"`
-	Init            bool       `json:"init"`
-	TemplateID      string     `json:"template_id,omitempty"`
-	ScriptOverride  string     `json:"script_override,omitempty"`
-	CreatedAt       string     `json:"created_at"`
+	Env             map[string]string `json:"env,omitempty"`
+	Init            bool              `json:"init"`
+	TemplateID      string            `json:"template_id,omitempty"`
+	ScriptOverride  string            `json:"script_override,omitempty"`
+	CreatedAt       string            `json:"created_at"`
 	StartedAt       *string    `json:"started_at,omitempty"`
 	StoppedAt       *string    `json:"stopped_at,omitempty"`
 }
@@ -52,8 +53,9 @@ type CreateVMParams struct {
 	RestartPolicy   string     `json:"restart_policy,omitempty"`
 	RestartStrategy string     `json:"restart_strategy,omitempty"`
 	Shell           string     `json:"shell,omitempty"`
-	Init            bool       `json:"init,omitempty"`
-	Template        string     `json:"template,omitempty"`
+	Env             map[string]string `json:"env,omitempty"`
+	Init            bool              `json:"init,omitempty"`
+	Template        string            `json:"template,omitempty"`
 }
 
 // ExecResult holds command output from a VM.
@@ -219,6 +221,19 @@ func (c *Client) ExecStreamVM(ctx context.Context, ref string, cmd []string, std
 // SetTags replaces all tags on a VM.
 func (c *Client) SetTags(ctx context.Context, ref string, tags []string) (*VM, error) {
 	resp, err := c.put(ctx, "/v1/vms/"+url.PathEscape(ref)+"/tags", map[string]any{"tags": tags})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := handleResponse(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	return decodeJSON[VM](resp)
+}
+
+// UpdateEnv replaces all environment variables on a VM.
+func (c *Client) UpdateEnv(ctx context.Context, ref string, env map[string]string) (*VM, error) {
+	resp, err := c.put(ctx, "/v1/vms/"+url.PathEscape(ref)+"/env", map[string]any{"env": env})
 	if err != nil {
 		return nil, err
 	}
