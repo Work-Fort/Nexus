@@ -20,6 +20,7 @@ type VMStore interface {
 	UpdateRestartPolicy(ctx context.Context, id string, policy RestartPolicy, strategy RestartStrategy) error
 	UpdateShell(ctx context.Context, id, shell string) error
 	UpdateNetwork(ctx context.Context, id, ip, gateway, netnsPath string) error
+	UpdateEnv(ctx context.Context, id string, env map[string]string) error
 	SetTags(ctx context.Context, vmID string, tags []string) error
 	Delete(ctx context.Context, id string) error
 }
@@ -52,7 +53,8 @@ type CreateConfig struct {
 	ResolvConfPath string
 	RootSize       int64  // bytes, 0 = no quota
 	InitScriptPath string // host path to init bootstrap script
-	StopSignal     int    // signal number for stopping the container; 0 = SIGTERM
+	StopSignal     int      // signal number for stopping the container; 0 = SIGTERM
+	Env            []string // KEY=VALUE environment variables for the OCI spec
 }
 
 // CreateOpt is a functional option for Runtime.Create.
@@ -62,6 +64,13 @@ type CreateOpt func(*CreateConfig)
 func WithNetNS(path string) CreateOpt {
 	return func(c *CreateConfig) {
 		c.NetNSPath = path
+	}
+}
+
+// WithEnv sets environment variables for the container (KEY=VALUE format).
+func WithEnv(env []string) CreateOpt {
+	return func(c *CreateConfig) {
+		c.Env = env
 	}
 }
 

@@ -65,7 +65,8 @@ type VM struct {
 	RestartStrategy RestartStrategy
 	Init           bool   // whether init injection is enabled
 	TemplateID     string // reference to provisioning template
-	ScriptOverride string // per-VM script override, empty = use template
+	ScriptOverride string            // per-VM script override, empty = use template
+	Env            map[string]string // user-settable environment variables
 	CreatedAt       time.Time
 	StartedAt *time.Time
 	StoppedAt *time.Time
@@ -83,7 +84,8 @@ type CreateVMParams struct {
 	RestartPolicy   RestartPolicy
 	RestartStrategy RestartStrategy
 	Init         bool   // opt-in init injection
-	TemplateName string // optional explicit template, empty = auto-detect
+	TemplateName string            // optional explicit template, empty = auto-detect
+	Env          map[string]string // user-settable environment variables
 }
 
 // ExecResult holds the output of a command executed inside a VM.
