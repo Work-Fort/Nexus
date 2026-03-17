@@ -587,10 +587,31 @@ func (r *Runtime) Start(ctx context.Context, id string, opts ...domain.CreateOpt
 		o(&cfg)
 	}
 
-	// Update env vars in the spec if provided.
-	if len(cfg.Env) > 0 {
+	// Delete container but keep the snapshot intact.
+	if err := container.Delete(ctx); err != nil {
+		return fmt.Errorf("delete container %s: %w", id, err)
+	}
+
+	// Recreate container with updated spec, reusing existing snapshot.
+	snapshotter := info.Snapshotter
+	if snapshotter == "" {
+		snapshotter = r.snapshotter
+	}
+
+	img, err := r.client.GetImage(ctx, info.Image)
+	if err != nil {
+		return fmt.Errorf("get image %s: %w", info.Image, err)
+	}
+
+	// Replace env vars: start from image defaults, then overlay user env.
+	// This ensures removed user vars don't persist from previous runs.
+	if cfg.Env != nil {
+		imgSpec, err := img.Spec(ctx)
+		if err != nil {
+			return fmt.Errorf("read image config %s: %w", info.Image, err)
+		}
 		envMap := make(map[string]string)
-		for _, e := range spec.Process.Env {
+		for _, e := range imgSpec.Config.Env {
 			parts := strings.SplitN(e, "=", 2)
 			if len(parts) == 2 {
 				envMap[parts[0]] = parts[1]
@@ -608,22 +629,6 @@ func (r *Runtime) Start(ctx context.Context, id string, opts ...domain.CreateOpt
 		}
 		sort.Strings(newEnv)
 		spec.Process.Env = newEnv
-	}
-
-	// Delete container but keep the snapshot intact.
-	if err := container.Delete(ctx); err != nil {
-		return fmt.Errorf("delete container %s: %w", id, err)
-	}
-
-	// Recreate container with updated spec, reusing existing snapshot.
-	snapshotter := info.Snapshotter
-	if snapshotter == "" {
-		snapshotter = r.snapshotter
-	}
-
-	img, err := r.client.GetImage(ctx, info.Image)
-	if err != nil {
-		return fmt.Errorf("get image %s: %w", info.Image, err)
 	}
 
 	containerOpts := []client.NewContainerOpts{
