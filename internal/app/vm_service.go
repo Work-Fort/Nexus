@@ -249,6 +249,15 @@ func (s *VMService) CreateVM(ctx context.Context, params domain.CreateVMParams) 
 		}
 	}
 
+	if len(params.Env) > 0 {
+		var envSlice []string
+		for k, v := range params.Env {
+			envSlice = append(envSlice, k+"="+v)
+		}
+		createOpts = append(createOpts, domain.WithEnv(envSlice))
+	}
+	vm.Env = params.Env
+
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {
 		s.dns.RemoveRecord(ctx, vm.Name)  //nolint:errcheck
 		s.dns.CleanupResolvConf(vm.ID)    //nolint:errcheck
@@ -286,7 +295,15 @@ func (s *VMService) StartVM(ctx context.Context, ref string) error {
 		return domain.ErrInvalidState
 	}
 
-	if err := s.runtime.Start(ctx, vm.ID); err != nil {
+	var startOpts []domain.CreateOpt
+	if len(vm.Env) > 0 {
+		var envSlice []string
+		for k, v := range vm.Env {
+			envSlice = append(envSlice, k+"="+v)
+		}
+		startOpts = append(startOpts, domain.WithEnv(envSlice))
+	}
+	if err := s.runtime.Start(ctx, vm.ID, startOpts...); err != nil {
 		return fmt.Errorf("runtime start: %w", err)
 	}
 
@@ -509,6 +526,21 @@ func (s *VMService) UpdateRestartPolicy(ctx context.Context, ref string, policy 
 	vm.RestartPolicy = policy
 	vm.RestartStrategy = strategy
 	log.Info("restart policy updated", "id", vm.ID, "policy", policy, "strategy", strategy)
+	return vm, nil
+}
+
+// UpdateEnv replaces the environment variables for a VM. The new env takes
+// effect on the next Start (container recreation applies the updated spec).
+func (s *VMService) UpdateEnv(ctx context.Context, ref string, env map[string]string) (*domain.VM, error) {
+	vm, err := s.store.Resolve(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.UpdateEnv(ctx, vm.ID, env); err != nil {
+		return nil, fmt.Errorf("store update env: %w", err)
+	}
+	vm.Env = env
+	log.Info("env updated", "id", vm.ID, "count", len(env))
 	return vm, nil
 }
 
@@ -974,6 +1006,14 @@ func (s *VMService) recreateContainer(ctx context.Context, vm *domain.VM) error 
 				createOpts = append(createOpts, domain.WithStopSignal(sig))
 			}
 		}
+	}
+
+	if len(vm.Env) > 0 {
+		var envSlice []string
+		for k, v := range vm.Env {
+			envSlice = append(envSlice, k+"="+v)
+		}
+		createOpts = append(createOpts, domain.WithEnv(envSlice))
 	}
 
 	if err := s.runtime.Create(ctx, vm.ID, vm.Image, vm.Runtime, createOpts...); err != nil {

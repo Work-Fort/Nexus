@@ -45,7 +45,15 @@ func (s *VMService) RestoreVMs(ctx context.Context) {
 			if err := s.runtime.Stop(ctx, vm.ID); err != nil {
 				log.Debug("restore: stop stale task", "id", vm.ID, "err", err)
 			}
-			if err := s.runtime.Start(ctx, vm.ID); err != nil {
+			var startOpts []domain.CreateOpt
+			if len(vm.Env) > 0 {
+				var envSlice []string
+				for k, v := range vm.Env {
+					envSlice = append(envSlice, k+"="+v)
+				}
+				startOpts = append(startOpts, domain.WithEnv(envSlice))
+			}
+			if err := s.runtime.Start(ctx, vm.ID, startOpts...); err != nil {
 				log.Error("restore: start vm", "id", vm.ID, "name", vm.Name, "err", err)
 				// Mark as stopped so state is honest.
 				s.store.UpdateState(ctx, vm.ID, domain.VMStateStopped, time.Now().UTC()) //nolint:errcheck
@@ -252,7 +260,15 @@ func (s *VMService) StartCrashMonitor(ctx context.Context) {
 				// No delay.
 			}
 
-			if err := s.runtime.Start(ctx, vm.ID); err != nil {
+			var restartOpts []domain.CreateOpt
+			if len(vm.Env) > 0 {
+				var envSlice []string
+				for k, v := range vm.Env {
+					envSlice = append(envSlice, k+"="+v)
+				}
+				restartOpts = append(restartOpts, domain.WithEnv(envSlice))
+			}
+			if err := s.runtime.Start(ctx, vm.ID, restartOpts...); err != nil {
 				log.Error("crash monitor: restart failed", "id", vm.ID, "name", vm.Name, "err", err)
 				return
 			}
