@@ -29,7 +29,7 @@ type VMStore interface {
 // internal/infra/.
 type Runtime interface {
 	Create(ctx context.Context, id, image, runtimeHandler string, opts ...CreateOpt) error
-	Start(ctx context.Context, id string) error
+	Start(ctx context.Context, id string, opts ...CreateOpt) error
 	Stop(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
 	Exec(ctx context.Context, id string, cmd []string) (*ExecResult, error)

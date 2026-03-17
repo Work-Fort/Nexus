@@ -84,7 +84,7 @@ func (m *mockRuntimeForRestart) Create(_ context.Context, _, _, _ string, _ ...d
 	return nil
 }
 
-func (m *mockRuntimeForRestart) Start(_ context.Context, id string) error {
+func (m *mockRuntimeForRestart) Start(_ context.Context, id string, _ ...domain.CreateOpt) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.startCalls = append(m.startCalls, id)

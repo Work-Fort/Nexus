@@ -217,7 +217,7 @@ func (m *mockRuntime) Create(_ context.Context, id, image, runtime string, opts 
 	return nil
 }
 
-func (m *mockRuntime) Start(_ context.Context, id string) error {
+func (m *mockRuntime) Start(_ context.Context, id string, _ ...domain.CreateOpt) error {
 	m.containers[id] = true
 	return nil
 }

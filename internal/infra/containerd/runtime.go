@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -132,6 +133,11 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 	}
 	cfg := imgSpec.Config
 
+	var createCfg domain.CreateConfig
+	for _, opt := range opts {
+		opt(&createCfg)
+	}
+
 	specOpts := []oci.SpecOpts{oci.WithDefaultSpec()}
 
 	args := append(cfg.Entrypoint, cfg.Cmd...)
@@ -141,6 +147,12 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 	if len(cfg.Env) > 0 {
 		specOpts = append(specOpts, oci.WithEnv(cfg.Env))
 	}
+
+	// User-supplied env vars override image defaults on conflict.
+	if len(createCfg.Env) > 0 {
+		specOpts = append(specOpts, oci.WithEnv(createCfg.Env))
+	}
+
 	cwd := cfg.WorkingDir
 	if cwd == "" {
 		cwd = "/"
@@ -153,11 +165,6 @@ func (r *Runtime) Create(ctx context.Context, id, image, runtimeHandler string, 
 			return fmt.Errorf("non-numeric USER %q in image %s (see README known limitations): %w", cfg.User, image, err)
 		}
 		specOpts = append(specOpts, oci.WithUIDGID(uid, gid))
-	}
-
-	var createCfg domain.CreateConfig
-	for _, opt := range opts {
-		opt(&createCfg)
 	}
 	if createCfg.NetNSPath != "" {
 		specOpts = append(specOpts, oci.WithLinuxNamespace(specs.LinuxNamespace{
@@ -545,9 +552,11 @@ func (r *Runtime) DeleteRootfsSnapshot(ctx context.Context, snapshotName string)
 	return ss.Remove(ctx, snapshotName)
 }
 
-// Start creates and starts a task for the given container. If a stale task
-// exists from a previous daemon lifecycle, it is cleaned up first.
-func (r *Runtime) Start(ctx context.Context, id string) error {
+// Start recreates the container from its existing snapshot and starts a new
+// task. Recreating ensures that any updated configuration (e.g. env vars)
+// takes effect. If a stale task exists from a previous daemon lifecycle, it
+// is cleaned up first.
+func (r *Runtime) Start(ctx context.Context, id string, opts ...domain.CreateOpt) error {
 	ctx = r.nsCtx(ctx)
 
 	container, err := r.client.LoadContainer(ctx, id)
@@ -556,13 +565,84 @@ func (r *Runtime) Start(ctx context.Context, id string) error {
 	}
 
 	// Clean up any stale task left behind by a previous daemon lifecycle.
-	// This can happen when the daemon exits without gracefully stopping VMs.
 	if oldTask, err := container.Task(ctx, nil); err == nil {
 		oldTask.Kill(ctx, syscall.SIGKILL) //nolint:errcheck // best-effort
 		oldTask.Delete(ctx)                //nolint:errcheck // best-effort
 	}
 
-	task, err := container.NewTask(ctx, cio.NullIO)
+	// Read existing container state before deletion.
+	spec, err := container.Spec(ctx)
+	if err != nil {
+		return fmt.Errorf("get spec %s: %w", id, err)
+	}
+	labels, _ := container.Labels(ctx)
+	info, err := container.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("get container info %s: %w", id, err)
+	}
+
+	// Apply create opts to get updated config.
+	var cfg domain.CreateConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	// Update env vars in the spec if provided.
+	if len(cfg.Env) > 0 {
+		envMap := make(map[string]string)
+		for _, e := range spec.Process.Env {
+			parts := strings.SplitN(e, "=", 2)
+			if len(parts) == 2 {
+				envMap[parts[0]] = parts[1]
+			}
+		}
+		for _, e := range cfg.Env {
+			parts := strings.SplitN(e, "=", 2)
+			if len(parts) == 2 {
+				envMap[parts[0]] = parts[1]
+			}
+		}
+		var newEnv []string
+		for k, v := range envMap {
+			newEnv = append(newEnv, k+"="+v)
+		}
+		sort.Strings(newEnv)
+		spec.Process.Env = newEnv
+	}
+
+	// Delete container but keep the snapshot intact.
+	if err := container.Delete(ctx); err != nil {
+		return fmt.Errorf("delete container %s: %w", id, err)
+	}
+
+	// Recreate container with updated spec, reusing existing snapshot.
+	snapshotter := info.Snapshotter
+	if snapshotter == "" {
+		snapshotter = r.snapshotter
+	}
+
+	img, err := r.client.GetImage(ctx, info.Image)
+	if err != nil {
+		return fmt.Errorf("get image %s: %w", info.Image, err)
+	}
+
+	containerOpts := []client.NewContainerOpts{
+		client.WithImage(img),
+		client.WithSnapshotter(snapshotter),
+		client.WithSnapshot(id + "-snap"),
+		client.WithRuntime(info.Runtime.Name, nil),
+		client.WithSpec(spec),
+	}
+	if len(labels) > 0 {
+		containerOpts = append(containerOpts, client.WithAdditionalContainerLabels(labels))
+	}
+
+	newContainer, err := r.client.NewContainer(ctx, id, containerOpts...)
+	if err != nil {
+		return fmt.Errorf("recreate container %s: %w", id, err)
+	}
+
+	task, err := newContainer.NewTask(ctx, cio.NullIO)
 	if err != nil {
 		return fmt.Errorf("create task %s: %w", id, err)
 	}
