@@ -37,8 +37,9 @@ type CreateVMInput struct {
 		RestartPolicy   string         `json:"restart_policy,omitempty" doc:"Restart policy (none, on-boot, always)" default:"none"`
 		RestartStrategy string         `json:"restart_strategy,omitempty" doc:"Restart strategy (immediate, backoff, fixed)" default:"backoff"`
 		Shell           string         `json:"shell,omitempty" doc:"Default shell for console sessions"`
-		Init            bool           `json:"init,omitempty" doc:"Enable init injection"`
-		Template        string         `json:"template,omitempty" doc:"Template name for provisioning"`
+		Init            bool              `json:"init,omitempty" doc:"Enable init injection"`
+		Template        string            `json:"template,omitempty" doc:"Template name for provisioning"`
+		Env             map[string]string `json:"env,omitempty" doc:"Environment variables"`
 	}
 }
 
@@ -110,6 +111,13 @@ type AttachDeviceInput struct {
 	ID   string `path:"id" doc:"Device ID or name"`
 	Body struct {
 		VMID string `json:"vm_id" doc:"VM ID to attach to"`
+	}
+}
+
+type UpdateEnvInput struct {
+	ID   string `path:"id" doc:"VM ID or name"`
+	Body struct {
+		Env map[string]string `json:"env" doc:"Environment variables"`
 	}
 }
 
@@ -218,8 +226,9 @@ type vmResponse struct {
 	RestartPolicy   string         `json:"restart_policy" doc:"Restart policy"`
 	RestartStrategy string         `json:"restart_strategy" doc:"Restart strategy"`
 	Shell           string         `json:"shell,omitempty" doc:"Default shell for console sessions"`
-	Init            bool           `json:"init" doc:"Whether init injection is enabled"`
-	TemplateID      string         `json:"template_id,omitempty" doc:"Provisioning template ID"`
+	Init            bool              `json:"init" doc:"Whether init injection is enabled"`
+	Env             map[string]string `json:"env,omitempty" doc:"Environment variables"`
+	TemplateID      string            `json:"template_id,omitempty" doc:"Provisioning template ID"`
 	ScriptOverride  string         `json:"script_override,omitempty" doc:"Per-VM script override"`
 	CreatedAt       string         `json:"created_at" doc:"Creation timestamp"`
 	StartedAt *string        `json:"started_at,omitempty" doc:"Start timestamp"`
@@ -312,6 +321,7 @@ func vmToResponse(vm *domain.VM) vmResponse {
 	r.RestartStrategy = string(vm.RestartStrategy)
 	r.Shell = vm.Shell
 	r.Init = vm.Init
+	r.Env = vm.Env
 	r.TemplateID = vm.TemplateID
 	r.ScriptOverride = vm.ScriptOverride
 	if vm.DNSConfig != nil {
@@ -488,6 +498,7 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 			Shell:           input.Body.Shell,
 			Init:            input.Body.Init,
 			TemplateName:    input.Body.Template,
+			Env:             input.Body.Env,
 		})
 		if err != nil {
 			return nil, mapDomainError(err)
@@ -632,6 +643,20 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 		vm, err := svc.UpdateRestartPolicy(ctx, input.ID,
 			domain.RestartPolicy(input.Body.RestartPolicy),
 			domain.RestartStrategy(input.Body.RestartStrategy))
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &VMOutput{Body: vmToResponse(vm)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "update-env",
+		Method:      http.MethodPut,
+		Path:        "/v1/vms/{id}/env",
+		Summary:     "Update VM environment variables",
+		Tags:        []string{"VMs"},
+	}, func(ctx context.Context, input *UpdateEnvInput) (*VMOutput, error) {
+		vm, err := svc.UpdateEnv(ctx, input.ID, input.Body.Env)
 		if err != nil {
 			return nil, mapDomainError(err)
 		}
