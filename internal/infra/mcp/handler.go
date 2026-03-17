@@ -80,6 +80,7 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 		mcp.WithString("shell", mcp.Description("Default shell for console sessions")),
 		mcp.WithBoolean("init", mcp.Description("Enable init injection")),
 		mcp.WithString("template", mcp.Description("Template name/ID for init (auto-detect if omitted)")),
+		mcp.WithString("env", mcp.Description("Environment variables as JSON object (e.g. {\"KEY\": \"value\"})")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		name, errRes := requireString(req, "name")
 		if errRes != nil {
@@ -104,6 +105,14 @@ func registerVMLifecycleTools(s *server.MCPServer, svc *app.VMService) {
 				return errResult(err)
 			}
 			params.RootSize = size
+		}
+
+		if envStr := mcp.ParseString(req, "env", ""); envStr != "" {
+			var envMap map[string]string
+			if err := json.Unmarshal([]byte(envStr), &envMap); err != nil {
+				return errResult(fmt.Errorf("env must be a JSON object: %w", err))
+			}
+			params.Env = envMap
 		}
 
 		vm, err := svc.CreateVM(ctx, params)
@@ -301,6 +310,39 @@ func registerVMManagementTools(s *server.MCPServer, svc *app.VMService) {
 			return errRes, nil
 		}
 		vm, err := svc.SyncShell(ctx, id)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(vm)
+	})
+
+	// vm_env
+	s.AddTool(mcp.NewTool("vm_env",
+		mcp.WithDescription("Get or set environment variables for a VM. Usage: vm_env(id: \"myvm\", env: {\"KEY\": \"value\"})"),
+		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
+		mcp.WithString("env", mcp.Description("Env vars as JSON object — omit to get current")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, errRes := requireString(req, "id")
+		if errRes != nil {
+			return errRes, nil
+		}
+
+		envStr := mcp.ParseString(req, "env", "")
+		if envStr == "" {
+			// Get mode — return current env.
+			vm, err := svc.GetVM(ctx, id)
+			if err != nil {
+				return errResult(err)
+			}
+			return jsonResult(vm.Env)
+		}
+
+		// Set mode — parse and update.
+		var envMap map[string]string
+		if err := json.Unmarshal([]byte(envStr), &envMap); err != nil {
+			return errResult(fmt.Errorf("env must be a JSON object: %w", err))
+		}
+		vm, err := svc.UpdateEnv(ctx, id, envMap)
 		if err != nil {
 			return errResult(err)
 		}
