@@ -695,6 +695,20 @@ func (c *Client) UpdateEnv(id string, env map[string]string) (*VM, error) {
 	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
 }
 
+func (c *Client) UpdateImage(id, image string) (*VM, error) {
+	body := fmt.Sprintf(`{"image":%q}`, image)
+	resp, err := c.put("/v1/vms/"+id+"/image", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	var vm VM
+	return &vm, json.NewDecoder(resp.Body).Decode(&vm)
+}
+
 func (c *Client) GetVM(id string) (*VM, error) {
 	resp, err := c.get("/v1/vms/" + id)
 	if err != nil {

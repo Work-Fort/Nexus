@@ -1774,3 +1774,130 @@ func TestGracefulShutdown(t *testing.T) {
 		t.Error("expected error after daemon shutdown, but request succeeded")
 	}
 }
+
+func TestVMImageUpdate(t *testing.T) {
+	requireNetworkCaps(t)
+	_, c := startDaemon(t, harness.WithNetworkEnabled(true), harness.WithNetworkSubnet(e2eSubnet), harness.WithBridgeName(e2eBridgeName))
+
+	const (
+		oldImage = "docker.io/library/nginx:1.26-alpine"
+		newImage = "docker.io/library/nginx:1.27-alpine"
+	)
+
+	// 1. Create VM with old nginx image.
+	vm, err := c.CreateVMWithImage("test-imgupdate", "agent", oldImage)
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+
+	// 2. Create a drive mounted at nginx's html root.
+	drv, err := c.CreateDrive("html-data", "64M", "/usr/share/nginx/html")
+	if err != nil {
+		t.Fatalf("create drive: %v", err)
+	}
+
+	// 3. Attach drive to VM.
+	if err := c.AttachDrive(drv.ID, vm.ID); err != nil {
+		t.Fatalf("attach drive: %v", err)
+	}
+
+	// 4. Start VM.
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+
+	// 5. Write custom index.html into the drive-backed html root.
+	const customContent = "WorkFort Nexus Test Page"
+	writeCmd := []string{"sh", "-c", fmt.Sprintf("echo '%s' > /usr/share/nginx/html/index.html", customContent)}
+	var result *harness.ExecResult
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, writeCmd)
+		if err == nil && result.ExitCode == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("exec write index.html: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("write index.html failed (exit %d): stderr=%s", result.ExitCode, result.Stderr)
+	}
+
+	// 6. Verify the custom page is served.
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"wget", "-q", "-O", "-", "http://127.0.0.1/"})
+		if err == nil && result.ExitCode == 0 && strings.Contains(result.Stdout, customContent) {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("exec wget (before update): %v", err)
+	}
+	if !strings.Contains(result.Stdout, customContent) {
+		t.Fatalf("expected custom page before update, got: %s", result.Stdout)
+	}
+
+	// 7. Check old nginx version (informational).
+	result, err = c.ExecVM(vm.ID, []string{"nginx", "-v"})
+	if err == nil {
+		t.Logf("nginx version before update: stdout=%s stderr=%s", result.Stdout, result.Stderr)
+		if !strings.Contains(result.Stderr, "1.26") {
+			t.Logf("WARNING: expected nginx/1.26 in stderr, got: %s", result.Stderr)
+		}
+	} else {
+		t.Logf("nginx -v exec failed (non-fatal): %v", err)
+	}
+
+	// 8. Stop VM.
+	if err := c.StopVM(vm.ID); err != nil {
+		t.Fatalf("stop VM: %v", err)
+	}
+
+	// 9. Update image to new nginx version.
+	updated, err := c.UpdateImage(vm.ID, newImage)
+	if err != nil {
+		t.Fatalf("update image: %v", err)
+	}
+	if updated.Image != newImage {
+		t.Fatalf("expected image %q after update, got %q", newImage, updated.Image)
+	}
+
+	// 10. Start VM again with new image.
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM after image update: %v", err)
+	}
+
+	// 11. Verify custom page content survived the image update (drive preserved).
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err = c.ExecVM(vm.ID, []string{"wget", "-q", "-O", "-", "http://127.0.0.1/"})
+		if err == nil && result.ExitCode == 0 && strings.Contains(result.Stdout, customContent) {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("exec wget (after update): %v", err)
+	}
+	if !strings.Contains(result.Stdout, customContent) {
+		t.Fatalf("drive data lost after image update: expected %q, got: %s", customContent, result.Stdout)
+	}
+
+	// 12. Check new nginx version (informational).
+	result, err = c.ExecVM(vm.ID, []string{"nginx", "-v"})
+	if err == nil {
+		t.Logf("nginx version after update: stdout=%s stderr=%s", result.Stdout, result.Stderr)
+		if !strings.Contains(result.Stderr, "1.27") {
+			t.Logf("WARNING: expected nginx/1.27 in stderr, got: %s", result.Stderr)
+		}
+	} else {
+		t.Logf("nginx -v exec failed (non-fatal): %v", err)
+	}
+
+	// Cleanup.
+	c.StopVM(vm.ID)
+}
