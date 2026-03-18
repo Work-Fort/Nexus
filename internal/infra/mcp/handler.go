@@ -240,19 +240,29 @@ func registerVMExecTools(s *server.MCPServer, svc *app.VMService) {
 
 // registerVMManagementTools registers vm_patch and vm_restart_policy tools.
 func registerVMManagementTools(s *server.MCPServer, svc *app.VMService) {
-	// vm_patch — expand root size
+	// vm_patch — update image or expand root size
 	s.AddTool(mcp.NewTool("vm_patch",
-		mcp.WithDescription("Expand the root filesystem size of a VM. Usage: vm_patch(id: \"myvm\", root_size: \"2G\")"),
+		mcp.WithDescription("Update a VM's image or expand root filesystem. Usage: vm_patch(id: \"myvm\", image: \"nginx:latest\") or vm_patch(id: \"myvm\", root_size: \"2G\")"),
 		mcp.WithString("id", mcp.Description("VM ID or name"), mcp.Required()),
-		mcp.WithString("root_size", mcp.Description("New root size (e.g. 2G) — must be larger than current"), mcp.Required()),
+		mcp.WithString("image", mcp.Description("New OCI image (requires stopped VM)")),
+		mcp.WithString("root_size", mcp.Description("New root size (e.g. 2G) — must be larger than current")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, errRes := requireString(req, "id")
 		if errRes != nil {
 			return errRes, nil
 		}
-		sizeStr, errRes := requireString(req, "root_size")
-		if errRes != nil {
-			return errRes, nil
+
+		if imageStr := mcp.ParseString(req, "image", ""); imageStr != "" {
+			vm, err := svc.UpdateImage(ctx, id, imageStr)
+			if err != nil {
+				return errResult(err)
+			}
+			return jsonResult(vm)
+		}
+
+		sizeStr := mcp.ParseString(req, "root_size", "")
+		if sizeStr == "" {
+			return mcp.NewToolResultErrorf("image or root_size is required"), nil
 		}
 
 		newSize, err := parseByteSize(sizeStr)

@@ -26,6 +26,7 @@ func newVMCmd() *cobra.Command {
 		newVMExportCmd(),
 		newVMImportCmd(),
 		newVMSyncShellCmd(),
+		newUpdateImageCmd(),
 		newEnvCmd(),
 	)
 	return cmd
@@ -165,6 +166,26 @@ func newVMSyncShellCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("Shell: %s\n", vm.Shell)
+			return nil
+		},
+	}
+}
+
+func newUpdateImageCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "update-image <vm> <image>",
+		Short: "Update a VM's image (requires stopped VM)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			vm, err := apiClient.UpdateImage(cmd.Context(), args[0], args[1])
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				printJSON(vm)
+				return nil
+			}
+			fmt.Printf("Image updated to %s\n", vm.Image)
 			return nil
 		},
 	}

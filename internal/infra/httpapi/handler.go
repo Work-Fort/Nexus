@@ -121,6 +121,13 @@ type UpdateEnvInput struct {
 	}
 }
 
+type UpdateImageInput struct {
+	ID   string `path:"id" doc:"VM ID or name"`
+	Body struct {
+		Image string `json:"image" doc:"New OCI image reference"`
+	}
+}
+
 type UpdateRestartPolicyInput struct {
 	ID   string `path:"id" doc:"VM ID or name"`
 	Body struct {
@@ -657,6 +664,20 @@ func registerVMRoutes(api huma.API, svc *app.VMService) {
 		Tags:        []string{"VMs"},
 	}, func(ctx context.Context, input *UpdateEnvInput) (*VMOutput, error) {
 		vm, err := svc.UpdateEnv(ctx, input.ID, input.Body.Env)
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		return &VMOutput{Body: vmToResponse(vm)}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "update-image",
+		Method:      http.MethodPut,
+		Path:        "/v1/vms/{id}/image",
+		Summary:     "Update VM image (requires stopped VM)",
+		Tags:        []string{"VMs"},
+	}, func(ctx context.Context, input *UpdateImageInput) (*VMOutput, error) {
+		vm, err := svc.UpdateImage(ctx, input.ID, input.Body.Image)
 		if err != nil {
 			return nil, mapDomainError(err)
 		}

@@ -307,6 +307,19 @@ func (c *Client) PrometheusTargets(ctx context.Context) ([]PrometheusTarget, err
 	return targets, nil
 }
 
+// UpdateImage updates the OCI image for a stopped VM.
+func (c *Client) UpdateImage(ctx context.Context, ref, image string) (*VM, error) {
+	resp, err := c.put(ctx, "/v1/vms/"+url.PathEscape(ref)+"/image", map[string]string{"image": image})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := handleResponse(resp, http.StatusOK); err != nil {
+		return nil, err
+	}
+	return decodeJSON[VM](resp)
+}
+
 // UpdateRestartPolicy updates the restart policy and strategy for a VM.
 func (c *Client) UpdateRestartPolicy(ctx context.Context, ref, policy, strategy string) (*VM, error) {
 	resp, err := c.put(ctx, "/v1/vms/"+url.PathEscape(ref)+"/restart-policy", map[string]string{
