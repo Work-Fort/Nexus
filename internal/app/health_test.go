@@ -42,6 +42,19 @@ func (s *stubCheck) setResult(status app.HealthStatus, msg string) {
 	s.result = app.CheckResult{Status: status, Message: msg}
 }
 
+func TestHealthReportIncludesVersion(t *testing.T) {
+	check := newStubCheck("test", 50*time.Millisecond, app.StatusHealthy, "ok")
+	svc := app.NewHealthService(check)
+	svc.SetVersion("1.2.3")
+	svc.Start(context.Background())
+	defer svc.Stop()
+
+	report := svc.Status()
+	if report.Version != "1.2.3" {
+		t.Fatalf("expected version 1.2.3, got %q", report.Version)
+	}
+}
+
 func TestHealthServiceStatus(t *testing.T) {
 	check := newStubCheck("test", 50*time.Millisecond, app.StatusHealthy, "all good")
 

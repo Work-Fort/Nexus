@@ -36,18 +36,23 @@ type HealthCheck interface {
 
 // HealthReport is the aggregate health state across all registered checks.
 type HealthReport struct {
-	Status HealthStatus           `json:"status"`
-	Checks map[string]CheckResult `json:"checks"`
+	Version string                 `json:"version,omitempty"`
+	Status  HealthStatus           `json:"status"`
+	Checks  map[string]CheckResult `json:"checks"`
 }
 
 // HealthService manages health checks with periodic background evaluation.
 type HealthService struct {
 	checks  []HealthCheck
 	results map[string]CheckResult
+	version string
 	mu      sync.RWMutex
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 }
+
+// SetVersion sets the daemon version reported in health status.
+func (h *HealthService) SetVersion(v string) { h.version = v }
 
 // NewHealthService creates a HealthService with the given checks.
 // All check results are initialized to "pending" until Start is called.
@@ -109,8 +114,9 @@ func (h *HealthService) Status() HealthReport {
 	}
 
 	return HealthReport{
-		Status: aggregate,
-		Checks: checks,
+		Version: h.version,
+		Status:  aggregate,
+		Checks:  checks,
 	}
 }
 

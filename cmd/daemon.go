@@ -232,6 +232,7 @@ func newDaemonCmd() *cobra.Command {
 				healthChecks = append(healthChecks, app.NewKataKernelCheck(kataKernelVersion, 30*time.Second))
 			}
 			health := app.NewHealthService(healthChecks...)
+			health.SetVersion(Version)
 			health.Start(context.Background())
 			defer health.Stop()
 
