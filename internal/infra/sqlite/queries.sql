@@ -184,5 +184,8 @@ DELETE FROM snapshots WHERE id = ?;
 -- name: UpdateVMEnv :exec
 UPDATE vms SET env = ? WHERE id = ?;
 
+-- name: UpdateVMImage :exec
+UPDATE vms SET image = ? WHERE id = ?;
+
 -- name: UpdateVMNetwork :exec
 UPDATE vms SET ip = ?, gateway = ?, netns_path = ? WHERE id = ?;

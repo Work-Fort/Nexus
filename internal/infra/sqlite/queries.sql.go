@@ -1014,6 +1014,20 @@ func (q *Queries) UpdateVMEnv(ctx context.Context, arg UpdateVMEnvParams) error 
 	return err
 }
 
+const updateVMImage = `-- name: UpdateVMImage :exec
+UPDATE vms SET image = ? WHERE id = ?
+`
+
+type UpdateVMImageParams struct {
+	Image string `json:"image"`
+	ID    string `json:"id"`
+}
+
+func (q *Queries) UpdateVMImage(ctx context.Context, arg UpdateVMImageParams) error {
+	_, err := q.db.ExecContext(ctx, updateVMImage, arg.Image, arg.ID)
+	return err
+}
+
 const updateVMInit = `-- name: UpdateVMInit :exec
 UPDATE vms SET init = ?, template_id = ?, script_override = ? WHERE id = ?
 `

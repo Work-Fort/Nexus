@@ -21,6 +21,7 @@ type VMStore interface {
 	UpdateShell(ctx context.Context, id, shell string) error
 	UpdateNetwork(ctx context.Context, id, ip, gateway, netnsPath string) error
 	UpdateEnv(ctx context.Context, id string, env map[string]string) error
+	UpdateImage(ctx context.Context, id, image string) error
 	SetTags(ctx context.Context, vmID string, tags []string) error
 	Delete(ctx context.Context, id string) error
 }

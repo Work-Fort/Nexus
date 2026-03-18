@@ -136,6 +136,8 @@ func (m *mockStore) UpdateNetwork(_ context.Context, id, ip, gateway, netnsPath 
 	return nil
 }
 
+func (m *mockStore) UpdateImage(_ context.Context, _, _ string) error { return nil }
+
 func (m *mockStore) UpdateEnv(_ context.Context, id string, env map[string]string) error {
 	vm, ok := m.vms[id]
 	if !ok {

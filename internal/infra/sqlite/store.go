@@ -330,6 +330,10 @@ func (s *Store) UpdateEnv(ctx context.Context, id string, env map[string]string)
 	return s.q.UpdateVMEnv(ctx, UpdateVMEnvParams{Env: envJSON, ID: id})
 }
 
+func (s *Store) UpdateImage(ctx context.Context, id, image string) error {
+	return s.q.UpdateVMImage(ctx, UpdateVMImageParams{Image: image, ID: id})
+}
+
 func (s *Store) UpdateNetwork(ctx context.Context, id, ip, gateway, netnsPath string) error {
 	return s.q.UpdateVMNetwork(ctx, UpdateVMNetworkParams{
 		Ip:        ip,

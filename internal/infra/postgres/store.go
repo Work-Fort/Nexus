@@ -232,6 +232,11 @@ func (s *Store) UpdateEnv(ctx context.Context, id string, env map[string]string)
 	return err
 }
 
+func (s *Store) UpdateImage(ctx context.Context, id, image string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE vms SET image = $1 WHERE id = $2", image, id)
+	return err
+}
+
 func (s *Store) UpdateNetwork(ctx context.Context, id, ip, gateway, netnsPath string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE vms SET ip = $1, gateway = $2, netns_path = $3 WHERE id = $4`,
