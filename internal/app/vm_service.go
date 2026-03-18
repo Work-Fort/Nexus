@@ -569,6 +569,121 @@ func (s *VMService) SetTags(ctx context.Context, ref string, tags []string) (*do
 	return vm, nil
 }
 
+// UpdateImage replaces a VM's container image. The VM must be stopped.
+// The old container is deleted and a new one created from the new image,
+// preserving all existing configuration (network, drives, devices, env, init).
+func (s *VMService) UpdateImage(ctx context.Context, ref, newImage string) (*domain.VM, error) {
+	if newImage == "" {
+		return nil, fmt.Errorf("image is required: %w", domain.ErrValidation)
+	}
+
+	vm, err := s.store.Resolve(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	if vm.State == domain.VMStateRunning {
+		return nil, fmt.Errorf("vm must be stopped to update image: %w", domain.ErrInvalidState)
+	}
+
+	if s.health != nil {
+		if err := s.health.RuntimeHealthy(vm.Runtime); err != nil {
+			return nil, fmt.Errorf("%w: %w", domain.ErrUnavailable, err)
+		}
+	}
+
+	// Delete old container + snapshot.
+	if err := s.runtime.Delete(ctx, vm.ID); err != nil {
+		log.Warn("delete old container for image update", "id", vm.ID, "err", err)
+	}
+
+	// Build create opts from existing VM config (same as CreateVM).
+	var createOpts []domain.CreateOpt
+	if vm.NetNSPath != "" {
+		createOpts = append(createOpts, domain.WithNetNS(vm.NetNSPath))
+	}
+	resolvConfPath, err := s.dns.GenerateResolvConf(vm.ID, vm.DNSConfig)
+	if err == nil && resolvConfPath != "" {
+		createOpts = append(createOpts, domain.WithResolvConf(resolvConfPath))
+	}
+	if vm.RootSize > 0 {
+		createOpts = append(createOpts, domain.WithRootSize(vm.RootSize))
+	}
+	if len(vm.Env) > 0 {
+		var envSlice []string
+		for k, v := range vm.Env {
+			envSlice = append(envSlice, k+"="+v)
+		}
+		createOpts = append(createOpts, domain.WithEnv(envSlice))
+	}
+
+	// Bind-mount node_exporter when metrics are configured.
+	if s.config.Metrics.NodeExporterPath != "" {
+		createOpts = append(createOpts, domain.WithMounts([]domain.Mount{
+			{HostPath: s.config.Metrics.NodeExporterPath, ContainerPath: "/usr/local/bin/node_exporter"},
+		}))
+	}
+
+	// Init injection — re-resolve for the new image.
+	if vm.Init {
+		if s.templateStore != nil {
+			initPath, _, stopSignal, err := s.resolveInitScript(ctx, vm.ID, newImage, "")
+			if err != nil {
+				return nil, fmt.Errorf("init script for new image: %w", err)
+			}
+			createOpts = append(createOpts, domain.WithInitScript(initPath))
+			if stopSignal != 0 {
+				createOpts = append(createOpts, domain.WithStopSignal(stopSignal))
+			}
+		}
+	}
+
+	// Drives — get attached drives and add as bind mounts.
+	if s.driveStore != nil && s.storage != nil {
+		drives, err := s.driveStore.GetDrivesByVM(ctx, vm.ID)
+		if err == nil && len(drives) > 0 {
+			var mounts []domain.Mount
+			for _, d := range drives {
+				mounts = append(mounts, domain.Mount{
+					HostPath:      s.storage.VolumePath(d.Name),
+					ContainerPath: d.MountPath,
+				})
+			}
+			createOpts = append(createOpts, domain.WithMounts(mounts))
+		}
+	}
+
+	// Devices — get attached devices.
+	if s.deviceStore != nil {
+		devices, err := s.deviceStore.GetDevicesByVM(ctx, vm.ID)
+		if err == nil && len(devices) > 0 {
+			var devInfos []domain.DeviceInfo
+			for _, d := range devices {
+				devInfos = append(devInfos, domain.DeviceInfo{
+					HostPath:      d.HostPath,
+					ContainerPath: d.ContainerPath,
+					Permissions:   d.Permissions,
+					GID:           d.GID,
+				})
+			}
+			createOpts = append(createOpts, domain.WithDevices(devInfos))
+		}
+	}
+
+	// Create new container from new image.
+	if err := s.runtime.Create(ctx, vm.ID, newImage, vm.Runtime, createOpts...); err != nil {
+		return nil, fmt.Errorf("create container with new image: %w", err)
+	}
+
+	// Update DB.
+	if err := s.store.UpdateImage(ctx, vm.ID, newImage); err != nil {
+		return nil, fmt.Errorf("store update image: %w", err)
+	}
+
+	vm.Image = newImage
+	log.Info("image updated", "id", vm.ID, "name", vm.Name, "image", newImage)
+	return vm, nil
+}
+
 // ResetNetwork deletes the bridge and clears CNI state. Refuses if any VMs exist.
 func (s *VMService) ResetNetwork(ctx context.Context) error {
 	vms, err := s.store.List(ctx, domain.VMFilter{})
