@@ -29,6 +29,7 @@ func newVMCmd() *cobra.Command {
 		newUpdateImageCmd(),
 		newEnvCmd(),
 		newRestartPolicyCmd(),
+		newExecCmd(),
 	)
 	return cmd
 }

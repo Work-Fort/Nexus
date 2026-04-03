@@ -65,7 +65,7 @@ func init() {
 	viper.BindPFlag("timeout", rootCmd.PersistentFlags().Lookup("timeout")) //nolint:errcheck
 
 	rootCmd.AddCommand(newVMCmd())
-	rootCmd.AddCommand(newExecCmd())
+	// exec is registered under vm (nexusctl vm exec)
 	rootCmd.AddCommand(newConsoleCmd())
 	rootCmd.AddCommand(newDriveCmd())
 	rootCmd.AddCommand(newDeviceCmd())
