@@ -1394,6 +1394,28 @@ func (c *Client) MCPListTools() (json.RawMessage, error) {
 	return rpcResp.Result, nil
 }
 
+// HealthReport mirrors the daemon's health response.
+type HealthReport struct {
+	Version string                    `json:"version"`
+	Status  string                    `json:"status"`
+	Checks  map[string]HealthCheckResult `json:"checks"`
+}
+
+type HealthCheckResult struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+func (c *Client) GetHealth() (*HealthReport, error) {
+	resp, err := c.get("/health")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var report HealthReport
+	return &report, json.NewDecoder(resp.Body).Decode(&report)
+}
+
 // --- internal helpers ---
 
 func (c *Client) get(path string) (*http.Response, error) {

@@ -231,6 +231,12 @@ func newDaemonCmd() *cobra.Command {
 			if kataKernelVersion != "" {
 				healthChecks = append(healthChecks, app.NewKataKernelCheck(kataKernelVersion, 30*time.Second))
 			}
+			if dnsLoopback != "" {
+				healthChecks = append(healthChecks, app.NewResolvedDNSCheck(
+					&resolved.Ops{Ifname: viper.GetString("bridge-name"), Loopback: dnsLoopback, Domains: dnsDomains},
+					30*time.Second,
+				))
+			}
 			health := app.NewHealthService(healthChecks...)
 			health.SetVersion(Version)
 			health.Start(context.Background())
@@ -257,13 +263,14 @@ func newDaemonCmd() *cobra.Command {
 				// Best-effort: register split DNS with systemd-resolved
 				// so the host can resolve *.nexus (and vanity domains).
 				if dnsLoopback != "" {
-					if err := resolved.Register("nexus0", dnsLoopback, dnsDomains); err != nil {
+					bridgeName := viper.GetString("bridge-name")
+					if err := resolved.Register(bridgeName, dnsLoopback, dnsDomains); err != nil {
 						log.Warn("host dns: could not register with resolved", "err", err)
 					} else {
 						log.Info("host dns registered", "loopback", dnsLoopback, "domains", dnsDomains)
 					}
 					defer func() {
-						if err := resolved.Revert("nexus0"); err != nil {
+						if err := resolved.Revert(bridgeName); err != nil {
 							log.Warn("host dns: could not revert resolved", "err", err)
 						}
 					}()

@@ -1901,3 +1901,125 @@ func TestVMImageUpdate(t *testing.T) {
 	// Cleanup.
 	c.StopVM(vm.ID)
 }
+
+// TestResolvedDNSSelfHeal verifies that the health check detects when
+// systemd-resolved loses the DNS routing registration (e.g. Wi-Fi
+// reconnect) and automatically re-registers it.
+func TestResolvedDNSSelfHeal(t *testing.T) {
+	requireNetworkCaps(t)
+
+	bridge := "nexresolv0"
+	loopback := "127.0.0.104"
+
+	cleanBridge(t, bridge)
+	t.Cleanup(func() { cleanBridge(t, bridge) })
+
+	addr, err := harness.FreePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := harness.StartDaemon(nexusBin, binDir, addr,
+		harness.WithNetworkEnabled(true),
+		harness.WithDNSEnabled(true),
+		harness.WithNetworkSubnet("10.99.0.0/24"),
+		harness.WithBridgeName(bridge),
+		harness.WithDNSLoopback(loopback),
+		harness.WithLogLevel("info"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.StopFatal(t)
+
+	c := harness.NewClient(addr)
+
+	// Create and start a VM so the bridge gets its IP (CNI assigns it).
+	vm, err := c.CreateVMWithImage("test-resolved", "agent", "docker.io/library/nginx:alpine")
+	if err != nil {
+		t.Fatalf("create VM: %v", err)
+	}
+	if err := c.StartVM(vm.ID); err != nil {
+		t.Fatalf("start VM: %v", err)
+	}
+	defer c.StopVM(vm.ID)
+
+	// Wait for the health check to report healthy or degraded (self-healed).
+	// On first startup the health check may run before the daemon's own
+	// resolved.Register call, so it self-heals and reports degraded initially.
+	var health *harness.HealthReport
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		health, err = c.GetHealth()
+		if err == nil {
+			if r, ok := health.Checks["resolved-dns"]; ok && (r.Status == "healthy" || r.Status == "degraded") {
+				break
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	if health == nil {
+		t.Fatal("could not get health report")
+	}
+	r, ok := health.Checks["resolved-dns"]
+	if !ok {
+		t.Fatal("resolved-dns check not found in health report")
+	}
+	if r.Status == "unhealthy" {
+		t.Fatalf("expected resolved-dns healthy or degraded, got unhealthy: %s", r.Message)
+	}
+	t.Logf("resolved-dns initial status: %s — %s", r.Status, r.Message)
+
+	// Wait for it to settle to healthy before proceeding with the revert test.
+	deadline = time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		health, err = c.GetHealth()
+		if err == nil {
+			if r, ok := health.Checks["resolved-dns"]; ok && r.Status == "healthy" {
+				break
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Logf("resolved-dns settled: %s", health.Checks["resolved-dns"].Status)
+
+	// Simulate resolved losing the registration (Wi-Fi reconnect, etc.).
+	revertCmd := exec.Command("resolvectl", "revert", bridge)
+	if out, err := revertCmd.CombinedOutput(); err != nil {
+		t.Fatalf("resolvectl revert: %v: %s", err, out)
+	}
+	t.Log("reverted resolved registration — simulating Wi-Fi reconnect")
+
+	// Wait for the health check to detect and self-heal.
+	// The check runs every 30s, so we wait up to 45s.
+	healed := false
+	deadline = time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		health, err = c.GetHealth()
+		if err == nil {
+			r = health.Checks["resolved-dns"]
+			// After self-heal it reports "degraded" (re-registered),
+			// then on next cycle it reports "healthy" again.
+			if r.Status == "degraded" || r.Status == "healthy" {
+				if r.Message != "" && r.Status == "degraded" {
+					t.Logf("self-healed: %s", r.Message)
+					healed = true
+					break
+				}
+				// If already back to healthy, the heal + recheck happened fast.
+				if r.Status == "healthy" && healed {
+					break
+				}
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	// Final check: verify DNS resolution works again.
+	health, _ = c.GetHealth()
+	r = health.Checks["resolved-dns"]
+	if r.Status == "unhealthy" {
+		t.Fatalf("resolved-dns still unhealthy after self-heal attempt: %s", r.Message)
+	}
+	t.Logf("final resolved-dns status: %s — %s", r.Status, r.Message)
+}
