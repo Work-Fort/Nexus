@@ -28,6 +28,7 @@ func newVMCmd() *cobra.Command {
 		newVMSyncShellCmd(),
 		newUpdateImageCmd(),
 		newEnvCmd(),
+		newRestartPolicyCmd(),
 	)
 	return cmd
 }
@@ -186,6 +187,27 @@ func newUpdateImageCmd() *cobra.Command {
 				return nil
 			}
 			fmt.Printf("Image updated to %s\n", vm.Image)
+			return nil
+		},
+	}
+}
+
+func newRestartPolicyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "restart-policy <vm> <policy> <strategy>",
+		Short: "Update VM restart policy",
+		Long:  "Policy: none, on-boot, always. Strategy: immediate, backoff, fixed.",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			vm, err := apiClient.UpdateRestartPolicy(cmd.Context(), args[0], args[1], args[2])
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				printJSON(vm)
+				return nil
+			}
+			fmt.Printf("Restart policy updated: %s (%s)\n", vm.RestartPolicy, vm.RestartStrategy)
 			return nil
 		},
 	}
