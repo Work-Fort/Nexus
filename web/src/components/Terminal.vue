@@ -83,8 +83,6 @@ function teardown() {
 
 function reconnect() {
   teardown();
-  // Clear existing terminal DOM content so xterm can re-open cleanly.
-  if (terminalEl.value) terminalEl.value.innerHTML = '';
   setupTerminal();
 }
 

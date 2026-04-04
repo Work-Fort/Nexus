@@ -78,8 +78,8 @@ watch(refreshRate, () => {
   startPolling();
 });
 
-onMounted(() => {
-  loadVMs();
+onMounted(async () => {
+  await loadVMs();
   startPolling();
 });
 

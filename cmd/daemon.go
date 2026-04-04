@@ -301,7 +301,10 @@ func newDaemonCmd() *cobra.Command {
 				mux.Handle("/ui/", frontend.Handler(os.DirFS(uiDir), uiManifest))
 				log.Info("ui enabled", "source", "disk", "dir", uiDir)
 			} else {
-				distFS, _ := fs.Sub(web.Dist, "dist")
+				distFS, err := fs.Sub(web.Dist, "dist")
+				if err != nil {
+					return fmt.Errorf("ui embed: %w", err)
+				}
 				mux.Handle("/ui/", frontend.Handler(distFS, uiManifest))
 				log.Info("ui enabled", "source", "embed")
 			}
