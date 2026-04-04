@@ -4,6 +4,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/Work-Fort/Scope/go/frontend"
 	"github.com/Work-Fort/Nexus/internal/app"
 	"github.com/Work-Fort/Nexus/internal/config"
 	"github.com/Work-Fort/Nexus/internal/domain"
@@ -29,6 +31,7 @@ import (
 	nexusmcp "github.com/Work-Fort/Nexus/internal/infra/mcp"
 	"github.com/Work-Fort/Nexus/internal/infra/storage"
 	"github.com/Work-Fort/Nexus/pkg/btrfs"
+	"github.com/Work-Fort/Nexus/web"
 )
 
 func newDaemonCmd() *cobra.Command {
@@ -285,6 +288,24 @@ func newDaemonCmd() *cobra.Command {
 			mux.Handle("/mcp", nexusmcp.NewHandler(svc, health))
 			mux.Handle("/", httpapi.NewHandler(svc, health))
 
+			// Frontend UI handler.
+			uiManifest := frontend.Manifest{
+				Name:    "nexus",
+				Label:   "Nexus",
+				Route:   "/nexus",
+				WSPaths: []string{"/v1/vms/{id}/console"},
+			}
+
+			uiDir := viper.GetString("ui-dir")
+			if uiDir != "" {
+				mux.Handle("/ui/", frontend.Handler(os.DirFS(uiDir), uiManifest))
+				log.Info("ui enabled", "source", "disk", "dir", uiDir)
+			} else {
+				distFS, _ := fs.Sub(web.Dist, "dist")
+				mux.Handle("/ui/", frontend.Handler(distFS, uiManifest))
+				log.Info("ui enabled", "source", "embed")
+			}
+
 			httpServer := &http.Server{
 				Addr:        addr,
 				Handler:     mux,
@@ -358,8 +379,9 @@ func newDaemonCmd() *cobra.Command {
 	cmd.Flags().String("node-exporter-path", config.DefaultNodeExporterPath, "Path to node_exporter binary for in-VM metrics (empty to disable)")
 	cmd.Flags().String("kata-kernel-version", "", "Expected Anvil kernel version for Kata health check (empty to skip)")
 	cmd.Flags().Bool("network-auto-migrate", true, "Auto-rebuild network namespaces when CNI config changes")
+	cmd.Flags().String("ui-dir", "", "Serve UI from disk (dev mode)")
 
-	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "bridge-name", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "dns-loopback", "dns-domains", "node-exporter-path", "kata-kernel-version", "network-auto-migrate"} {
+	for _, name := range []string{"db", "listen", "containerd-socket", "namespace", "runtime", "agent-image", "cni-bin-dir", "network-subnet", "bridge-name", "network-enabled", "netns-helper", "cni-exec-bin", "snapshotter", "drives-dir", "quota-helper", "btrfs-helper", "dns-enabled", "coredns-bin", "dns-helper", "dns-loopback", "dns-domains", "node-exporter-path", "kata-kernel-version", "network-auto-migrate", "ui-dir"} {
 		if err := viper.BindPFlag(name, cmd.Flags().Lookup(name)); err != nil {
 			panic(fmt.Sprintf("bind flag %s: %v", name, err))
 		}
