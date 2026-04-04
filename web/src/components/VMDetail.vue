@@ -1,7 +1,6 @@
 <template>
-  <router-view />
+  <div>Loading...</div>
 </template>
 
 <script setup lang="ts">
-defineProps<{ connected: boolean }>();
 </script>
