@@ -7,8 +7,11 @@ set -euo pipefail
 GIT_SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 export CGO_ENABLED=0
 
+echo "Building frontend..."
+(cd web && npm ci --legacy-peer-deps && npm run build)
+
 echo "Building release binaries..."
-go build -ldflags="-s -w -X github.com/Work-Fort/Nexus/cmd.Version=dev-$GIT_SHORT_SHA" -o build/nexus .
+go build -tags ui -ldflags="-s -w -X github.com/Work-Fort/Nexus/cmd.Version=dev-$GIT_SHORT_SHA" -o build/nexus .
 go build -ldflags="-s -w -X main.Version=dev-$GIT_SHORT_SHA" -o build/nexusctl ./cmd/nexusctl/
 go build -ldflags="-s -w" -o build/nexus-netns ./cmd/nexus-netns/
 go build -ldflags="-s -w" -o build/nexus-cni-exec ./cmd/nexus-cni-exec/
