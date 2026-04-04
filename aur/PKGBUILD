@@ -38,6 +38,7 @@ prepare() {
 
 build() {
     cd "Nexus-${pkgver}"
+    rm -f mise.toml .mise.toml
     export CGO_ENABLED=0
     _ver="${pkgver}-aur"
     go build -trimpath -ldflags "-s -w -X github.com/Work-Fort/Nexus/cmd.Version=${_ver}" -o nexus
