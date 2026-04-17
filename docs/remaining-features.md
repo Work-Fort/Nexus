@@ -258,3 +258,17 @@ Needed behavior:
   under load. Passed 10/10 in isolation but failed once during a full suite run.
   The test calls `StartVM` then immediately `GetVM` expecting `state=running` —
   may need a polling loop. Needs further investigation to confirm.
+
+## 21. VM Hostname Leak
+
+All VMs inherit the host's kernel hostname — `hostname` inside any Nexus VM returns the same string (e.g. `PC-42069`) regardless of the VM's `--name`. Caused identity collisions during agent bring-up when three agents all thought they were named `PC-42069`. Fix: when creating the OCI container, set the container's hostname to the VM name in the runtime spec (runc reads `hostname` from the spec and writes it into the container's UTS namespace).
+
+## 22. install:local Clobbers Bind-Mounted Binaries While VMs Run
+
+`mise run install:local` copies `node_exporter`, `nexus-netns`, etc. to `~/.local/bin/` without first stopping nexus. Those binaries are bind-mounted into every running VM (at `/usr/local/bin/node_exporter` etc.), so the source path is `ETXTBSY` and the install fails with "text file busy" until every VM is manually killed via `ctr -n nexus tasks kill`. Fix options, pick one or both:
+- **install:local precondition**: check `systemctl --user is-active nexus`; if active, refuse (or stop → install → start automatically).
+- **Shutdown hardening**: when `VMService.Shutdown` hits a Stop timeout on any VM, escalate to `ctr task kill -SIGKILL` + delete before returning. Currently the Shutdown loop just logs `log.Warn` and moves on, which can leave orphans even after a clean `systemctl stop nexus`.
+
+## Notes Follow-ups
+
+See also `docs/2026-04-17-restart-reuses-stale-mount-spec.md` for the related stale-mount-spec bug.
