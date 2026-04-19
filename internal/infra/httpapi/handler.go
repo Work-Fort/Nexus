@@ -82,6 +82,27 @@ type CreateDriveInput struct {
 	}
 }
 
+// CloneDriveInput is the CSI-shaped request body for POST /v1/drives/clone.
+// Field names mirror k8s PVC dataSource:
+//
+//	source_volume_ref  -> the existing drive (name or ID) to clone from.
+//	name               -> the new drive's name.
+//	mount_path         -> optional CSI mount target. When omitted the
+//	                     clone inherits the source drive's mount_path
+//	                     (CSI separates volume creation from mount-
+//	                     target declaration; mount_path is a property
+//	                     of the consuming runtime, not the volume).
+//	snapshot_name      -> optional named intermediate VolumeSnapshot.
+//	                     Omitted = ephemeral, deleted after clone.
+type CloneDriveInput struct {
+	Body struct {
+		SourceVolumeRef string `json:"source_volume_ref" doc:"Source drive ID or name to clone from"`
+		Name            string `json:"name" doc:"New drive name"`
+		MountPath       string `json:"mount_path,omitempty" doc:"Optional mount path; inherits from source when omitted"`
+		SnapshotName    string `json:"snapshot_name,omitempty" doc:"Optional intermediate snapshot name; if set, the snapshot is retained"`
+	}
+}
+
 type DrivePathInput struct {
 	ID string `path:"id" doc:"Drive ID or name"`
 }
@@ -249,6 +270,26 @@ type driveResponse struct {
 	MountPath string  `json:"mount_path" doc:"Mount path"`
 	VMID      *string `json:"vm_id,omitempty" doc:"Attached VM ID"`
 	CreatedAt string  `json:"created_at" doc:"Creation timestamp"`
+}
+
+// cloneDriveResponse extends driveResponse with the CSI provenance
+// fields the immediate caller may want to record. Provenance is
+// REQUEST-SCOPED ONLY — it is not persisted on domain.Drive, so a
+// later GET /v1/drives/{id} returns the standard driveResponse shape
+// without these fields.
+type cloneDriveResponse struct {
+	ID              string  `json:"id" doc:"Drive ID"`
+	Name            string  `json:"name" doc:"Drive name"`
+	SizeBytes       uint64  `json:"size_bytes" doc:"Size in bytes (inherited from source)"`
+	MountPath       string  `json:"mount_path" doc:"Mount path (inherited from source unless overridden)"`
+	VMID            *string `json:"vm_id,omitempty" doc:"Attached VM ID (always nil for fresh clones)"`
+	CreatedAt       string  `json:"created_at" doc:"Creation timestamp"`
+	SourceVolumeRef string  `json:"source_volume_ref" doc:"Source drive that was cloned (request-scoped echo, not persisted)"`
+	SnapshotName    string  `json:"snapshot_name,omitempty" doc:"Retained intermediate snapshot name, if any"`
+}
+
+type CloneDriveOutput struct {
+	Body cloneDriveResponse
 }
 
 type deviceResponse struct {
@@ -846,6 +887,45 @@ func registerDriveRoutes(api huma.API, svc *app.VMService) {
 			return nil, mapDomainError(err)
 		}
 		return &StatusOutput{Body: statusBody{Status: "ok"}}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "clone-drive",
+		Method:      http.MethodPost,
+		Path:        "/v1/drives/clone",
+		Summary:     "Clone a drive from a source volume",
+		Description: "CSI-shaped clone-from-snapshot operation. Maps 1:1 to a k8s " +
+			"PersistentVolumeClaim with a VolumeSnapshot dataSource. The source drive " +
+			"must be detached. When snapshot_name is set, the intermediate VolumeSnapshot " +
+			"is retained (caller-owned lifecycle); when omitted, an ephemeral snapshot " +
+			"is created and deleted after the clone completes. The response echoes " +
+			"source_volume_ref and (when retained) snapshot_name for the immediate " +
+			"caller's bookkeeping; this provenance is NOT persisted, so subsequent " +
+			"GET /v1/drives/{id} calls return the standard drive shape only.",
+		DefaultStatus: http.StatusCreated,
+		Tags:          []string{"Drives"},
+	}, func(ctx context.Context, input *CloneDriveInput) (*CloneDriveOutput, error) {
+		d, err := svc.CloneDrive(ctx, app.CloneDriveParams{
+			SourceVolumeRef: input.Body.SourceVolumeRef,
+			Name:            input.Body.Name,
+			MountPath:       input.Body.MountPath,
+			SnapshotName:    input.Body.SnapshotName,
+		})
+		if err != nil {
+			return nil, mapDomainError(err)
+		}
+		resp := cloneDriveResponse{
+			ID:              d.ID,
+			Name:            d.Name,
+			SizeBytes:       d.SizeBytes,
+			MountPath:       d.MountPath,
+			CreatedAt:       d.CreatedAt.UTC().Format(timeFormatJSON),
+			SourceVolumeRef: input.Body.SourceVolumeRef,
+		}
+		if input.Body.SnapshotName != "" {
+			resp.SnapshotName = input.Body.SnapshotName
+		}
+		return &CloneDriveOutput{Body: resp}, nil
 	})
 }
 

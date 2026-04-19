@@ -21,11 +21,15 @@ import (
 // --- mock VMStore ---
 
 type mockStore struct {
-	vms map[string]*domain.VM
+	vms    map[string]*domain.VM
+	drives map[string]*domain.Drive
 }
 
 func newMockStore() *mockStore {
-	return &mockStore{vms: make(map[string]*domain.VM)}
+	return &mockStore{
+		vms:    make(map[string]*domain.VM),
+		drives: make(map[string]*domain.Drive),
+	}
 }
 
 func (m *mockStore) Create(_ context.Context, vm *domain.VM) error {
@@ -168,6 +172,103 @@ func (m *mockStore) Resolve(_ context.Context, ref string) (*domain.VM, error) {
 	return nil, domain.ErrNotFound
 }
 
+// --- domain.DriveStore methods ---
+
+func (m *mockStore) CreateDrive(_ context.Context, d *domain.Drive) error {
+	if _, ok := m.drives[d.ID]; ok {
+		return domain.ErrAlreadyExists
+	}
+	for _, existing := range m.drives {
+		if existing.Name == d.Name {
+			return domain.ErrAlreadyExists
+		}
+	}
+	cp := *d
+	m.drives[d.ID] = &cp
+	return nil
+}
+
+func (m *mockStore) GetDrive(_ context.Context, id string) (*domain.Drive, error) {
+	d, ok := m.drives[id]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	cp := *d
+	return &cp, nil
+}
+
+func (m *mockStore) GetDriveByName(_ context.Context, name string) (*domain.Drive, error) {
+	for _, d := range m.drives {
+		if d.Name == name {
+			cp := *d
+			return &cp, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (m *mockStore) ResolveDrive(ctx context.Context, ref string) (*domain.Drive, error) {
+	if d, err := m.GetDrive(ctx, ref); err == nil {
+		return d, nil
+	}
+	return m.GetDriveByName(ctx, ref)
+}
+
+func (m *mockStore) ListDrives(_ context.Context) ([]*domain.Drive, error) {
+	out := make([]*domain.Drive, 0, len(m.drives))
+	for _, d := range m.drives {
+		cp := *d
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (m *mockStore) AttachDrive(_ context.Context, driveID, vmID string) error {
+	d, ok := m.drives[driveID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	d.VMID = vmID
+	return nil
+}
+
+func (m *mockStore) DetachDrive(_ context.Context, driveID string) error {
+	d, ok := m.drives[driveID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	d.VMID = ""
+	return nil
+}
+
+func (m *mockStore) DetachAllDrives(_ context.Context, vmID string) error {
+	for _, d := range m.drives {
+		if d.VMID == vmID {
+			d.VMID = ""
+		}
+	}
+	return nil
+}
+
+func (m *mockStore) GetDrivesByVM(_ context.Context, vmID string) ([]*domain.Drive, error) {
+	var out []*domain.Drive
+	for _, d := range m.drives {
+		if d.VMID == vmID {
+			cp := *d
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) DeleteDrive(_ context.Context, id string) error {
+	if _, ok := m.drives[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(m.drives, id)
+	return nil
+}
+
 // --- mock Runtime ---
 
 type mockRuntime struct {
@@ -254,6 +355,75 @@ func setupHandler() http.Handler {
 	health := app.NewHealthService()
 	health.Start(context.Background())
 	return httpapi.NewHandler(svc, health)
+}
+
+// setupHandlerWithStorage returns a handler whose VMService has the
+// drive-storage path wired (so /v1/drives/clone is routable). The
+// storage backend is an in-test fake that mirrors the unit-test
+// fakeStorage; the drive store is mockStore (extended above).
+func setupHandlerWithStorage(t *testing.T) (http.Handler, *app.VMService, *mockStore) {
+	t.Helper()
+	store := newMockStore()
+	rt := newMockRuntime()
+	fs := newHandlerFakeStorage()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
+		app.WithStorage(store, fs))
+	health := app.NewHealthService()
+	health.Start(context.Background())
+	return httpapi.NewHandler(svc, health), svc, store
+}
+
+func newHandlerFakeStorage() *handlerFakeStorage {
+	return &handlerFakeStorage{
+		volumes:   map[string]bool{},
+		snapshots: map[string]string{},
+	}
+}
+
+// handlerFakeStorage is a minimal in-memory domain.Storage. It mirrors
+// the unit-test fakeStorage in internal/app/drive_clone_test.go but
+// lives here so the httpapi package has no dependency on the app-test
+// package.
+type handlerFakeStorage struct {
+	volumes   map[string]bool
+	snapshots map[string]string
+}
+
+func (s *handlerFakeStorage) CreateVolume(_ context.Context, name string, _ uint64) (string, error) {
+	s.volumes[name] = true
+	return "/fake/" + name, nil
+}
+func (s *handlerFakeStorage) DeleteVolume(_ context.Context, name string) error {
+	delete(s.volumes, name)
+	return nil
+}
+func (s *handlerFakeStorage) VolumePath(name string) string                          { return "/fake/" + name }
+func (s *handlerFakeStorage) SendVolume(context.Context, string, io.Writer) error    { return nil }
+func (s *handlerFakeStorage) ReceiveVolume(context.Context, string, io.Reader) error { return nil }
+func (s *handlerFakeStorage) SnapshotVolume(_ context.Context, vol, snap string) error {
+	if !s.volumes[vol] {
+		return errors.New("source volume not found")
+	}
+	s.snapshots[snap] = vol
+	return nil
+}
+func (s *handlerFakeStorage) RestoreVolume(_ context.Context, _, _ string) error { return nil }
+func (s *handlerFakeStorage) CloneVolume(_ context.Context, snap, vol string) error {
+	if _, ok := s.snapshots[snap]; !ok {
+		return errors.New("snapshot not found")
+	}
+	if s.volumes[vol] {
+		return errors.New("clone target exists")
+	}
+	s.volumes[vol] = true
+	return nil
+}
+func (s *handlerFakeStorage) DeleteVolumeSnapshot(_ context.Context, snap string) error {
+	delete(s.snapshots, snap)
+	return nil
+}
+func (s *handlerFakeStorage) SendVolumeSnapshot(context.Context, string, io.Writer) error {
+	return nil
 }
 
 func doRequest(handler http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -660,5 +830,113 @@ func TestExecVMBadJSON(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCloneDriveEndpoint_Success(t *testing.T) {
+	h, svc, _ := setupHandlerWithStorage(t)
+
+	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "master", Size: "10Mi", MountPath: "/m",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "master",
+		"name":              "work-1",
+		"mount_path":        "/work",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	decodeJSON(t, rec, &resp)
+	if resp["name"] != "work-1" {
+		t.Errorf("name = %v, want work-1", resp["name"])
+	}
+	if resp["source_volume_ref"] != "master" {
+		t.Errorf("source_volume_ref = %v, want master", resp["source_volume_ref"])
+	}
+	if resp["mount_path"] != "/work" {
+		t.Errorf("mount_path = %v, want /work", resp["mount_path"])
+	}
+}
+
+func TestCloneDriveEndpoint_MountPathInherited(t *testing.T) {
+	h, svc, _ := setupHandlerWithStorage(t)
+
+	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "master", Size: "10Mi", MountPath: "/inherited",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "master",
+		"name":              "work-1",
+		// mount_path omitted
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	decodeJSON(t, rec, &resp)
+	if resp["mount_path"] != "/inherited" {
+		t.Errorf("mount_path = %v, want /inherited (inherited from source)", resp["mount_path"])
+	}
+}
+
+func TestCloneDriveEndpoint_SourceNotFound(t *testing.T) {
+	h, _, _ := setupHandlerWithStorage(t)
+
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "ghost",
+		"name":              "clone",
+	})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCloneDriveEndpoint_NameConflict(t *testing.T) {
+	h, svc, _ := setupHandlerWithStorage(t)
+
+	for _, n := range []string{"src", "taken"} {
+		if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+			Name: n, Size: "10Mi", MountPath: "/m",
+		}); err != nil {
+			t.Fatalf("seed %s: %v", n, err)
+		}
+	}
+
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "src",
+		"name":              "taken",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCloneDriveEndpoint_SourceAttached(t *testing.T) {
+	h, svc, store := setupHandlerWithStorage(t)
+
+	src, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "busy", Size: "10Mi", MountPath: "/m",
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := store.AttachDrive(context.Background(), src.ID, "vm-fake"); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "busy",
+		"name":              "clone",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (source attached); body=%s", rec.Code, rec.Body.String())
 	}
 }
