@@ -272,3 +272,43 @@ All VMs inherit the host's kernel hostname — `hostname` inside any Nexus VM re
 ## Notes Follow-ups
 
 See also `docs/2026-04-17-restart-reuses-stale-mount-spec.md` for the related stale-mount-spec bug.
+
+## Test Coverage Gaps
+
+### Convention
+
+`t.Skip` is the correct mechanism for environment-dependent tests. Every skip
+must include a reason string explaining the missing precondition. Tests must
+NOT be deleted or left out because they need special hardware or privileges —
+they must be present and skipping cleanly.
+
+The `mise run e2e` task requires the following preconditions that are not
+available in a standard development sandbox:
+
+- Root or `CAP_SYS_ADMIN` capability (btrfs quota, subvolume operations,
+  btrfs send/receive)
+- A btrfs-formatted filesystem at the working directory
+- The `btrfs` CLI in `PATH`
+- The `nexus-quota` and `nexus-cni-exec` helper binaries with `setcap`
+  applied (via `mise run install:local` / `scripts/dev-setcap-loop.sh`)
+- `NEXUS_BINARY` environment variable set (daemon leak harness)
+- Network capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`) for VM networking
+
+### Conditional `t.Skip` Entries (19 total)
+
+| File | Count | Condition |
+|------|-------|-----------|
+| `internal/infra/storage/btrfs_test.go` | 1 | not on btrfs filesystem |
+| `pkg/btrfs/btrfs_test.go` | 7 | btrfs CLI missing, not btrfs fs, no CAP_SYS_ADMIN, no /dev/shm, quotas not enabled |
+| `pkg/btrfs/e2e_test.go` | 4 | btrfs CLI missing, no CAP_SYS_ADMIN for send/receive and qgroup |
+| `tests/e2e/harness/daemon_leak_test.go` | 1 | `NEXUS_BINARY` not set |
+| `tests/e2e/snapshot_test.go` | 3 | not btrfs, statfs failure, btrfs CLI missing |
+| `tests/e2e/metrics_test.go` | 2 | built binary not found |
+| `tests/e2e/nexus_test.go` | 1 | networking capabilities not set on binary |
+
+### `mise run e2e` Sandbox Limitation
+
+`mise run e2e` was not run in the CI-less sandbox used for this work. The task
+requires root privileges, btrfs storage, and `setcap`-decorated helper binaries
+that cannot be installed without `sudo`. All unit tests (`mise run test`) pass
+cleanly. E2E is exercised in the PG CI job on the full CI host.

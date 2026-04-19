@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# golangci-lint v2 configuration for nexus.
+#
+# Two rules enforce the hexagonal architecture boundary:
+#
+#   depguard   — prevents non-infra, non-cmd *production* code from importing
+#                concrete adapter packages (infra/sqlite, infra/postgres).
+#                Test files may import them (sqlite.Open(":memory:") is the
+#                endorsed in-memory-store testing pattern). The forbidigo rule
+#                below still prohibits leaking the concrete type into function
+#                signatures even in test files.
+#
+#   forbidigo  — prevents sqlite.Store and postgres.Store from appearing in
+#                any Go source outside internal/infra/. Within infra, the
+#                qualified cross-package form (sqlite.Store / postgres.Store)
+#                is never used — infra methods use the unqualified *Store
+#                receiver, so the pattern has zero false positives inside the
+#                adapters.
+#                This catches the "test-fixture leak": a helper that internally
+#                constructs *sqlite.Store but MUST return a port interface.
+#
+# NOTE: this config uses the golangci-lint v2 format (linters.settings nested
+# under linters, not top-level linters-settings). Run `golangci-lint config
+# verify` to confirm the schema is valid after any edits.
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+    - forbidigo
+  settings:
+    depguard:
+      rules:
+        # Production (non-test) files outside internal/infra/ and cmd/ may not
+        # import the concrete adapter packages directly. All such code must
+        # depend on the port interfaces declared in internal/domain/ports.go.
+        #
+        # cmd/ is the composition root and is allowed to wire adapters.
+        # internal/infra/ contains the adapters themselves.
+        # _test.go files are excluded: they may open in-memory SQLite stores
+        # for unit tests, but must return port-typed values (forbidigo rule).
+        infra-boundary:
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/internal/infra/**"
+            - "!**/cmd/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/Work-Fort/Nexus/internal/infra/sqlite
+              desc: >
+                Production code outside internal/infra/ and cmd/ must not
+                depend on the SQLite adapter. Accept domain.VMStore,
+                domain.TemplateStore, or infra.Store as a parameter instead
+                of opening a concrete store.
+            - pkg: github.com/Work-Fort/Nexus/internal/infra/postgres
+              desc: >
+                Production code outside internal/infra/ and cmd/ must not
+                depend on the Postgres adapter. Accept domain.VMStore,
+                domain.TemplateStore, or infra.Store as a parameter instead.
+
+    forbidigo:
+      # Forbid the qualified concrete types sqlite.Store and postgres.Store
+      # in function signatures. This is the guard that test helpers must return
+      # a port interface, not the adapter. The infra packages themselves use
+      # unqualified *Store receivers, so these patterns have no false positives
+      # inside internal/infra/sqlite/ or internal/infra/postgres/.
+      #
+      # analyze-types is false (default): pattern matches against source text,
+      # not type information. Sufficient for catching type-leaked signatures.
+      analyze-types: false
+      forbid:
+        # NOTE: forbidigo matches against identifier text, not the full type
+        # expression, so the pattern is "sqlite.Store" (without the leading
+        # asterisk). The * is a pointer sigil in the AST, not part of the
+        # identifier. This pattern has zero false positives inside the adapter
+        # packages because they use the unqualified *Store receiver.
+        - pattern: 'sqlite\.Store'
+          msg: >
+            Use a port interface (infra.Store, domain.VMStore, or another
+            domain store interface) as the function parameter/return type —
+            not the concrete *sqlite.Store. See skills/lead/
+            go-service-architecture/references/architecture-reference.md
+            §"Test Fixture Return Types".
+        - pattern: 'postgres\.Store'
+          msg: >
+            Use a port interface (infra.Store, domain.VMStore, or another
+            domain store interface) as the function parameter/return type —
+            not the concrete *postgres.Store. See skills/lead/
+            go-service-architecture/references/architecture-reference.md
+            §"Test Fixture Return Types".
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

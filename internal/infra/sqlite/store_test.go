@@ -7,10 +7,14 @@ import (
 	"time"
 
 	"github.com/Work-Fort/Nexus/internal/domain"
+	"github.com/Work-Fort/Nexus/internal/infra"
 	"github.com/Work-Fort/Nexus/internal/infra/sqlite"
 )
 
-func openTestStore(t *testing.T) *sqlite.Store {
+// openTestStore opens an in-memory SQLite store and returns it as the infra.Store
+// port interface. All tests exercise the domain-level port contract, not
+// SQLite-specific internals. See architecture-reference.md §"Test Fixture Return Types".
+func openTestStore(t *testing.T) infra.Store {
 	t.Helper()
 	store, err := sqlite.Open(":memory:")
 	if err != nil {
