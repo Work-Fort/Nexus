@@ -88,9 +88,11 @@ In scope:
 7. E2E tests against the live daemon (SQLite-only — Nexus is single-
    backend per `TOOLING-BASELINE-REMAINING-WORK.md` PG deferral)
    covering REST and MCP.
-8. Harness `Client.CloneDrive` method for the e2e tests.
-9. Harness `Client.CallMCPTool` (raw JSON-RPC over the streamable HTTP
-   `/mcp` endpoint) for the MCP e2e test.
+8. Harness `Client.CloneDrive` (REST) for the e2e tests. MCP e2e tests
+   reuse the existing harness `Client.MCPCall` at
+   `tests/e2e/harness/harness.go:1247`, which already handles session
+   initialization (`Mcp-Session-Id`), the JSON-vs-SSE response framing,
+   and notification-vs-result filtering.
 
 Out of scope:
 1. Hot drive attach (deferred per umbrella spec).
@@ -230,10 +232,32 @@ func TestBtrfsStorage_CloneVolume(t *testing.T) {
 }
 ```
 
-If `requireBtrfs` does not exist in `btrfs_test.go`, add the same
-implementation that `tests/e2e/snapshot_test.go:20` uses (statfs +
-`btrfs` CLI lookup). Verify first with `grep -n "func requireBtrfs"
-internal/infra/storage/btrfs_test.go` and reuse if present.
+**Note on the `requireBtrfs` helper:** `tests/e2e/snapshot_test.go:20`
+defines `requireBtrfs` in package `e2e` (unexported), so it cannot be
+imported from `internal/infra/storage`. First check whether
+`internal/infra/storage/btrfs_test.go` already has its own copy (run
+`grep -n "func requireBtrfs" internal/infra/storage/btrfs_test.go`).
+If absent, copy the ~10-line helper into `btrfs_test.go`:
+
+```go
+const btrfsSuperMagic = 0x9123683e
+
+func requireBtrfs(t *testing.T) {
+	t.Helper()
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(".", &st); err != nil {
+		t.Skipf("statfs: %v", err)
+	}
+	if st.Type != btrfsSuperMagic {
+		t.Skip("working directory is not on btrfs")
+	}
+	if _, err := exec.LookPath("btrfs"); err != nil {
+		t.Skip("btrfs CLI not in PATH")
+	}
+}
+```
+
+Add the imports `os/exec`, `syscall` to the test file's import block.
 
 **Step 2: Run the test to verify it fails**
 
@@ -445,8 +469,10 @@ func (s *fakeStorage) SendVolumeSnapshot(context.Context, string, io.Writer) err
 
 // newCloneTestSvc builds a VMService backed by an in-memory sqlite
 // store (which implements domain.DriveStore) and the fakeStorage.
-// Returns the service plus a cleanup hook the test must defer.
-func newCloneTestSvc(t *testing.T) (*app.VMService, *fakeStorage, func()) {
+// Returns the service, the fake, the underlying store (so tests can
+// AttachDrive directly to exercise the source-attached rejection
+// path), and a cleanup hook the test must defer.
+func newCloneTestSvc(t *testing.T) (*app.VMService, *fakeStorage, *sqlite.Store, func()) {
 	t.Helper()
 	store, err := sqlite.Open(":memory:")
 	if err != nil {
@@ -454,11 +480,11 @@ func newCloneTestSvc(t *testing.T) (*app.VMService, *fakeStorage, func()) {
 	}
 	fs := newFakeStorage()
 	svc := app.NewVMService(nil, nil, nil, app.WithStorage(store, fs))
-	return svc, fs, func() { _ = store.Close() }
+	return svc, fs, store, func() { _ = store.Close() }
 }
 
 func TestCloneDrive_HappyPath(t *testing.T) {
-	svc, fs, cleanup := newCloneTestSvc(t)
+	svc, fs, _, cleanup := newCloneTestSvc(t)
 	defer cleanup()
 
 	src, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
@@ -508,7 +534,7 @@ func TestCloneDrive_HappyPath(t *testing.T) {
 }
 
 func TestCloneDrive_MountPathOverride(t *testing.T) {
-	svc, _, cleanup := newCloneTestSvc(t)
+	svc, _, _, cleanup := newCloneTestSvc(t)
 	defer cleanup()
 
 	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
@@ -531,7 +557,7 @@ func TestCloneDrive_MountPathOverride(t *testing.T) {
 }
 
 func TestCloneDrive_RetainSnapshot(t *testing.T) {
-	svc, fs, cleanup := newCloneTestSvc(t)
+	svc, fs, _, cleanup := newCloneTestSvc(t)
 	defer cleanup()
 
 	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
@@ -560,7 +586,7 @@ func TestCloneDrive_RetainSnapshot(t *testing.T) {
 }
 
 func TestCloneDrive_SourceNotFound(t *testing.T) {
-	svc, _, cleanup := newCloneTestSvc(t)
+	svc, _, _, cleanup := newCloneTestSvc(t)
 	defer cleanup()
 
 	_, err := svc.CloneDrive(context.Background(), app.CloneDriveParams{
@@ -573,7 +599,7 @@ func TestCloneDrive_SourceNotFound(t *testing.T) {
 }
 
 func TestCloneDrive_NameConflict(t *testing.T) {
-	svc, _, cleanup := newCloneTestSvc(t)
+	svc, _, _, cleanup := newCloneTestSvc(t)
 	defer cleanup()
 
 	for _, n := range []string{"src", "taken"} {
@@ -594,7 +620,7 @@ func TestCloneDrive_NameConflict(t *testing.T) {
 }
 
 func TestCloneDrive_SourceAttached_Rejected(t *testing.T) {
-	svc, _, cleanup := newCloneTestSvc(t)
+	svc, _, store, cleanup := newCloneTestSvc(t)
 	defer cleanup()
 
 	src, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
@@ -603,35 +629,20 @@ func TestCloneDrive_SourceAttached_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Reach into the underlying drive store to fake an attachment.
-	// The svc holds the same *sqlite.Store under the DriveStore port,
-	// but the unit test does not have a back-reference to it. Re-open
-	// a parallel store, build a parallel svc, and exercise the
-	// rejection path on that — same code path, isolated state.
-	store2, err := sqlite.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store2.Close()
-	svc2 := app.NewVMService(nil, nil, nil, app.WithStorage(store2, newFakeStorage()))
-	srcDrive, err := svc2.CreateDrive(context.Background(), domain.CreateDriveParams{
-		Name: "src2", Size: "10Mi", MountPath: "/src",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store2.AttachDrive(context.Background(), srcDrive.ID, "vm-fake"); err != nil {
+	// AttachDrive directly via the underlying store — VMService.AttachDrive
+	// would require a real VMStore (we passed nil). The CloneDrive code path
+	// only inspects src.VMID, which is what AttachDrive sets.
+	if err := store.AttachDrive(context.Background(), src.ID, "vm-fake"); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = svc2.CloneDrive(context.Background(), app.CloneDriveParams{
-		SourceVolumeRef: "src2",
+	_, err = svc.CloneDrive(context.Background(), app.CloneDriveParams{
+		SourceVolumeRef: "src",
 		Name:            "clone",
 	})
 	if !errors.Is(err, domain.ErrInvalidState) {
 		t.Errorf("err = %v, want ErrInvalidState", err)
 	}
-	_ = src
 }
 ```
 
@@ -1162,6 +1173,28 @@ func TestCloneDriveEndpoint_NameConflict(t *testing.T) {
 		t.Errorf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestCloneDriveEndpoint_SourceAttached(t *testing.T) {
+	h, svc, store := setupHandlerWithStorage(t)
+
+	src, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "busy", Size: "10Mi", MountPath: "/m",
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := store.AttachDrive(context.Background(), src.ID, "vm-fake"); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "busy",
+		"name":              "clone",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (source attached); body=%s", rec.Code, rec.Body.String())
+	}
+}
 ```
 
 **Step 4: Run the tests to verify they fail**
@@ -1268,8 +1301,9 @@ Register the route at the end of `registerDriveRoutes` (after the
 **Step 6: Run the tests to verify they pass**
 
 Run: `go test -run TestCloneDriveEndpoint ./internal/infra/httpapi/...`
-Expected: PASS for all four cases (Success → 201, MountPathInherited
-→ 201 with `/inherited`, SourceNotFound → 404, NameConflict → 409).
+Expected: PASS for all five cases (Success → 201, MountPathInherited
+→ 201 with `/inherited`, SourceNotFound → 404, NameConflict → 409,
+SourceAttached → 409).
 
 **Step 7: Commit**
 
@@ -1304,8 +1338,9 @@ domain.DriveStore methods and adds setupHandlerWithStorage that wires
 WithStorage onto the VMService. handlerFakeStorage mirrors the
 unit-test fake without depending on the app-test package.
 
-Four handler tests cover: success (with explicit mount_path),
-mount_path inheritance, source-not-found, and name conflict.
+Five handler tests cover: success (with explicit mount_path),
+mount_path inheritance, source-not-found, name conflict, and
+attached-source rejection (409).
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -1319,8 +1354,9 @@ EOF
 **Depends on:** Task 2 (the app method).
 
 **Files:**
-- Modify: `internal/infra/mcp/handler.go` (extend `registerDriveTools`
-  ~line 416)
+- Modify: `internal/infra/mcp/handler.go` (extend `registerDriveTools`,
+  which spans ~line 416 to ~line 524 — append the new tool after the
+  `drive_detach` block at ~line 523)
 
 **Note on test scaffolding:** `internal/infra/mcp/handler_test.go` is
 a 17-line file with one smoke test (`TestNewHandlerNonNil`) — it has
@@ -1425,15 +1461,22 @@ EOF
 
 ---
 
-### Task 5: Harness helpers — `Client.CloneDrive` and `Client.CallMCPTool`
+### Task 5: Harness `Client.CloneDrive` (REST helper)
 
-**Depends on:** Tasks 3 and 4 (REST endpoint + MCP tool).
+**Depends on:** Task 3 (REST endpoint).
 
 **Files:**
 - Modify: `tests/e2e/harness/harness.go` (add `CloneDriveResponse`
-  type near the existing `Drive` ~line 569, `CloneDrive` method near
-  the existing drive operations ~line 978, and a new `CallMCPTool`
-  method near the end of the file)
+  type near the existing `Drive` ~line 569, and `CloneDrive` method
+  near the existing drive operations ~line 978)
+
+**No new MCP helper is required.** The harness already exposes
+`Client.MCPCall(toolName, args)` at
+`tests/e2e/harness/harness.go:1247` with full session management
+(`Mcp-Session-Id`), automatic `initialize` handshake, JSON-vs-SSE
+response framing, and notification-vs-result filtering. The
+`MCPToolResult` type is already defined at line 1176. Task 6's MCP
+e2e tests use it directly.
 
 **Step 1: Add the REST clone helpers**
 
@@ -1496,112 +1539,16 @@ Use `json.Marshal` (not `fmt.Sprintf`) because mount_path and
 snapshot_name are optional — `omitempty` semantics matter for the
 inheritance test.
 
-**Step 2: Add the MCP tool-call helper**
-
-Append near the end of the file (after the existing snapshot/exec
-helpers):
-
-```go
-// MCPToolResult is the parsed result of a tool call against the
-// daemon's /mcp endpoint. Content is the JSON text the tool returned;
-// IsError mirrors the JSON-RPC isError flag.
-type MCPToolResult struct {
-	Content string
-	IsError bool
-}
-
-// CallMCPTool invokes a tool by name on the daemon's /mcp endpoint
-// using a single JSON-RPC tools/call request over Streamable HTTP.
-// arguments is marshalled into the params.arguments field. The result
-// content is the first text-content block returned by the tool (which
-// is the convention every Nexus tool follows via jsonResult /
-// NewToolResultText).
-func (c *Client) CallMCPTool(name string, arguments map[string]any) (*MCPToolResult, error) {
-	reqID := atomic.AddInt64(&c.mcpReqID, 1)
-	payload := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      reqID,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      name,
-			"arguments": arguments,
-		},
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	httpReq, err := http.NewRequest(http.MethodPost, c.base+"/mcp", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json, text/event-stream")
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	// mcp-go's StreamableHTTPServer may return either a single JSON
-	// object or an SSE stream. For a tools/call request the server
-	// responds with a single JSON-RPC response message; if SSE-framed,
-	// strip the "data: " prefix and parse the JSON inside.
-	jsonText := bytes.TrimSpace(raw)
-	if bytes.HasPrefix(jsonText, []byte("data:")) {
-		for _, line := range bytes.Split(jsonText, []byte("\n")) {
-			line = bytes.TrimSpace(line)
-			if bytes.HasPrefix(line, []byte("data:")) {
-				jsonText = bytes.TrimSpace(line[len("data:"):])
-				break
-			}
-		}
-	}
-	var rpc struct {
-		Result struct {
-			IsError bool `json:"isError"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"result"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(jsonText, &rpc); err != nil {
-		return nil, fmt.Errorf("decode mcp response: %w; raw=%s", err, raw)
-	}
-	if rpc.Error != nil {
-		return nil, fmt.Errorf("mcp transport error: %s", rpc.Error.Message)
-	}
-	if len(rpc.Result.Content) == 0 {
-		return &MCPToolResult{IsError: rpc.Result.IsError}, nil
-	}
-	return &MCPToolResult{Content: rpc.Result.Content[0].Text, IsError: rpc.Result.IsError}, nil
-}
-```
-
-The `Client` struct must gain an `mcpReqID int64` field (declare near
-the existing field block — verify location with `grep -n "type Client
-struct" tests/e2e/harness/harness.go`). Add the imports `bytes`, `io`,
-`sync/atomic` to the file's import block — verify with `grep -n
-'"bytes"\|"sync/atomic"' tests/e2e/harness/harness.go` and add what's
-missing.
-
-**Step 3: Verify it compiles**
+**Step 2: Verify it compiles**
 
 Run: `cd tests/e2e && go vet ./harness/...`
 Expected: PASS.
 
-**Step 4: Commit**
+**Step 3: Commit**
 
 ```
 git commit -m "$(cat <<'EOF'
-test(e2e): add harness Client.CloneDrive and CallMCPTool helpers
+test(e2e): add harness Client.CloneDrive REST helper
 
 CloneDrive issues POST /v1/drives/clone with the same CSI-shaped
 request body the REST endpoint accepts, marshalled via json.Marshal
@@ -1609,14 +1556,10 @@ so omitempty semantics (mount_path, snapshot_name) carry through to
 the wire. Returns CloneDriveResponse so e2e tests can assert on the
 provenance echo.
 
-CallMCPTool dispatches a single JSON-RPC tools/call against the
-daemon's /mcp endpoint over the streamable HTTP transport. Handles
-both the plain JSON and SSE response framings the mcp-go server
-may produce. Returns the first text-content block and the isError
-flag, matching the contract every Nexus tool follows via
-jsonResult / NewToolResultText.
-
-Both helpers exist to support the upcoming drive_clone e2e tests.
+MCP coverage in the upcoming e2e tests reuses the existing
+Client.MCPCall helper at tests/e2e/harness/harness.go:1247, which
+already handles the initialize handshake, Mcp-Session-Id, and the
+JSON-vs-SSE response framings. No new MCP helper is needed.
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -1793,12 +1736,12 @@ func TestCloneDrive_E2E_MCP_HappyPath(t *testing.T) {
 		t.Fatalf("seed source: %v", err)
 	}
 
-	res, err := bd.client.CallMCPTool("drive_clone", map[string]any{
+	res, err := bd.client.MCPCall("drive_clone", map[string]any{
 		"source_volume_ref": "mcp-master",
 		"name":              "mcp-child",
 	})
 	if err != nil {
-		t.Fatalf("CallMCPTool: %v", err)
+		t.Fatalf("MCPCall: %v", err)
 	}
 	if res.IsError {
 		t.Fatalf("tool returned error: %s", res.Content)
@@ -1831,15 +1774,18 @@ func TestCloneDrive_E2E_MCP_MissingRequired(t *testing.T) {
 	requireBtrfs(t)
 	bd := startBtrfsDaemon(t)
 
-	res, err := bd.client.CallMCPTool("drive_clone", map[string]any{
+	res, err := bd.client.MCPCall("drive_clone", map[string]any{
 		"name": "child-only",
 		// missing source_volume_ref
 	})
 	if err != nil {
-		t.Fatalf("CallMCPTool: %v", err)
+		t.Fatalf("MCPCall: %v", err)
 	}
 	if !res.IsError {
 		t.Errorf("expected isError=true for missing source_volume_ref; content=%s", res.Content)
+	}
+	if !strings.Contains(res.Content, "source_volume_ref") {
+		t.Errorf("error content should name the missing field; got=%s", res.Content)
 	}
 }
 ```
