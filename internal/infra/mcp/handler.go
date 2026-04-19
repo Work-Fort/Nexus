@@ -521,6 +521,55 @@ func registerDriveTools(s *server.MCPServer, svc *app.VMService) {
 		}
 		return mcp.NewToolResultText("detached"), nil
 	})
+
+	// drive_clone — CSI-shaped clone-from-snapshot operation.
+	s.AddTool(mcp.NewTool("drive_clone",
+		mcp.WithDescription("Clone an existing drive into a new drive (CSI VolumeSnapshot + PVC dataSource shape). "+
+			"Source must be detached. mount_path is optional — inherits from source when omitted. "+
+			"snapshot_name is optional — when set, the intermediate snapshot is retained. "+
+			"Usage: drive_clone(source_volume_ref: \"master\", name: \"work-1\")"),
+		mcp.WithString("source_volume_ref", mcp.Description("Source drive ID or name to clone from"), mcp.Required()),
+		mcp.WithString("name", mcp.Description("New drive name"), mcp.Required()),
+		mcp.WithString("mount_path", mcp.Description("Optional mount path; inherits from source when omitted")),
+		mcp.WithString("snapshot_name", mcp.Description("Optional intermediate snapshot name; if set, the snapshot is retained")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		src, errRes := requireString(req, "source_volume_ref")
+		if errRes != nil {
+			return errRes, nil
+		}
+		name, errRes := requireString(req, "name")
+		if errRes != nil {
+			return errRes, nil
+		}
+		mountPath := mcp.ParseString(req, "mount_path", "")
+		snapName := mcp.ParseString(req, "snapshot_name", "")
+
+		d, err := svc.CloneDrive(ctx, app.CloneDriveParams{
+			SourceVolumeRef: src,
+			Name:            name,
+			MountPath:       mountPath,
+			SnapshotName:    snapName,
+		})
+		if err != nil {
+			return errResult(err)
+		}
+		// Echo the CSI provenance fields back so the result is
+		// self-describing for an MCP caller (e.g., Flow's runtime driver).
+		// Provenance is request-scoped only — it is not persisted on
+		// domain.Drive.
+		out := map[string]any{
+			"id":                d.ID,
+			"name":              d.Name,
+			"size_bytes":        d.SizeBytes,
+			"mount_path":        d.MountPath,
+			"created_at":        d.CreatedAt,
+			"source_volume_ref": src,
+		}
+		if snapName != "" {
+			out["snapshot_name"] = snapName
+		}
+		return jsonResult(out)
+	})
 }
 
 // registerDeviceTools registers device_create, device_list, device_get,
