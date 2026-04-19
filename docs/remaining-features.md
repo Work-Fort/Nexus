@@ -306,7 +306,6 @@ available in a standard development sandbox:
 | `tests/e2e/metrics_test.go` | 2 | built binary not found |
 | `tests/e2e/nexus_test.go` | 1 | networking capabilities not set on binary |
 
-
 ### `mise run e2e` Sandbox Limitation
 
 `mise run e2e` was not run in the CI-less sandbox used for this work. The task
