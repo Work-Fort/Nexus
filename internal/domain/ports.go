@@ -238,6 +238,11 @@ type Storage interface {
 	ReceiveVolume(ctx context.Context, name string, r io.Reader) error
 	SnapshotVolume(ctx context.Context, volumeName, snapshotName string) error
 	RestoreVolume(ctx context.Context, snapshotName, volumeName string) error
+	// CloneVolume materialises an existing snapshot into a brand-new
+	// (non-existent) volume name. Unlike RestoreVolume, the destination
+	// MUST NOT exist; the call fails if it does. This is the primitive
+	// behind the CSI-shaped CloneDrive operation.
+	CloneVolume(ctx context.Context, snapshotName, newVolumeName string) error
 	DeleteVolumeSnapshot(ctx context.Context, snapshotName string) error
 	SendVolumeSnapshot(ctx context.Context, snapshotName string, w io.Writer) error
 }

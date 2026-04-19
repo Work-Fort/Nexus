@@ -58,6 +58,10 @@ func (s *NoopStorage) RestoreVolume(_ context.Context, _, _ string) error {
 	return domain.ErrSnapshotNotSupported
 }
 
+func (s *NoopStorage) CloneVolume(_ context.Context, _, _ string) error {
+	return domain.ErrSnapshotNotSupported
+}
+
 func (s *NoopStorage) DeleteVolumeSnapshot(_ context.Context, _ string) error {
 	return domain.ErrSnapshotNotSupported
 }

@@ -177,6 +177,23 @@ func (s *BtrfsStorage) RestoreVolume(_ context.Context, snapshotName, volumeName
 	return nil
 }
 
+// CloneVolume materialises a writable copy of the named snapshot at a
+// brand-new volume path. Fails if the destination already exists.
+// Unlike RestoreVolume, this is non-destructive — it is the primitive
+// behind CSI clone-from-snapshot semantics, where the "data source"
+// is a snapshot and the resulting PVC is a fresh volume.
+func (s *BtrfsStorage) CloneVolume(_ context.Context, snapshotName, newVolumeName string) error {
+	snapPath := filepath.Join(s.basePath, ".snapshots", snapshotName)
+	volPath := filepath.Join(s.basePath, newVolumeName)
+	if _, err := os.Stat(volPath); err == nil {
+		return fmt.Errorf("clone target %s: %w", newVolumeName, os.ErrExist)
+	}
+	if err := btrfs.CreateSnapshot(snapPath, volPath, false); err != nil {
+		return fmt.Errorf("clone volume %s from %s: %w", newVolumeName, snapshotName, err)
+	}
+	return nil
+}
+
 // DeleteVolumeSnapshot removes a read-only volume snapshot.
 func (s *BtrfsStorage) DeleteVolumeSnapshot(_ context.Context, snapshotName string) error {
 	snapPath := filepath.Join(s.basePath, ".snapshots", snapshotName)
