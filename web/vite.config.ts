@@ -3,6 +3,10 @@ import vue from '@vitejs/plugin-vue';
 import { federation } from '@module-federation/vite';
 
 export default defineConfig({
+  // Served under /ui/ by the Nexus daemon (see cmd/daemon.go). Using './'
+  // keeps all asset references relative to index.html so they resolve
+  // correctly under any mount prefix.
+  base: './',
   plugins: [
     vue({
       template: {
