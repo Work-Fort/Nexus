@@ -623,6 +623,10 @@ func (m *mockStorage) RestoreVolume(_ context.Context, _, _ string) error {
 	return nil
 }
 
+func (m *mockStorage) CloneVolume(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func (m *mockStorage) DeleteVolumeSnapshot(_ context.Context, _ string) error {
 	return nil
 }
