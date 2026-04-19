@@ -575,6 +575,20 @@ type Drive struct {
 	CreatedAt string  `json:"created_at"`
 }
 
+// CloneDriveResponse mirrors the CSI-shaped JSON returned from
+// POST /v1/drives/clone — a Drive plus the provenance fields.
+// Provenance is request-scoped only and is not persisted.
+type CloneDriveResponse struct {
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	SizeBytes       uint64  `json:"size_bytes"`
+	MountPath       string  `json:"mount_path"`
+	VMID            *string `json:"vm_id,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+	SourceVolumeRef string  `json:"source_volume_ref"`
+	SnapshotName    string  `json:"snapshot_name,omitempty"`
+}
+
 type Device struct {
 	ID            string  `json:"id"`
 	Name          string  `json:"name"`
@@ -975,6 +989,38 @@ func (c *Client) DetachDrive(id string) error {
 	}
 	resp.Body.Close()
 	return checkStatus(resp, http.StatusOK)
+}
+
+// CloneDrive issues POST /v1/drives/clone with a CSI-shaped body and
+// returns the new drive plus echoed provenance. Pass empty mountPath
+// to inherit the source's mount_path; pass empty snapshotName for an
+// ephemeral intermediate snapshot.
+func (c *Client) CloneDrive(sourceVolumeRef, name, mountPath, snapshotName string) (*CloneDriveResponse, error) {
+	type reqBody struct {
+		SourceVolumeRef string `json:"source_volume_ref"`
+		Name            string `json:"name"`
+		MountPath       string `json:"mount_path,omitempty"`
+		SnapshotName    string `json:"snapshot_name,omitempty"`
+	}
+	body, err := json.Marshal(reqBody{
+		SourceVolumeRef: sourceVolumeRef,
+		Name:            name,
+		MountPath:       mountPath,
+		SnapshotName:    snapshotName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.post("/v1/drives/clone", string(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp, http.StatusCreated); err != nil {
+		return nil, err
+	}
+	var out CloneDriveResponse
+	return &out, json.NewDecoder(resp.Body).Decode(&out)
 }
 
 // --- Device operations ---
