@@ -2,7 +2,7 @@
 type: plan
 step: "1"
 title: "nexus e2e harness — orphan-leak hardening"
-status: pending
+status: approved
 assessment_status: complete
 provenance:
   source: roadmap
@@ -10,7 +10,7 @@ provenance:
   roadmap_step: null
 dates:
   created: "2026-04-19"
-  approved: null
+  approved: "2026-04-19"
   completed: null
 related_plans: []
 ---
