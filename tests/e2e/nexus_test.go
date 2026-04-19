@@ -123,7 +123,12 @@ func startDaemon(t *testing.T, opts ...harness.DaemonOption) (*harness.Daemon, *
 		t.Fatal(err)
 	}
 
-	d, err := harness.StartDaemon(nexusBin, binDir, addr, opts...)
+	// Disable quota helper: the XDG state dir lands on btrfs (project root is
+	// btrfs), so the daemon would otherwise activate BtrfsStorage + nexus-quota,
+	// which fails without CAP_SYS_ADMIN. Tests that need quota pass their own
+	// WithQuotaHelper option which overrides this default.
+	defaults := []harness.DaemonOption{harness.WithQuotaHelper("")}
+	d, err := harness.StartDaemon(nexusBin, binDir, addr, append(defaults, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
