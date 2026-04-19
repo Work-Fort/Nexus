@@ -209,6 +209,16 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 	)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = stderrFile
+	// Setpgid puts the daemon and any direct descendants in a fresh
+	// process group equal to the daemon PID; the negative-pid kill
+	// in Stop signals the whole group. Containerd-spawned shims may
+	// not be in the group (they're children of containerd, not the
+	// daemon), so cleanupNamespace remains the authoritative ctr-
+	// based reaper for those. WaitDelay force-closes any inherited
+	// fds after the daemon exits. See the orphan-process hardening
+	// section of go-service-architecture.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 10 * time.Second
 
 	if err := cmd.Start(); err != nil {
 		stderrFile.Close()
@@ -233,7 +243,8 @@ func StartDaemon(binary, binDir, addr string, opts ...DaemonOption) (*Daemon, er
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	cmd.Process.Kill()
+	pgid := cmd.Process.Pid
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	cmd.Wait()
 	stderrFile.Close()
 	os.Remove(stderrFile.Name())
@@ -316,6 +327,16 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 	)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = stderrFile
+	// Setpgid puts the daemon and any direct descendants in a fresh
+	// process group equal to the daemon PID; the negative-pid kill
+	// in Stop signals the whole group. Containerd-spawned shims may
+	// not be in the group (they're children of containerd, not the
+	// daemon), so cleanupNamespace remains the authoritative ctr-
+	// based reaper for those. WaitDelay force-closes any inherited
+	// fds after the daemon exits. See the orphan-process hardening
+	// section of go-service-architecture.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 10 * time.Second
 
 	if err := cmd.Start(); err != nil {
 		stderrFile.Close()
@@ -339,7 +360,8 @@ func StartDaemonWithNamespace(binary, binDir, addr, namespace, xdgDir string, op
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	cmd.Process.Kill()
+	pgid := cmd.Process.Pid
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	cmd.Wait()
 	stderrFile.Close()
 	os.Remove(stderrFile.Name())
@@ -365,30 +387,34 @@ func (d *Daemon) StopFatal(t testing.TB) {
 	}
 }
 
-// Kill sends SIGKILL to the daemon (simulates crash). Does NOT clean up
-// namespace or XDG dir — those are reused by the next daemon instance.
+// Kill sends SIGKILL to the daemon's process group (simulates crash).
+// Does NOT clean up namespace or XDG dir — those are reused by the
+// next daemon instance.
 func (d *Daemon) Kill() {
 	if d.cmd.Process != nil {
-		d.cmd.Process.Kill()
+		pgid := d.cmd.Process.Pid
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		d.cmd.Wait()
 	}
 }
 
-// GracefulStop sends SIGTERM and waits for the daemon to exit, but does NOT
-// clean up the namespace or XDG dir. Use this to test graceful shutdown
-// behavior across daemon restarts.
+// GracefulStop sends SIGTERM to the daemon's process group and waits
+// for the daemon to exit, but does NOT clean up the namespace or XDG
+// dir. Use this to test graceful shutdown behavior across daemon
+// restarts.
 func (d *Daemon) GracefulStop() error {
 	if d.cmd.Process == nil {
 		return nil
 	}
-	d.cmd.Process.Signal(syscall.SIGTERM)
+	pgid := d.cmd.Process.Pid
+	_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	done := make(chan error, 1)
 	go func() { done <- d.cmd.Wait() }()
 	select {
 	case err := <-done:
 		return err
 	case <-time.After(15 * time.Second):
-		d.cmd.Process.Kill()
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		<-done
 		return fmt.Errorf("daemon did not exit after SIGTERM")
 	}
@@ -409,7 +435,8 @@ func (d *Daemon) Stop() error {
 	if d.cmd.Process == nil {
 		return nil
 	}
-	d.cmd.Process.Signal(syscall.SIGTERM)
+	pgid := d.cmd.Process.Pid
+	_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	done := make(chan error, 1)
 	go func() { done <- d.cmd.Wait() }()
 	select {
@@ -417,7 +444,7 @@ func (d *Daemon) Stop() error {
 		d.cleanup()
 		return err
 	case <-time.After(20 * time.Second):
-		d.cmd.Process.Kill()
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		<-done
 		d.cleanup()
 		return fmt.Errorf("daemon did not exit after SIGTERM")
