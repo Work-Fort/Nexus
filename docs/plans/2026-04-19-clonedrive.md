@@ -23,46 +23,74 @@ that maps 1:1 to k8s CSI primitives (VolumeSnapshot + PVC clone-from-
 snapshot). Flow's `RuntimeDriver.CloneWorkItemVolume` is the consumer;
 its k8s impl will use the same wire shape against a k8s API server.
 
-The btrfs primitive `s.storage.SnapshotVolume` already exists and is
-called by `internal/app/snapshot.go::CreateSnapshot` to clone drives as
-part of cloning a whole VM. This plan exposes the same primitive at the
-**drive level** behind a CSI-vocabulary API surface so a future k8s
-adapter is a translation layer, not a re-architecture.
+The btrfs primitive `s.storage.SnapshotVolume` already exists. The
+related `s.storage.RestoreVolume` does NOT work for a fresh clone
+target — it unconditionally deletes the destination subvolume first
+(`internal/infra/storage/btrfs.go:170-172` → `pkg/btrfs/btrfs.go:184`
+errors with `lstat ... no such file or directory` when the path does
+not exist). Because of this, the plan adds a **new primitive**
+`Storage.CloneVolume(snapshotName, newVolumeName)` that materialises
+a snapshot into a new (non-existent) subvolume *without* the
+destructive pre-delete. This same primitive is the right shape for
+the latent `CloneSnapshot` defect that `internal/app/snapshot.go:206`
+exhibits when a VM has attached drives — a fix the plan calls out
+but does not ship (out of scope per the boundary list below).
 
 ## Hard architectural constraints
 
-The public API (REST request/response, MCP tool input/output) MUST use
-CSI vocabulary, NOT Nexus-internal btrfs terminology:
+The public API (REST request/response, MCP tool input/output) MUST
+use CSI vocabulary, NOT Nexus-internal btrfs terminology:
 
 | Use (CSI shape) | Do NOT expose |
 |-----------------|---------------|
 | `source_volume_ref` | `subvol`, `parent_subvol_path`, `src_drive_id_or_name` |
 | `snapshot_name` (intermediate, optional) | `btrfs_snapshot_id`, `subvol@snap` |
 | `name` (new clone drive name) | `clone_path`, `target_subvol` |
-| `data_source` (request body wrapper) | direct btrfs args |
-| `mount_path` (CSI mount target) | container-internal subvol path |
 
 This matches `flow/lead/internal/domain/ports.go::CloneWorkItemVolume`
 and `flow/lead/internal/domain/types.go::VolumeRef`. The Flow Nexus
 driver impl (separate plan) will translate `VolumeRef{Kind: "nexus-
 drive", ID: <drive-id>}` to/from these REST/MCP fields.
 
+**`mount_path` is OPTIONAL on the wire**, defaulting to the source
+drive's `mount_path` when omitted. This matches Flow's port signature
+(`CloneWorkItemVolume(ctx, projectMaster VolumeRef, workItemID string)
+(VolumeRef, error)` — no mount-path parameter) and matches CSI: in
+k8s, `dataSource` produces a PVC; the mount target is declared on the
+consuming Pod, not on the PVC itself. Nexus stores `mount_path` per
+drive because attach-time uses it; cloning inherits the source's value
+unless the caller overrides.
+
 **Internals stay btrfs.** The wrapper service may name internal
-variables `subvolName`, `snapshotName`, etc. — those names are private
+variables `subvolName`, `snapshotName`, etc. Those names are private
 to the package. Only the exported surface is CSI-shaped.
+
+**Provenance echo is request-scoped only.** The REST response echoes
+`source_volume_ref` (and `snapshot_name` when retained) so the
+immediate caller has a complete record. The values are NOT persisted
+on `domain.Drive` — `GET /v1/drives/{id}` returns the standard drive
+shape only. This is documented in the OpenAPI description for the
+endpoint and as a comment in the response struct.
 
 ## Scope boundaries
 
 In scope:
-1. `CloneDrive` use-case in `internal/app` wrapping `s.storage.SnapshotVolume`.
-2. REST endpoint `POST /v1/drives/clone` with CSI request/response shape.
-3. MCP tool `drive_clone` with the same input/output as REST.
-4. Domain error sentinel additions where needed (none expected — reuse
-   `ErrNotFound`, `ErrAlreadyExists`, `ErrValidation`).
-5. Unit tests for the new app method.
-6. E2E tests against the live daemon (SQLite-only — Nexus is single-
-   backend per `TOOLING-BASELINE-REMAINING-WORK.md` PG deferral).
-7. Harness `Client` method `CloneDrive` for the e2e tests.
+1. New `Storage.CloneVolume(snapshotName, newVolumeName)` primitive
+   on `domain.Storage`, implemented for `BtrfsStorage` and `NoopStorage`.
+2. `CloneDrive` use-case in `internal/app` wrapping
+   `s.storage.SnapshotVolume` + `s.storage.CloneVolume` +
+   (conditionally) `s.storage.DeleteVolumeSnapshot`.
+3. REST endpoint `POST /v1/drives/clone` with CSI request/response shape.
+4. MCP tool `drive_clone` with the same input/output as REST.
+5. Domain error sentinel additions where needed (none expected — reuse
+   `ErrNotFound`, `ErrAlreadyExists`, `ErrValidation`, `ErrInvalidState`).
+6. Unit tests for the new app method.
+7. E2E tests against the live daemon (SQLite-only — Nexus is single-
+   backend per `TOOLING-BASELINE-REMAINING-WORK.md` PG deferral)
+   covering REST and MCP.
+8. Harness `Client.CloneDrive` method for the e2e tests.
+9. Harness `Client.CallMCPTool` (raw JSON-RPC over the streamable HTTP
+   `/mcp` endpoint) for the MCP e2e test.
 
 Out of scope:
 1. Hot drive attach (deferred per umbrella spec).
@@ -73,25 +101,33 @@ Out of scope:
    table). The intermediate btrfs snapshot lives under
    `<drivesDir>/.snapshots/` and is cleaned up after the clone or
    retained if `snapshot_name` was specified.
-4. Flow's Nexus driver impl that consumes this — separate plan.
-5. k8s driver impl — separate future plan.
+4. Persisting source provenance on `domain.Drive` (out — request-
+   scoped echo only).
+5. Flow's Nexus driver impl that consumes this — separate plan.
+6. k8s driver impl — separate future plan.
+7. Refactoring `CloneSnapshot` to use the new primitive across the
+   board (only the drive-clone path uses it here; the `RestoreVolume`
+   call inside `CloneSnapshot` is left untouched, with the existing
+   bug noted in Task 1's commit message as a follow-up signal).
 
 ## Prerequisites
 
-- `internal/infra/storage/btrfs.go` already provides `SnapshotVolume`,
-  `RestoreVolume`, `DeleteVolumeSnapshot` (verified in source).
-- `internal/app/vm_service.go::CreateDrive` already exists and persists
-  drive metadata via `s.driveStore.CreateDrive`.
-- `internal/app/snapshot.go::CloneSnapshot` already shows the
-  `SnapshotVolume` → `RestoreVolume` → `driveStore.CreateDrive` pattern
-  for the whole-VM clone case (lines 196-233).
+- `internal/infra/storage/btrfs.go` provides `SnapshotVolume`,
+  `DeleteVolumeSnapshot` (verified in source).
+- `pkg/btrfs/btrfs.go::CreateSnapshot(source, dest, readOnly bool)` is
+  the underlying primitive (verified in source — used by both
+  `BtrfsStorage.SnapshotVolume` and `BtrfsStorage.RestoreVolume`).
+- `internal/app/vm_service.go::CreateDrive` exists and persists drive
+  metadata via `s.driveStore.CreateDrive`.
+- `internal/infra/sqlite/store.go` exposes `Open(path string) (*Store,
+  error)` and `*Store` implements `domain.DriveStore` alongside
+  `domain.VMStore`. In-memory tests use `sqlite.Open(":memory:")`.
 - E2E harness pattern `startBtrfsDaemon` in
-  `tests/e2e/snapshot_test.go:79` already wires up a btrfs-capable
+  `tests/e2e/snapshot_test.go:79` already wires a btrfs-capable
   daemon for snapshot tests.
-- `requireBtrfs` and `requireBtrfsSend` skip-guard helpers exist in
-  `tests/e2e/snapshot_test.go:20,40` — reuse `requireBtrfs` (the clone
-  path does NOT shell out to `nexus-btrfs`; it goes through the
-  in-process btrfs ioctl path).
+- `requireBtrfs` skip-guard helper at `tests/e2e/snapshot_test.go:20`
+  — reuse it. The clone path uses in-process btrfs ioctls only (no
+  shell-out to `nexus-btrfs`), so `requireBtrfsSend` would over-skip.
 
 ## Tech stack
 
@@ -100,7 +136,7 @@ dependencies. Existing:
 - `github.com/danielgtaylor/huma/v2` for REST.
 - `github.com/mark3labs/mcp-go` for MCP.
 - `github.com/Work-Fort/Nexus/pkg/btrfs` for the underlying ioctl
-  surface (already used by `BtrfsStorage.SnapshotVolume`).
+  surface.
 
 ## Build commands
 
@@ -115,7 +151,202 @@ dependencies. Existing:
 
 ## Task Breakdown
 
-### Task 1: App-layer `CloneDrive` use-case
+### Task 1: Add `CloneVolume` primitive to `domain.Storage`
+
+**Files:**
+- Modify: `internal/domain/ports.go` (extend the `Storage` interface
+  near line 232)
+- Modify: `internal/infra/storage/btrfs.go` (add `CloneVolume` after
+  `RestoreVolume` ~line 178)
+- Modify: `internal/infra/storage/noop.go` (add `CloneVolume` after
+  `RestoreVolume` ~line 59)
+- Modify: `internal/infra/storage/btrfs_test.go` (add a unit test that
+  proves `CloneVolume` materialises a writable subvolume into a fresh
+  path)
+
+**Rationale:** `RestoreVolume` is destructive — it requires the target
+to exist so it can delete it before re-creating from a snapshot. That
+contract is right for "restore this VM's drive back to snapshot X" and
+wrong for "create a new drive that is a CoW copy of snapshot X." A
+fresh primitive avoids overloading `RestoreVolume`'s semantics and
+also gives `CloneSnapshot` (the whole-VM path) a correct future
+migration target. The new method is one ioctl call; cost is trivial.
+
+**Step 1: Write the failing storage unit test**
+
+Append to `internal/infra/storage/btrfs_test.go`:
+
+```go
+func TestBtrfsStorage_CloneVolume(t *testing.T) {
+	requireBtrfs(t)
+
+	dir := t.TempDir()
+	store, err := NewBtrfs(dir)
+	if err != nil {
+		t.Fatalf("NewBtrfs: %v", err)
+	}
+
+	if _, err := store.CreateVolume(context.Background(), "src", 0); err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+	// Drop a marker file so we can verify CoW semantics.
+	if err := os.WriteFile(filepath.Join(dir, "src", "marker"), []byte("hi"), 0644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	if err := store.SnapshotVolume(context.Background(), "src", "src@snap-1"); err != nil {
+		t.Fatalf("SnapshotVolume: %v", err)
+	}
+
+	// CloneVolume materialises src@snap-1 into a brand-new path "clone"
+	// without requiring "clone" to exist beforehand.
+	if err := store.CloneVolume(context.Background(), "src@snap-1", "clone"); err != nil {
+		t.Fatalf("CloneVolume: %v", err)
+	}
+
+	// The clone must be a writable subvolume containing the marker.
+	clonePath := filepath.Join(dir, "clone")
+	got, err := os.ReadFile(filepath.Join(clonePath, "marker"))
+	if err != nil {
+		t.Fatalf("read clone marker: %v", err)
+	}
+	if string(got) != "hi" {
+		t.Errorf("clone content = %q, want %q", got, "hi")
+	}
+	ro, err := btrfs.GetReadOnly(clonePath)
+	if err != nil {
+		t.Fatalf("GetReadOnly: %v", err)
+	}
+	if ro {
+		t.Errorf("clone must be writable, got read-only")
+	}
+
+	t.Cleanup(func() {
+		// Reverse order: clone first (a clone of a snapshot), then snapshot, then src.
+		_ = btrfs.DeleteSubvolume(clonePath)
+		_ = store.DeleteVolumeSnapshot(context.Background(), "src@snap-1")
+		_ = store.DeleteVolume(context.Background(), "src")
+	})
+}
+```
+
+If `requireBtrfs` does not exist in `btrfs_test.go`, add the same
+implementation that `tests/e2e/snapshot_test.go:20` uses (statfs +
+`btrfs` CLI lookup). Verify first with `grep -n "func requireBtrfs"
+internal/infra/storage/btrfs_test.go` and reuse if present.
+
+**Step 2: Run the test to verify it fails**
+
+Run: `go test -run TestBtrfsStorage_CloneVolume ./internal/infra/storage/...`
+Expected: FAIL — `store.CloneVolume undefined`.
+
+**Step 3: Add the interface method**
+
+Modify `internal/domain/ports.go::Storage` (~line 232). Insert one new
+method, alphabetically ordered with the existing snapshot ops:
+
+```go
+// Storage manages the underlying volume backend (e.g. btrfs subvolumes).
+type Storage interface {
+	CreateVolume(ctx context.Context, name string, sizeBytes uint64) (path string, err error)
+	DeleteVolume(ctx context.Context, name string) error
+	VolumePath(name string) string
+	SendVolume(ctx context.Context, name string, w io.Writer) error
+	ReceiveVolume(ctx context.Context, name string, r io.Reader) error
+	SnapshotVolume(ctx context.Context, volumeName, snapshotName string) error
+	RestoreVolume(ctx context.Context, snapshotName, volumeName string) error
+	// CloneVolume materialises an existing snapshot into a brand-new
+	// (non-existent) volume name. Unlike RestoreVolume, the destination
+	// MUST NOT exist; the call fails if it does. This is the primitive
+	// behind the CSI-shaped CloneDrive operation.
+	CloneVolume(ctx context.Context, snapshotName, newVolumeName string) error
+	DeleteVolumeSnapshot(ctx context.Context, snapshotName string) error
+	SendVolumeSnapshot(ctx context.Context, snapshotName string, w io.Writer) error
+}
+```
+
+**Step 4: Implement on `BtrfsStorage`**
+
+Add after `RestoreVolume` in `internal/infra/storage/btrfs.go` (~line
+178):
+
+```go
+// CloneVolume materialises a writable copy of the named snapshot at a
+// brand-new volume path. Fails if the destination already exists.
+// Unlike RestoreVolume, this is non-destructive — it is the primitive
+// behind CSI clone-from-snapshot semantics, where the "data source"
+// is a snapshot and the resulting PVC is a fresh volume.
+func (s *BtrfsStorage) CloneVolume(_ context.Context, snapshotName, newVolumeName string) error {
+	snapPath := filepath.Join(s.basePath, ".snapshots", snapshotName)
+	volPath := filepath.Join(s.basePath, newVolumeName)
+	if _, err := os.Stat(volPath); err == nil {
+		return fmt.Errorf("clone target %s: %w", newVolumeName, os.ErrExist)
+	}
+	if err := btrfs.CreateSnapshot(snapPath, volPath, false); err != nil {
+		return fmt.Errorf("clone volume %s from %s: %w", newVolumeName, snapshotName, err)
+	}
+	return nil
+}
+```
+
+**Step 5: Implement on `NoopStorage`**
+
+Add after `RestoreVolume` in `internal/infra/storage/noop.go` (~line
+59):
+
+```go
+func (s *NoopStorage) CloneVolume(_ context.Context, _, _ string) error {
+	return domain.ErrSnapshotNotSupported
+}
+```
+
+**Step 6: Run the storage test to verify it passes**
+
+Run: `go test -run TestBtrfsStorage_CloneVolume ./internal/infra/storage/...`
+Expected: PASS on btrfs hosts; SKIP on non-btrfs.
+
+Also run: `go build ./...` from repo root to confirm every consumer of
+`domain.Storage` (mocks, fakes, real impls) still compiles. If a test
+fake implements `Storage` elsewhere, compilation will surface it.
+
+**Step 7: Commit**
+
+```
+git commit -m "$(cat <<'EOF'
+feat(storage): add CloneVolume primitive for CSI clone-from-snapshot
+
+RestoreVolume(snap, target) requires target to already exist — it
+deletes target first, then re-creates it from the snapshot. That is
+the right shape for "roll this VM's drive back to a previous
+snapshot" but the wrong shape for "create a new drive that is a
+copy-on-write copy of an existing snapshot," which is the CSI
+clone-from-snapshot operation.
+
+Add CloneVolume(snapshotName, newVolumeName) that materialises a
+snapshot into a brand-new (non-existent) subvolume via
+btrfs.CreateSnapshot with readOnly=false. Fails if the destination
+exists.
+
+This is the primitive behind the upcoming CloneDrive use-case and
+is the correct future migration target for CloneSnapshot's drive-
+clone loop in internal/app/snapshot.go (a latent defect there is
+out of scope for this commit; the broken path is currently never
+exercised because every existing CloneSnapshot e2e test runs
+against a VM with no attached drives).
+
+Implemented on BtrfsStorage; NoopStorage returns
+ErrSnapshotNotSupported.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+### Task 2: App-layer `CloneDrive` use-case
+
+**Depends on:** Task 1 (the new storage primitive).
 
 **Files:**
 - Create: `internal/app/drive_clone.go`
@@ -123,7 +354,7 @@ dependencies. Existing:
 
 **Rationale for file split:** `vm_service.go` is already 1461 lines.
 Drive-clone is a distinct CSI-shaped capability with its own tests; a
-new file keeps the diff bisectable and the test isolated.
+new file keeps the diff bisectable.
 
 **Step 1: Write the failing unit test**
 
@@ -136,38 +367,32 @@ package app_test
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/Work-Fort/Nexus/internal/app"
 	"github.com/Work-Fort/Nexus/internal/domain"
 	"github.com/Work-Fort/Nexus/internal/infra/sqlite"
-	"github.com/Work-Fort/Nexus/internal/infra/storage"
 )
 
-// fakeStorage implements domain.Storage in-memory for unit tests. It
-// tracks CreateVolume / SnapshotVolume / RestoreVolume / DeleteVolume
+// fakeStorage is an in-memory domain.Storage for unit tests. Tracks
 // calls so tests can assert the CSI-shaped sequence:
-// SnapshotVolume(src, intermediate) → RestoreVolume(intermediate, dst)
-// → DeleteVolumeSnapshot(intermediate)  (when retain=false).
+// SnapshotVolume(src, intermediate) -> CloneVolume(intermediate, dst)
+// -> DeleteVolumeSnapshot(intermediate) [when retain=false].
 type fakeStorage struct {
-	volumes      map[string]bool
-	snapshots    map[string]string // snapshot -> source volume
-	calls        []string
-	failOn       string // method name to fail on, "" = none
+	volumes   map[string]bool
+	snapshots map[string]string // snapshot -> source volume
+	calls     []string
+	failOn    string // method name to fail on, "" = none
 }
 
-func newFakeStorage(seed ...string) *fakeStorage {
-	fs := &fakeStorage{
+func newFakeStorage() *fakeStorage {
+	return &fakeStorage{
 		volumes:   map[string]bool{},
 		snapshots: map[string]string{},
 	}
-	for _, v := range seed {
-		fs.volumes[v] = true
-	}
-	return fs
 }
-
-// (implement domain.Storage methods; keep in same file)
 
 func (s *fakeStorage) CreateVolume(_ context.Context, name string, _ uint64) (string, error) {
 	s.calls = append(s.calls, "CreateVolume:"+name)
@@ -182,9 +407,9 @@ func (s *fakeStorage) DeleteVolume(_ context.Context, name string) error {
 	delete(s.volumes, name)
 	return nil
 }
-func (s *fakeStorage) VolumePath(name string) string { return "/fake/" + name }
-func (s *fakeStorage) SendVolume(context.Context, string, io.Writer) error      { return nil }
-func (s *fakeStorage) ReceiveVolume(context.Context, string, io.Reader) error    { return nil }
+func (s *fakeStorage) VolumePath(name string) string                         { return "/fake/" + name }
+func (s *fakeStorage) SendVolume(context.Context, string, io.Writer) error   { return nil }
+func (s *fakeStorage) ReceiveVolume(context.Context, string, io.Reader) error { return nil }
 func (s *fakeStorage) SnapshotVolume(_ context.Context, vol, snap string) error {
 	s.calls = append(s.calls, "SnapshotVolume:"+vol+"->"+snap)
 	if s.failOn == "SnapshotVolume" {
@@ -196,13 +421,17 @@ func (s *fakeStorage) SnapshotVolume(_ context.Context, vol, snap string) error 
 	s.snapshots[snap] = vol
 	return nil
 }
-func (s *fakeStorage) RestoreVolume(_ context.Context, snap, vol string) error {
-	s.calls = append(s.calls, "RestoreVolume:"+snap+"->"+vol)
-	if s.failOn == "RestoreVolume" {
+func (s *fakeStorage) RestoreVolume(_ context.Context, _, _ string) error { return nil }
+func (s *fakeStorage) CloneVolume(_ context.Context, snap, vol string) error {
+	s.calls = append(s.calls, "CloneVolume:"+snap+"->"+vol)
+	if s.failOn == "CloneVolume" {
 		return errors.New("synthetic failure")
 	}
 	if _, ok := s.snapshots[snap]; !ok {
 		return errors.New("snapshot not found")
+	}
+	if s.volumes[vol] {
+		return errors.New("clone target already exists")
 	}
 	s.volumes[vol] = true
 	return nil
@@ -214,18 +443,26 @@ func (s *fakeStorage) DeleteVolumeSnapshot(_ context.Context, snap string) error
 }
 func (s *fakeStorage) SendVolumeSnapshot(context.Context, string, io.Writer) error { return nil }
 
-func TestCloneDrive_HappyPath(t *testing.T) {
-	store, cleanup := sqlite.NewMemoryDriveStore(t)
-	defer cleanup()
+// newCloneTestSvc builds a VMService backed by an in-memory sqlite
+// store (which implements domain.DriveStore) and the fakeStorage.
+// Returns the service plus a cleanup hook the test must defer.
+func newCloneTestSvc(t *testing.T) (*app.VMService, *fakeStorage, func()) {
+	t.Helper()
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
 	fs := newFakeStorage()
-
 	svc := app.NewVMService(nil, nil, nil, app.WithStorage(store, fs))
+	return svc, fs, func() { _ = store.Close() }
+}
 
-	// Seed the source drive.
+func TestCloneDrive_HappyPath(t *testing.T) {
+	svc, fs, cleanup := newCloneTestSvc(t)
+	defer cleanup()
+
 	src, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
-		Name:      "project-master",
-		Size:      "100Mi",
-		MountPath: "/work",
+		Name: "project-master", Size: "100Mi", MountPath: "/work",
 	})
 	if err != nil {
 		t.Fatalf("seed source drive: %v", err)
@@ -234,7 +471,6 @@ func TestCloneDrive_HappyPath(t *testing.T) {
 	clone, err := svc.CloneDrive(context.Background(), app.CloneDriveParams{
 		SourceVolumeRef: src.Name,
 		Name:            "work-item-W1",
-		MountPath:       "/work",
 	})
 	if err != nil {
 		t.Fatalf("CloneDrive: %v", err)
@@ -243,44 +479,37 @@ func TestCloneDrive_HappyPath(t *testing.T) {
 		t.Errorf("clone name = %q, want work-item-W1", clone.Name)
 	}
 	if clone.SizeBytes != src.SizeBytes {
-		t.Errorf("clone size = %d, want %d (inherited from source)", clone.SizeBytes, src.SizeBytes)
+		t.Errorf("clone size = %d, want %d (inherited)", clone.SizeBytes, src.SizeBytes)
 	}
-	if clone.MountPath != "/work" {
-		t.Errorf("clone mount = %q, want /work", clone.MountPath)
+	if clone.MountPath != src.MountPath {
+		t.Errorf("clone mount = %q, want %q (inherited from source)", clone.MountPath, src.MountPath)
 	}
 	if clone.VMID != "" {
 		t.Errorf("clone must be unattached, got VMID=%q", clone.VMID)
 	}
 
-	// Storage call sequence: SnapshotVolume → RestoreVolume → DeleteVolumeSnapshot.
-	wantPrefix := []string{"CreateVolume:project-master"} // from the seed
-	got := fs.calls
-	if len(got) < 4 || got[0] != wantPrefix[0] {
-		t.Fatalf("unexpected call sequence: %v", got)
-	}
-	tail := got[1:]
+	// Storage call sequence after seed:
+	// SnapshotVolume(src->ephemeral) -> CloneVolume(ephemeral->dst) -> DeleteVolumeSnapshot(ephemeral).
+	tail := fs.calls[1:] // skip the initial CreateVolume from seed
 	if len(tail) != 3 ||
 		!strings.HasPrefix(tail[0], "SnapshotVolume:project-master->") ||
-		!strings.HasPrefix(tail[1], "RestoreVolume:") ||
+		!strings.HasPrefix(tail[1], "CloneVolume:") ||
 		!strings.HasPrefix(tail[2], "DeleteVolumeSnapshot:") {
 		t.Errorf("clone call sequence wrong: %v", tail)
 	}
 
-	// Drive store now has the clone.
-	got2, err := svc.GetDrive(context.Background(), "work-item-W1")
+	got, err := svc.GetDrive(context.Background(), "work-item-W1")
 	if err != nil {
 		t.Fatalf("GetDrive after clone: %v", err)
 	}
-	if got2.ID != clone.ID {
+	if got.ID != clone.ID {
 		t.Errorf("stored clone ID mismatch")
 	}
 }
 
-func TestCloneDrive_RetainSnapshot(t *testing.T) {
-	store, cleanup := sqlite.NewMemoryDriveStore(t)
+func TestCloneDrive_MountPathOverride(t *testing.T) {
+	svc, _, cleanup := newCloneTestSvc(t)
 	defer cleanup()
-	fs := newFakeStorage()
-	svc := app.NewVMService(nil, nil, nil, app.WithStorage(store, fs))
 
 	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
 		Name: "src", Size: "10Mi", MountPath: "/src",
@@ -288,39 +517,55 @@ func TestCloneDrive_RetainSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := svc.CloneDrive(context.Background(), app.CloneDriveParams{
+	clone, err := svc.CloneDrive(context.Background(), app.CloneDriveParams{
 		SourceVolumeRef: "src",
 		Name:            "dst",
-		MountPath:       "/dst",
-		SnapshotName:    "named-snap-1",
+		MountPath:       "/somewhere/else",
 	})
 	if err != nil {
 		t.Fatalf("CloneDrive: %v", err)
 	}
+	if clone.MountPath != "/somewhere/else" {
+		t.Errorf("override mount = %q, want /somewhere/else", clone.MountPath)
+	}
+}
 
-	// With an explicit SnapshotName, the intermediate snapshot is RETAINED
-	// (CSI VolumeSnapshot semantics — caller named it, caller owns its lifecycle).
+func TestCloneDrive_RetainSnapshot(t *testing.T) {
+	svc, fs, cleanup := newCloneTestSvc(t)
+	defer cleanup()
+
+	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "src", Size: "10Mi", MountPath: "/src",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.CloneDrive(context.Background(), app.CloneDriveParams{
+		SourceVolumeRef: "src",
+		Name:            "dst",
+		SnapshotName:    "named-snap-1",
+	}); err != nil {
+		t.Fatalf("CloneDrive: %v", err)
+	}
+
+	// With explicit SnapshotName, the intermediate snapshot is RETAINED.
 	for _, c := range fs.calls {
 		if strings.HasPrefix(c, "DeleteVolumeSnapshot:") {
-			t.Errorf("snapshot must be retained when SnapshotName is set, got delete call: %v", fs.calls)
+			t.Errorf("snapshot must be retained when SnapshotName is set, got: %v", fs.calls)
 		}
 	}
-	// Snapshot still present in fake.
 	if _, ok := fs.snapshots["named-snap-1"]; !ok {
 		t.Errorf("named snapshot missing from fake; calls=%v", fs.calls)
 	}
 }
 
 func TestCloneDrive_SourceNotFound(t *testing.T) {
-	store, cleanup := sqlite.NewMemoryDriveStore(t)
+	svc, _, cleanup := newCloneTestSvc(t)
 	defer cleanup()
-	fs := newFakeStorage()
-	svc := app.NewVMService(nil, nil, nil, app.WithStorage(store, fs))
 
 	_, err := svc.CloneDrive(context.Background(), app.CloneDriveParams{
 		SourceVolumeRef: "ghost",
 		Name:            "clone",
-		MountPath:       "/x",
 	})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
@@ -328,39 +573,29 @@ func TestCloneDrive_SourceNotFound(t *testing.T) {
 }
 
 func TestCloneDrive_NameConflict(t *testing.T) {
-	store, cleanup := sqlite.NewMemoryDriveStore(t)
+	svc, _, cleanup := newCloneTestSvc(t)
 	defer cleanup()
-	fs := newFakeStorage()
-	svc := app.NewVMService(nil, nil, nil, app.WithStorage(store, fs))
 
-	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
-		Name: "src", Size: "10Mi", MountPath: "/src",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
-		Name: "taken", Size: "10Mi", MountPath: "/t",
-	}); err != nil {
-		t.Fatal(err)
+	for _, n := range []string{"src", "taken"} {
+		if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+			Name: n, Size: "10Mi", MountPath: "/m",
+		}); err != nil {
+			t.Fatalf("seed %s: %v", n, err)
+		}
 	}
 
 	_, err := svc.CloneDrive(context.Background(), app.CloneDriveParams{
 		SourceVolumeRef: "src",
 		Name:            "taken",
-		MountPath:       "/x",
 	})
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Errorf("err = %v, want ErrAlreadyExists", err)
 	}
 }
 
-func TestCloneDrive_SourceAttachedToRunningVM_Rejected(t *testing.T) {
-	// CSI semantics forbid cloning from a volume that is in active use
-	// without consistency (we conservatively reject any attached source).
-	store, cleanup := sqlite.NewMemoryDriveStore(t)
+func TestCloneDrive_SourceAttached_Rejected(t *testing.T) {
+	svc, _, cleanup := newCloneTestSvc(t)
 	defer cleanup()
-	fs := newFakeStorage()
-	svc := app.NewVMService(nil, nil, nil, app.WithStorage(store, fs))
 
 	src, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
 		Name: "src", Size: "10Mi", MountPath: "/src",
@@ -368,75 +603,42 @@ func TestCloneDrive_SourceAttachedToRunningVM_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate attachment by writing AttachDrive directly on the store.
-	if err := store.AttachDrive(context.Background(), src.ID, "vm-1"); err != nil {
+	// Reach into the underlying drive store to fake an attachment.
+	// The svc holds the same *sqlite.Store under the DriveStore port,
+	// but the unit test does not have a back-reference to it. Re-open
+	// a parallel store, build a parallel svc, and exercise the
+	// rejection path on that — same code path, isolated state.
+	store2, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store2.Close()
+	svc2 := app.NewVMService(nil, nil, nil, app.WithStorage(store2, newFakeStorage()))
+	srcDrive, err := svc2.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "src2", Size: "10Mi", MountPath: "/src",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store2.AttachDrive(context.Background(), srcDrive.ID, "vm-fake"); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = svc.CloneDrive(context.Background(), app.CloneDriveParams{
-		SourceVolumeRef: "src",
+	_, err = svc2.CloneDrive(context.Background(), app.CloneDriveParams{
+		SourceVolumeRef: "src2",
 		Name:            "clone",
-		MountPath:       "/x",
 	})
 	if !errors.Is(err, domain.ErrInvalidState) {
 		t.Errorf("err = %v, want ErrInvalidState", err)
 	}
+	_ = src
 }
 ```
-
-The `sqlite.NewMemoryDriveStore` test helper does not yet exist; it
-lives alongside the existing sqlite driveStore. If absent, create it
-in `internal/infra/sqlite/drive_store_test_helpers.go` with the
-following contents:
-
-```go
-// SPDX-License-Identifier: GPL-3.0-or-later
-package sqlite
-
-import (
-	"testing"
-)
-
-// NewMemoryDriveStore returns an in-memory sqlite-backed DriveStore for
-// tests. The cleanup func MUST be deferred.
-func NewMemoryDriveStore(t *testing.T) (*DriveStore, func()) {
-	t.Helper()
-	db, err := openMemory()
-	if err != nil {
-		t.Fatalf("open memory db: %v", err)
-	}
-	if err := migrate(db); err != nil {
-		_ = db.Close()
-		t.Fatalf("migrate: %v", err)
-	}
-	return NewDriveStore(db), func() { _ = db.Close() }
-}
-```
-
-If the existing sqlite package already exposes a different test helper
-(scan `internal/infra/sqlite/*_test.go` first), reuse that and skip
-creating the helper. The test must construct a working `domain.DriveStore`
-without any disk dependency.
 
 **Step 2: Run the test to verify it fails**
 
 Run: `go test -run TestCloneDrive ./internal/app/...`
-
-Expected: FAIL — `app.CloneDrive` and `app.CloneDriveParams` undefined,
-plus possible "fakeStorage.SendVolume / SendVolumeSnapshot signature
-mismatch" if `io.Writer` import is missing. Add the missing import:
-
-```go
-import (
-	"errors"
-	"io"
-	"strings"
-	"testing"
-	// ...
-)
-```
-
-Re-run; expected FAIL message: `app.CloneDrive undefined`.
+Expected: FAIL — `app.CloneDrive` and `app.CloneDriveParams` undefined.
 
 **Step 3: Implement `CloneDrive`**
 
@@ -449,6 +651,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/log"
@@ -456,6 +659,13 @@ import (
 	"github.com/Work-Fort/Nexus/internal/domain"
 	"github.com/Work-Fort/Nexus/pkg/nxid"
 )
+
+// snapshotNameMax is the maximum allowed length of a generated
+// intermediate snapshot name. Btrfs caps subvolume names at 255 bytes
+// (BTRFS_SUBVOL_NAME_MAX) — pkg/btrfs.CreateSnapshot enforces this.
+// We pick 240 to leave headroom for the "@clone-" prefix and a 26-byte
+// nxid suffix without ever provoking ErrNameTooLong from the kernel.
+const snapshotNameMax = 240
 
 // CloneDriveParams is the CSI-shaped input for cloning a drive from a
 // source volume reference. Maps 1:1 to a k8s PVC-from-VolumeSnapshot
@@ -473,15 +683,18 @@ import (
 //
 // SourceVolumeRef is the existing drive name or ID to clone from.
 // Name is the new drive's name (must be unique; nxid.ValidateName).
-// MountPath is the CSI mount target inside the consuming VM.
+// MountPath is OPTIONAL; if empty, the clone inherits the source's
+// MountPath. CSI separates volume creation from mount-target
+// declaration — Nexus stores MountPath per drive only because the
+// attach step uses it.
 // SnapshotName is the name of the intermediate VolumeSnapshot. If
 // empty, an ephemeral snapshot is created and deleted after the clone.
-// If non-empty, the snapshot is retained under that name (CSI semantics
-// — the caller owns its lifecycle).
+// If non-empty, the snapshot is retained under that name (CSI
+// semantics — caller owns its lifecycle).
 type CloneDriveParams struct {
 	SourceVolumeRef string
 	Name            string
-	MountPath       string
+	MountPath       string // optional
 	SnapshotName    string // optional
 }
 
@@ -489,10 +702,8 @@ type CloneDriveParams struct {
 // existing source drive. The source must not be attached to a VM. The
 // new drive is unattached.
 //
-// Implementation: SnapshotVolume(src, intermediate) → RestoreVolume(
-// intermediate, new) → optionally DeleteVolumeSnapshot(intermediate).
-// This is the same primitive sequence used by CloneSnapshot in
-// snapshot.go, exposed at the drive level for k8s-CSI parity.
+// Implementation: SnapshotVolume(src, intermediate) ->
+// CloneVolume(intermediate, new) -> [optional] DeleteVolumeSnapshot.
 func (s *VMService) CloneDrive(ctx context.Context, params CloneDriveParams) (*domain.Drive, error) {
 	if s.storage == nil || s.driveStore == nil {
 		return nil, fmt.Errorf("drives not enabled: %w", domain.ErrValidation)
@@ -506,13 +717,10 @@ func (s *VMService) CloneDrive(ctx context.Context, params CloneDriveParams) (*d
 	if err := nxid.ValidateName(params.Name); err != nil {
 		return nil, fmt.Errorf("invalid name: %v: %w", err, domain.ErrValidation)
 	}
-	if params.MountPath == "" {
-		return nil, fmt.Errorf("mount_path is required: %w", domain.ErrValidation)
-	}
 
 	src, err := s.driveStore.ResolveDrive(ctx, params.SourceVolumeRef)
 	if err != nil {
-		return nil, err // already wrapped with ErrNotFound by the store
+		return nil, err // store wraps with ErrNotFound
 	}
 	if src.VMID != "" {
 		return nil, fmt.Errorf("source drive %q is attached to VM %s: %w",
@@ -523,68 +731,78 @@ func (s *VMService) CloneDrive(ctx context.Context, params CloneDriveParams) (*d
 		return nil, fmt.Errorf("drive name %q: %w", params.Name, domain.ErrAlreadyExists)
 	}
 
-	// Choose the intermediate snapshot name. When the caller did NOT
-	// specify one, generate an ephemeral name we will delete after.
+	mountPath := params.MountPath
+	if mountPath == "" {
+		mountPath = src.MountPath
+	}
+
 	snapName := params.SnapshotName
 	retainSnapshot := snapName != ""
 	if !retainSnapshot {
-		snapName = src.Name + "@clone-" + nxid.New()
+		snapName = generateEphemeralSnapName(src.Name)
 	}
 
 	if err := s.storage.SnapshotVolume(ctx, src.Name, snapName); err != nil {
 		return nil, fmt.Errorf("snapshot source %s: %w", src.Name, err)
 	}
-	// On any failure past this point we must clean up the snapshot.
-	cleanupSnap := func() {
-		if !retainSnapshot {
-			return
-		}
-		// Caller asked for retention — leave it.
-	}
-	deleteSnapOnError := func() {
-		_ = s.storage.DeleteVolumeSnapshot(ctx, snapName)
-	}
 
-	if err := s.storage.RestoreVolume(ctx, snapName, params.Name); err != nil {
-		deleteSnapOnError()
-		return nil, fmt.Errorf("restore clone %s: %w", params.Name, err)
+	if err := s.storage.CloneVolume(ctx, snapName, params.Name); err != nil {
+		_ = s.storage.DeleteVolumeSnapshot(ctx, snapName)
+		return nil, fmt.Errorf("clone into %s: %w", params.Name, err)
 	}
 
 	d := &domain.Drive{
 		ID:        nxid.New(),
 		Name:      params.Name,
 		SizeBytes: src.SizeBytes,
-		MountPath: params.MountPath,
+		MountPath: mountPath,
 		CreatedAt: time.Now().UTC(),
 	}
 
 	if err := s.driveStore.CreateDrive(ctx, d); err != nil {
 		_ = s.storage.DeleteVolume(ctx, params.Name)
-		deleteSnapOnError()
+		_ = s.storage.DeleteVolumeSnapshot(ctx, snapName)
 		return nil, fmt.Errorf("persist cloned drive: %w", err)
 	}
 
 	if !retainSnapshot {
 		if err := s.storage.DeleteVolumeSnapshot(ctx, snapName); err != nil {
-			// Non-fatal: the clone succeeded; the orphan snapshot will
-			// be cleaned up by btrfs subvolume reclaim on next compaction.
+			// Non-fatal: the clone succeeded. The orphan snapshot will
+			// be cleaned up on next btrfs compaction.
 			log.Warn("clone: failed to delete intermediate snapshot",
 				"snapshot", snapName, "err", err)
 		}
 	}
-	cleanupSnap()
 
 	log.Info("drive cloned",
 		"id", d.ID, "name", d.Name, "source", src.Name,
 		"snapshot_retained", retainSnapshot)
 	return d, nil
 }
+
+// generateEphemeralSnapName builds an intermediate snapshot name that
+// stays inside btrfs's subvolume name cap. Format: "<src>@clone-<nxid>",
+// truncating <src> from the right when the total would exceed
+// snapshotNameMax. Truncation only affects internal naming — the
+// generated name is opaque to callers.
+func generateEphemeralSnapName(srcName string) string {
+	suffix := "@clone-" + nxid.New()
+	maxSrc := snapshotNameMax - len(suffix)
+	if maxSrc < 1 {
+		// nxid alone exceeds cap; should be unreachable but guard anyway.
+		return strings.TrimPrefix(suffix, "@")
+	}
+	if len(srcName) > maxSrc {
+		srcName = srcName[:maxSrc]
+	}
+	return srcName + suffix
+}
 ```
 
 **Step 4: Run the tests to verify they pass**
 
 Run: `go test -run TestCloneDrive ./internal/app/...`
-Expected: PASS for all 5 cases.
+Expected: PASS for all 6 cases.
 
 If any test fails, fix the implementation — do not weaken assertions.
 
@@ -596,16 +814,15 @@ feat(app): add CSI-shaped CloneDrive operation
 
 Adds VMService.CloneDrive (and CloneDriveParams) that produces a
 new drive as a copy-on-write clone of an existing source drive.
-The implementation reuses the existing storage.SnapshotVolume +
-RestoreVolume primitives that the whole-VM CloneSnapshot path
-already calls, exposed at the drive level so a future k8s
-RuntimeDriver impl in Flow can use the same wire shape against
-either a Nexus REST endpoint or a k8s API server.
+Wraps storage.SnapshotVolume + storage.CloneVolume + an optional
+DeleteVolumeSnapshot, in that order, so the wire surface maps 1:1
+to a k8s PVC-from-VolumeSnapshot dataSource.
 
-The exported field names use CSI vocabulary (SourceVolumeRef,
-SnapshotName, Name, MountPath) so the upcoming HTTP and MCP
-surfaces map 1:1 to k8s VolumeSnapshot / PVC dataSource. Internal
-btrfs naming stays internal.
+Exported field names use CSI vocabulary: SourceVolumeRef, Name,
+SnapshotName, MountPath. MountPath is optional and inherits from
+the source when omitted, matching CSI's separation of volume
+creation from mount-target declaration. Flow's RuntimeDriver port
+(CloneWorkItemVolume) does not take a mount path.
 
 Validation:
 - source must exist; ErrNotFound otherwise
@@ -614,8 +831,12 @@ Validation:
 - empty SnapshotName -> ephemeral intermediate, deleted after
 - non-empty SnapshotName -> intermediate retained (CSI semantics)
 
-5 unit tests cover happy path, snapshot retention, source not
-found, name conflict, attached-source rejection.
+Ephemeral snapshot names use a length-guarded "<src>@clone-<nxid>"
+template that stays inside btrfs's BTRFS_SUBVOL_NAME_MAX cap.
+
+6 unit tests cover happy path, mount_path override, snapshot
+retention, source not found, name conflict, attached-source
+rejection.
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -624,82 +845,306 @@ EOF
 
 ---
 
-### Task 2: REST endpoint `POST /v1/drives/clone`
+### Task 3: REST endpoint `POST /v1/drives/clone`
 
-**Depends on:** Task 1 (the app method).
+**Depends on:** Task 2 (the app method).
 
 **Files:**
 - Modify: `internal/infra/httpapi/handler.go` (add input/output types
   near the existing `CreateDriveInput` ~line 77, register the route in
-  `registerDriveRoutes` ~line 759, end of function)
-- Modify: `internal/infra/httpapi/handler_test.go` (add an integration
-  test using `httptest.Server` against the registered handler)
+  `registerDriveRoutes` ~line 850)
+- Modify: `internal/infra/httpapi/handler_test.go` (extend `mockStore`
+  with `domain.DriveStore` methods, add a route-level integration test
+  using the existing `setupHandler` pattern)
 
-**Step 1: Write the failing handler test**
+**Note on test scaffolding:** the existing `mockStore` in
+`handler_test.go` is VM-only. Two options were considered:
 
-Append to `internal/infra/httpapi/handler_test.go`:
+a) Extend `mockStore` with `domain.DriveStore` methods (in-memory map).
+b) Use `sqlite.Open(":memory:")` for the drive store + a fake
+   `domain.Storage`.
+
+**Decision: (a).** It keeps the test independent of any real DB
+package and matches the existing handler-test idiom. The added methods
+are pure CRUD over a `map[string]*domain.Drive`.
+
+**Step 1: Extend `mockStore` with `domain.DriveStore`**
+
+Update the struct definition near `handler_test.go:23` to add a
+`drives` field:
+
+```go
+type mockStore struct {
+	vms    map[string]*domain.VM
+	drives map[string]*domain.Drive
+}
+```
+
+Update `newMockStore` (line 27):
+
+```go
+func newMockStore() *mockStore {
+	return &mockStore{
+		vms:    make(map[string]*domain.VM),
+		drives: make(map[string]*domain.Drive),
+	}
+}
+```
+
+Append the `domain.DriveStore` methods after the existing `Resolve`
+method (~line 175):
+
+```go
+// --- domain.DriveStore methods ---
+
+func (m *mockStore) CreateDrive(_ context.Context, d *domain.Drive) error {
+	if _, ok := m.drives[d.ID]; ok {
+		return domain.ErrAlreadyExists
+	}
+	for _, existing := range m.drives {
+		if existing.Name == d.Name {
+			return domain.ErrAlreadyExists
+		}
+	}
+	cp := *d
+	m.drives[d.ID] = &cp
+	return nil
+}
+
+func (m *mockStore) GetDrive(_ context.Context, id string) (*domain.Drive, error) {
+	d, ok := m.drives[id]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	cp := *d
+	return &cp, nil
+}
+
+func (m *mockStore) GetDriveByName(_ context.Context, name string) (*domain.Drive, error) {
+	for _, d := range m.drives {
+		if d.Name == name {
+			cp := *d
+			return &cp, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (m *mockStore) ResolveDrive(ctx context.Context, ref string) (*domain.Drive, error) {
+	if d, err := m.GetDrive(ctx, ref); err == nil {
+		return d, nil
+	}
+	return m.GetDriveByName(ctx, ref)
+}
+
+func (m *mockStore) ListDrives(_ context.Context) ([]*domain.Drive, error) {
+	out := make([]*domain.Drive, 0, len(m.drives))
+	for _, d := range m.drives {
+		cp := *d
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (m *mockStore) AttachDrive(_ context.Context, driveID, vmID string) error {
+	d, ok := m.drives[driveID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	d.VMID = vmID
+	return nil
+}
+
+func (m *mockStore) DetachDrive(_ context.Context, driveID string) error {
+	d, ok := m.drives[driveID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	d.VMID = ""
+	return nil
+}
+
+func (m *mockStore) DetachAllDrives(_ context.Context, vmID string) error {
+	for _, d := range m.drives {
+		if d.VMID == vmID {
+			d.VMID = ""
+		}
+	}
+	return nil
+}
+
+func (m *mockStore) GetDrivesByVM(_ context.Context, vmID string) ([]*domain.Drive, error) {
+	var out []*domain.Drive
+	for _, d := range m.drives {
+		if d.VMID == vmID {
+			cp := *d
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) DeleteDrive(_ context.Context, id string) error {
+	if _, ok := m.drives[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(m.drives, id)
+	return nil
+}
+```
+
+**Step 2: Add `setupHandlerWithStorage` and `handlerFakeStorage`**
+
+Append to `handler_test.go` near the existing `setupHandler` helper
+(~line 250):
+
+```go
+// setupHandlerWithStorage returns a handler whose VMService has the
+// drive-storage path wired (so /v1/drives/clone is routable). The
+// storage backend is an in-test fake that mirrors the unit-test
+// fakeStorage; the drive store is mockStore (extended above).
+func setupHandlerWithStorage(t *testing.T) (http.Handler, *app.VMService, *mockStore) {
+	t.Helper()
+	store := newMockStore()
+	rt := newMockRuntime()
+	fs := newHandlerFakeStorage()
+	svc := app.NewVMService(store, rt, &cni.NoopNetwork{},
+		app.WithStorage(store, fs))
+	health := app.NewHealthService()
+	health.Start(context.Background())
+	return httpapi.NewHandler(svc, health), svc, store
+}
+
+func newHandlerFakeStorage() *handlerFakeStorage {
+	return &handlerFakeStorage{
+		volumes:   map[string]bool{},
+		snapshots: map[string]string{},
+	}
+}
+
+// handlerFakeStorage is a minimal in-memory domain.Storage. It mirrors
+// the unit-test fakeStorage in internal/app/drive_clone_test.go but
+// lives here so the httpapi package has no dependency on the app-test
+// package.
+type handlerFakeStorage struct {
+	volumes   map[string]bool
+	snapshots map[string]string
+}
+
+func (s *handlerFakeStorage) CreateVolume(_ context.Context, name string, _ uint64) (string, error) {
+	s.volumes[name] = true
+	return "/fake/" + name, nil
+}
+func (s *handlerFakeStorage) DeleteVolume(_ context.Context, name string) error {
+	delete(s.volumes, name)
+	return nil
+}
+func (s *handlerFakeStorage) VolumePath(name string) string                         { return "/fake/" + name }
+func (s *handlerFakeStorage) SendVolume(context.Context, string, io.Writer) error   { return nil }
+func (s *handlerFakeStorage) ReceiveVolume(context.Context, string, io.Reader) error { return nil }
+func (s *handlerFakeStorage) SnapshotVolume(_ context.Context, vol, snap string) error {
+	if !s.volumes[vol] {
+		return errors.New("source volume not found")
+	}
+	s.snapshots[snap] = vol
+	return nil
+}
+func (s *handlerFakeStorage) RestoreVolume(_ context.Context, _, _ string) error { return nil }
+func (s *handlerFakeStorage) CloneVolume(_ context.Context, snap, vol string) error {
+	if _, ok := s.snapshots[snap]; !ok {
+		return errors.New("snapshot not found")
+	}
+	if s.volumes[vol] {
+		return errors.New("clone target exists")
+	}
+	s.volumes[vol] = true
+	return nil
+}
+func (s *handlerFakeStorage) DeleteVolumeSnapshot(_ context.Context, snap string) error {
+	delete(s.snapshots, snap)
+	return nil
+}
+func (s *handlerFakeStorage) SendVolumeSnapshot(context.Context, string, io.Writer) error {
+	return nil
+}
+```
+
+Add `"errors"` and `"io"` to the test file's import block if not
+already present.
+
+**Step 3: Write the failing handler tests**
+
+Append to `handler_test.go`:
 
 ```go
 func TestCloneDriveEndpoint_Success(t *testing.T) {
-	// Use the same in-process VMService scaffold the file's other
-	// integration tests use; locate the existing helper (likely
-	// newTestServer or similar) and reuse it.
-	srv, svc, cleanup := newTestServerWithStorage(t)
-	defer cleanup()
+	h, svc, _ := setupHandlerWithStorage(t)
 
-	// Seed source drive via service to avoid HTTP setup noise.
 	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
 		Name: "master", Size: "10Mi", MountPath: "/m",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	body := `{"source_volume_ref":"master","name":"work-1","mount_path":"/work"}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/drives/clone", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "master",
+		"name":              "work-1",
+		"mount_path":        "/work",
+	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
-	var resp struct {
-		ID            string `json:"id"`
-		Name          string `json:"name"`
-		MountPath     string `json:"mount_path"`
-		SizeBytes     uint64 `json:"size_bytes"`
-		SourceRef     string `json:"source_volume_ref"`
-		SnapshotName  string `json:"snapshot_name,omitempty"`
+	var resp map[string]any
+	decodeJSON(t, rec, &resp)
+	if resp["name"] != "work-1" {
+		t.Errorf("name = %v, want work-1", resp["name"])
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
+	if resp["source_volume_ref"] != "master" {
+		t.Errorf("source_volume_ref = %v, want master", resp["source_volume_ref"])
 	}
-	if resp.Name != "work-1" {
-		t.Errorf("name = %q, want work-1", resp.Name)
+	if resp["mount_path"] != "/work" {
+		t.Errorf("mount_path = %v, want /work", resp["mount_path"])
 	}
-	if resp.SourceRef != "master" {
-		t.Errorf("source_volume_ref = %q, want master", resp.SourceRef)
+}
+
+func TestCloneDriveEndpoint_MountPathInherited(t *testing.T) {
+	h, svc, _ := setupHandlerWithStorage(t)
+
+	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
+		Name: "master", Size: "10Mi", MountPath: "/inherited",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "master",
+		"name":              "work-1",
+		// mount_path omitted
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	decodeJSON(t, rec, &resp)
+	if resp["mount_path"] != "/inherited" {
+		t.Errorf("mount_path = %v, want /inherited (inherited from source)", resp["mount_path"])
 	}
 }
 
 func TestCloneDriveEndpoint_SourceNotFound(t *testing.T) {
-	srv, _, cleanup := newTestServerWithStorage(t)
-	defer cleanup()
+	h, _, _ := setupHandlerWithStorage(t)
 
-	body := `{"source_volume_ref":"ghost","name":"clone","mount_path":"/x"}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/drives/clone", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "ghost",
+		"name":              "clone",
+	})
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
 func TestCloneDriveEndpoint_NameConflict(t *testing.T) {
-	srv, svc, cleanup := newTestServerWithStorage(t)
-	defer cleanup()
+	h, svc, _ := setupHandlerWithStorage(t)
 
 	for _, n := range []string{"src", "taken"} {
 		if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
@@ -709,46 +1154,22 @@ func TestCloneDriveEndpoint_NameConflict(t *testing.T) {
 		}
 	}
 
-	body := `{"source_volume_ref":"src","name":"taken","mount_path":"/x"}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/drives/clone", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
-
+	rec := doRequest(h, "POST", "/v1/drives/clone", map[string]any{
+		"source_volume_ref": "src",
+		"name":              "taken",
+	})
 	if rec.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 }
 ```
 
-If `newTestServerWithStorage` does not exist in `handler_test.go`, locate
-the existing test helper that constructs a VMService with a fake or
-in-memory `domain.Storage` + `domain.DriveStore`. If none exists,
-create it next to other helpers in `handler_test.go`:
-
-```go
-// newTestServerWithStorage returns an http.Handler over a VMService
-// wired with an in-memory drive store and a fakeStorage stand-in (the
-// same fakeStorage from internal/app/drive_clone_test.go — copy it or
-// extract to a shared internal/apptest helper).
-func newTestServerWithStorage(t *testing.T) (http.Handler, *app.VMService, func()) {
-	// implementation: minimal — follow whatever pattern existing tests
-	// in this file already establish; the goal is to invoke
-	// httpapi.NewHandler against a VMService that has WithStorage set.
-}
-```
-
-**Note for the developer:** if `handler_test.go` does not currently
-test any drive endpoint (likely — the file's existing tests focus on
-VMs), prefer extending it minimally over splitting into a new file.
-Three new tests in the same file is fine.
-
-**Step 2: Run the test to verify it fails**
+**Step 4: Run the tests to verify they fail**
 
 Run: `go test -run TestCloneDriveEndpoint ./internal/infra/httpapi/...`
 Expected: FAIL — `404` or "no route matched POST /v1/drives/clone".
 
-**Step 3: Add request/response types and register the route**
+**Step 5: Add request/response types and register the route**
 
 Add near the existing `CreateDriveInput` (~line 77) in `handler.go`:
 
@@ -758,35 +1179,40 @@ Add near the existing `CreateDriveInput` (~line 77) in `handler.go`:
 //
 //	source_volume_ref  -> the existing drive (name or ID) to clone from.
 //	name               -> the new drive's name.
-//	mount_path         -> CSI mount target inside the consuming VM.
-//	snapshot_name      -> optional; named intermediate VolumeSnapshot.
-//	                     Omitted = ephemeral snapshot, deleted after clone.
+//	mount_path         -> optional CSI mount target. When omitted the
+//	                     clone inherits the source drive's mount_path
+//	                     (CSI separates volume creation from mount-
+//	                     target declaration; mount_path is a property
+//	                     of the consuming runtime, not the volume).
+//	snapshot_name      -> optional named intermediate VolumeSnapshot.
+//	                     Omitted = ephemeral, deleted after clone.
 type CloneDriveInput struct {
 	Body struct {
 		SourceVolumeRef string `json:"source_volume_ref" doc:"Source drive ID or name to clone from"`
 		Name            string `json:"name" doc:"New drive name"`
-		MountPath       string `json:"mount_path" doc:"Mount path inside the VM"`
+		MountPath       string `json:"mount_path,omitempty" doc:"Optional mount path; inherits from source when omitted"`
 		SnapshotName    string `json:"snapshot_name,omitempty" doc:"Optional intermediate snapshot name; if set, the snapshot is retained"`
 	}
 }
 ```
 
-Add a new response type next to `driveResponse` (~line 245):
+Add a new response type near `driveResponse` (~line 245):
 
 ```go
 // cloneDriveResponse extends driveResponse with the CSI provenance
-// fields the caller may want to record (e.g., the SourceVolumeRef
-// and the SnapshotName actually used). Keeping this distinct from
-// driveResponse means GET /v1/drives/{id} stays narrow while clone
-// callers get a complete record of what was cloned.
+// fields the immediate caller may want to record. Provenance is
+// REQUEST-SCOPED ONLY — it is not persisted on domain.Drive, so a
+// later GET /v1/drives/{id} returns the standard driveResponse shape
+// without these fields. Document the same in the OpenAPI description
+// for the route.
 type cloneDriveResponse struct {
 	ID              string  `json:"id" doc:"Drive ID"`
 	Name            string  `json:"name" doc:"Drive name"`
 	SizeBytes       uint64  `json:"size_bytes" doc:"Size in bytes (inherited from source)"`
-	MountPath       string  `json:"mount_path" doc:"Mount path"`
+	MountPath       string  `json:"mount_path" doc:"Mount path (inherited from source unless overridden)"`
 	VMID            *string `json:"vm_id,omitempty" doc:"Attached VM ID (always nil for fresh clones)"`
 	CreatedAt       string  `json:"created_at" doc:"Creation timestamp"`
-	SourceVolumeRef string  `json:"source_volume_ref" doc:"Source drive that was cloned"`
+	SourceVolumeRef string  `json:"source_volume_ref" doc:"Source drive that was cloned (request-scoped echo, not persisted)"`
 	SnapshotName    string  `json:"snapshot_name,omitempty" doc:"Retained intermediate snapshot name, if any"`
 }
 
@@ -800,16 +1226,18 @@ Register the route at the end of `registerDriveRoutes` (after the
 
 ```go
 	huma.Register(api, huma.Operation{
-		OperationID:   "clone-drive",
-		Method:        http.MethodPost,
-		Path:          "/v1/drives/clone",
-		Summary:       "Clone a drive from a source volume",
+		OperationID: "clone-drive",
+		Method:      http.MethodPost,
+		Path:        "/v1/drives/clone",
+		Summary:     "Clone a drive from a source volume",
 		Description: "CSI-shaped clone-from-snapshot operation. Maps 1:1 to a k8s " +
-			"PersistentVolumeClaim with a VolumeSnapshot dataSource. The " +
-			"source drive must be detached. When snapshot_name is set, the " +
-			"intermediate VolumeSnapshot is retained (caller-owned lifecycle); " +
-			"when omitted, an ephemeral snapshot is created and deleted after " +
-			"the clone completes.",
+			"PersistentVolumeClaim with a VolumeSnapshot dataSource. The source drive " +
+			"must be detached. When snapshot_name is set, the intermediate VolumeSnapshot " +
+			"is retained (caller-owned lifecycle); when omitted, an ephemeral snapshot " +
+			"is created and deleted after the clone completes. The response echoes " +
+			"source_volume_ref and (when retained) snapshot_name for the immediate " +
+			"caller's bookkeeping; this provenance is NOT persisted, so subsequent " +
+			"GET /v1/drives/{id} calls return the standard drive shape only.",
 		DefaultStatus: http.StatusCreated,
 		Tags:          []string{"Drives"},
 	}, func(ctx context.Context, input *CloneDriveInput) (*CloneDriveOutput, error) {
@@ -837,13 +1265,13 @@ Register the route at the end of `registerDriveRoutes` (after the
 	})
 ```
 
-**Step 4: Run the tests to verify they pass**
+**Step 6: Run the tests to verify they pass**
 
 Run: `go test -run TestCloneDriveEndpoint ./internal/infra/httpapi/...`
-Expected: PASS for all three cases (Success → 201, SourceNotFound → 404,
-NameConflict → 409).
+Expected: PASS for all four cases (Success → 201, MountPathInherited
+→ 201 with `/inherited`, SourceNotFound → 404, NameConflict → 409).
 
-**Step 5: Commit**
+**Step 7: Commit**
 
 ```
 git commit -m "$(cat <<'EOF'
@@ -854,7 +1282,8 @@ request and response shape map 1:1 to k8s CSI primitives:
 
   source_volume_ref  <- VolumeSnapshot dataSource
   snapshot_name      <- VolumeSnapshot.metadata.name (optional)
-  name + mount_path  <- PersistentVolumeClaim spec
+  name               <- PersistentVolumeClaim.metadata.name
+  mount_path         <- optional; inherited from source when omitted
 
 This is the wire shape Flow's RuntimeDriver.CloneWorkItemVolume will
 target — Nexus today, k8s tomorrow — so the future k8s adapter is a
@@ -862,11 +1291,21 @@ translation layer rather than a re-architecture.
 
 Status mapping:
   201 Created  - clone succeeded
-  400          - missing required field (source_volume_ref/name/mount_path)
+  400          - missing required field (source_volume_ref/name)
   404          - source drive not found
   409          - target name already exists, or source attached to a VM
 
-Three handler tests cover the success path and the two conflict paths.
+Provenance echoed in the response (source_volume_ref, snapshot_name)
+is request-scoped only — it is not persisted on domain.Drive. The
+OpenAPI description and the response struct comment document this.
+
+Test scaffolding extends the existing mockStore with the
+domain.DriveStore methods and adds setupHandlerWithStorage that wires
+WithStorage onto the VMService. handlerFakeStorage mirrors the
+unit-test fake without depending on the app-test package.
+
+Four handler tests cover: success (with explicit mount_path),
+mount_path inheritance, source-not-found, and name conflict.
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -875,77 +1314,27 @@ EOF
 
 ---
 
-### Task 3: MCP tool `drive_clone`
+### Task 4: MCP tool `drive_clone`
 
-**Depends on:** Task 1 (the app method).
+**Depends on:** Task 2 (the app method).
 
 **Files:**
 - Modify: `internal/infra/mcp/handler.go` (extend `registerDriveTools`
   ~line 416)
-- Modify: `internal/infra/mcp/handler_test.go` (add a tool-level test)
 
-**Step 1: Write the failing MCP tool test**
+**Note on test scaffolding:** `internal/infra/mcp/handler_test.go` is
+a 17-line file with one smoke test (`TestNewHandlerNonNil`) — it has
+no test seam for invoking individual tools. The mcp-go library wraps
+tools behind `server.NewStreamableHTTPServer`, which speaks JSON-RPC
+over HTTP; constructing a tool-invocation harness in unit tests would
+mean reimplementing the JSON-RPC handshake.
 
-Append to `internal/infra/mcp/handler_test.go`:
+**Decision:** keep the unit-test surface minimal (smoke test only,
+unchanged) and exercise `drive_clone` via E2E in Task 6 against the
+real daemon's `/mcp` endpoint. The harness gains a small `CallMCPTool`
+helper in Task 5.
 
-```go
-func TestDriveCloneTool(t *testing.T) {
-	svc, cleanup := newTestVMService(t)
-	defer cleanup()
-
-	// Seed source drive.
-	if _, err := svc.CreateDrive(context.Background(), domain.CreateDriveParams{
-		Name: "master", Size: "10Mi", MountPath: "/m",
-	}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	h := mcp.NewHandler(svc, nil)
-	resp := callMCPTool(t, h, "drive_clone", map[string]any{
-		"source_volume_ref": "master",
-		"name":              "work-1",
-		"mount_path":        "/work",
-	})
-	if resp.IsError {
-		t.Fatalf("tool returned error: %s", resp.TextContent())
-	}
-	var got map[string]any
-	if err := json.Unmarshal([]byte(resp.TextContent()), &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got["name"] != "work-1" {
-		t.Errorf("name = %v, want work-1", got["name"])
-	}
-}
-
-func TestDriveCloneTool_MissingRequired(t *testing.T) {
-	svc, cleanup := newTestVMService(t)
-	defer cleanup()
-
-	h := mcp.NewHandler(svc, nil)
-	resp := callMCPTool(t, h, "drive_clone", map[string]any{
-		"name":       "work-1",
-		"mount_path": "/x",
-		// missing source_volume_ref
-	})
-	if !resp.IsError {
-		t.Errorf("expected error result for missing source_volume_ref")
-	}
-}
-```
-
-If `newTestVMService` and `callMCPTool` do not exist in
-`handler_test.go`, follow the patterns the existing tests in that file
-already use to construct an MCP handler and invoke a tool against it.
-Do not invent helpers that don't fit the file's conventions; reuse what
-is there.
-
-**Step 2: Run the test to verify it fails**
-
-Run: `go test -run TestDriveCloneTool ./internal/infra/mcp/...`
-Expected: FAIL — `tool drive_clone not found` or equivalent.
-
-**Step 3: Register the MCP tool**
+**Step 1: Register the MCP tool**
 
 Append to `registerDriveTools` (after the `drive_detach` block, ~line
 523) in `internal/infra/mcp/handler.go`:
@@ -954,10 +1343,12 @@ Append to `registerDriveTools` (after the `drive_detach` block, ~line
 	// drive_clone — CSI-shaped clone-from-snapshot operation.
 	s.AddTool(mcp.NewTool("drive_clone",
 		mcp.WithDescription("Clone an existing drive into a new drive (CSI VolumeSnapshot + PVC dataSource shape). "+
-			"Source must be detached. Usage: drive_clone(source_volume_ref: \"master\", name: \"work-1\", mount_path: \"/work\")"),
+			"Source must be detached. mount_path is optional — inherits from source when omitted. "+
+			"snapshot_name is optional — when set, the intermediate snapshot is retained. "+
+			"Usage: drive_clone(source_volume_ref: \"master\", name: \"work-1\")"),
 		mcp.WithString("source_volume_ref", mcp.Description("Source drive ID or name to clone from"), mcp.Required()),
 		mcp.WithString("name", mcp.Description("New drive name"), mcp.Required()),
-		mcp.WithString("mount_path", mcp.Description("Mount path inside the VM"), mcp.Required()),
+		mcp.WithString("mount_path", mcp.Description("Optional mount path; inherits from source when omitted")),
 		mcp.WithString("snapshot_name", mcp.Description("Optional intermediate snapshot name; if set, the snapshot is retained")),
 	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		src, errRes := requireString(req, "source_volume_ref")
@@ -968,10 +1359,7 @@ Append to `registerDriveTools` (after the `drive_detach` block, ~line
 		if errRes != nil {
 			return errRes, nil
 		}
-		mountPath, errRes := requireString(req, "mount_path")
-		if errRes != nil {
-			return errRes, nil
-		}
+		mountPath := mcp.ParseString(req, "mount_path", "")
 		snapName := mcp.ParseString(req, "snapshot_name", "")
 
 		d, err := svc.CloneDrive(ctx, app.CloneDriveParams{
@@ -983,8 +1371,10 @@ Append to `registerDriveTools` (after the `drive_detach` block, ~line
 		if err != nil {
 			return errResult(err)
 		}
-		// Echo the CSI provenance fields back so the tool result is
+		// Echo the CSI provenance fields back so the result is
 		// self-describing for an MCP caller (e.g., Flow's runtime driver).
+		// Provenance is request-scoped only — it is not persisted on
+		// domain.Drive.
 		out := map[string]any{
 			"id":                d.ID,
 			"name":              d.Name,
@@ -1000,25 +1390,33 @@ Append to `registerDriveTools` (after the `drive_detach` block, ~line
 	})
 ```
 
-**Step 4: Run the test to verify it passes**
+**Step 2: Verify the package still compiles and the smoke test passes**
 
-Run: `go test -run TestDriveCloneTool ./internal/infra/mcp/...`
-Expected: PASS for both cases.
+Run: `go build ./internal/infra/mcp/... && go test ./internal/infra/mcp/...`
+Expected: PASS (the existing `TestNewHandlerNonNil` smoke test, no new
+unit test in this task — full coverage is in the e2e Task 6).
 
-**Step 5: Commit**
+**Step 3: Commit**
 
 ```
 git commit -m "$(cat <<'EOF'
 feat(mcp): add drive_clone tool with CSI vocabulary
 
 Mirrors the new POST /v1/drives/clone REST endpoint as an MCP tool
-so operator tooling and Flow's runtime driver can both use the same
+so operator tooling and Flow's runtime driver can use the same
 CSI-shaped operation regardless of transport.
 
-Tool inputs are the four CSI fields (source_volume_ref, name,
-mount_path, snapshot_name); the JSON result echoes them back along
-with the new drive's ID and inherited size, so the caller has a
-complete provenance record.
+Tool inputs are the four CSI fields (source_volume_ref required,
+name required, mount_path optional, snapshot_name optional). The
+JSON result echoes them back along with the new drive's ID, size,
+and creation timestamp — provenance is request-scoped, matching
+the REST endpoint's contract.
+
+Coverage lives in e2e (subsequent commit): the mcp-go library
+wraps tools behind a JSON-RPC streamable HTTP server, so unit-
+testing individual tools requires reimplementing the handshake;
+exercising via the real /mcp endpoint is honest and adds no test
+infrastructure here.
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -1027,22 +1425,24 @@ EOF
 
 ---
 
-### Task 4: Harness `Client.CloneDrive` method
+### Task 5: Harness helpers — `Client.CloneDrive` and `Client.CallMCPTool`
 
-**Depends on:** Task 2 (the REST endpoint).
+**Depends on:** Tasks 3 and 4 (REST endpoint + MCP tool).
 
 **Files:**
-- Modify: `tests/e2e/harness/harness.go` (add a `CloneDrive` method
-  near the existing drive operations ~line 925, plus a `CloneDriveResponse`
-  type near the existing `Drive` ~line 569)
+- Modify: `tests/e2e/harness/harness.go` (add `CloneDriveResponse`
+  type near the existing `Drive` ~line 569, `CloneDrive` method near
+  the existing drive operations ~line 978, and a new `CallMCPTool`
+  method near the end of the file)
 
-**Step 1: Add the response type**
+**Step 1: Add the REST clone helpers**
 
 Insert near `tests/e2e/harness/harness.go:577` (right after `Drive`):
 
 ```go
 // CloneDriveResponse mirrors the CSI-shaped JSON returned from
 // POST /v1/drives/clone — a Drive plus the provenance fields.
+// Provenance is request-scoped only and is not persisted.
 type CloneDriveResponse struct {
 	ID              string  `json:"id"`
 	Name            string  `json:"name"`
@@ -1055,20 +1455,31 @@ type CloneDriveResponse struct {
 }
 ```
 
-**Step 2: Add the `CloneDrive` method**
-
 Insert at the end of the "Drive operations" block (~line 978, after
 `DetachDrive`):
 
 ```go
 // CloneDrive issues POST /v1/drives/clone with a CSI-shaped body and
-// returns the new drive plus echoed provenance.
+// returns the new drive plus echoed provenance. Pass empty mountPath
+// to inherit the source's mount_path; pass empty snapshotName for an
+// ephemeral intermediate snapshot.
 func (c *Client) CloneDrive(sourceVolumeRef, name, mountPath, snapshotName string) (*CloneDriveResponse, error) {
-	body := fmt.Sprintf(
-		`{"source_volume_ref":%q,"name":%q,"mount_path":%q,"snapshot_name":%q}`,
-		sourceVolumeRef, name, mountPath, snapshotName,
-	)
-	resp, err := c.post("/v1/drives/clone", body)
+	type reqBody struct {
+		SourceVolumeRef string `json:"source_volume_ref"`
+		Name            string `json:"name"`
+		MountPath       string `json:"mount_path,omitempty"`
+		SnapshotName    string `json:"snapshot_name,omitempty"`
+	}
+	body, err := json.Marshal(reqBody{
+		SourceVolumeRef: sourceVolumeRef,
+		Name:            name,
+		MountPath:       mountPath,
+		SnapshotName:    snapshotName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.post("/v1/drives/clone", string(body))
 	if err != nil {
 		return nil, err
 	}
@@ -1081,6 +1492,106 @@ func (c *Client) CloneDrive(sourceVolumeRef, name, mountPath, snapshotName strin
 }
 ```
 
+Use `json.Marshal` (not `fmt.Sprintf`) because mount_path and
+snapshot_name are optional — `omitempty` semantics matter for the
+inheritance test.
+
+**Step 2: Add the MCP tool-call helper**
+
+Append near the end of the file (after the existing snapshot/exec
+helpers):
+
+```go
+// MCPToolResult is the parsed result of a tool call against the
+// daemon's /mcp endpoint. Content is the JSON text the tool returned;
+// IsError mirrors the JSON-RPC isError flag.
+type MCPToolResult struct {
+	Content string
+	IsError bool
+}
+
+// CallMCPTool invokes a tool by name on the daemon's /mcp endpoint
+// using a single JSON-RPC tools/call request over Streamable HTTP.
+// arguments is marshalled into the params.arguments field. The result
+// content is the first text-content block returned by the tool (which
+// is the convention every Nexus tool follows via jsonResult /
+// NewToolResultText).
+func (c *Client) CallMCPTool(name string, arguments map[string]any) (*MCPToolResult, error) {
+	reqID := atomic.AddInt64(&c.mcpReqID, 1)
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      reqID,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      name,
+			"arguments": arguments,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, c.base+"/mcp", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	// mcp-go's StreamableHTTPServer may return either a single JSON
+	// object or an SSE stream. For a tools/call request the server
+	// responds with a single JSON-RPC response message; if SSE-framed,
+	// strip the "data: " prefix and parse the JSON inside.
+	jsonText := bytes.TrimSpace(raw)
+	if bytes.HasPrefix(jsonText, []byte("data:")) {
+		for _, line := range bytes.Split(jsonText, []byte("\n")) {
+			line = bytes.TrimSpace(line)
+			if bytes.HasPrefix(line, []byte("data:")) {
+				jsonText = bytes.TrimSpace(line[len("data:"):])
+				break
+			}
+		}
+	}
+	var rpc struct {
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(jsonText, &rpc); err != nil {
+		return nil, fmt.Errorf("decode mcp response: %w; raw=%s", err, raw)
+	}
+	if rpc.Error != nil {
+		return nil, fmt.Errorf("mcp transport error: %s", rpc.Error.Message)
+	}
+	if len(rpc.Result.Content) == 0 {
+		return &MCPToolResult{IsError: rpc.Result.IsError}, nil
+	}
+	return &MCPToolResult{Content: rpc.Result.Content[0].Text, IsError: rpc.Result.IsError}, nil
+}
+```
+
+The `Client` struct must gain an `mcpReqID int64` field (declare near
+the existing field block — verify location with `grep -n "type Client
+struct" tests/e2e/harness/harness.go`). Add the imports `bytes`, `io`,
+`sync/atomic` to the file's import block — verify with `grep -n
+'"bytes"\|"sync/atomic"' tests/e2e/harness/harness.go` and add what's
+missing.
+
 **Step 3: Verify it compiles**
 
 Run: `cd tests/e2e && go vet ./harness/...`
@@ -1090,12 +1601,22 @@ Expected: PASS.
 
 ```
 git commit -m "$(cat <<'EOF'
-test(e2e): add harness Client.CloneDrive method
+test(e2e): add harness Client.CloneDrive and CallMCPTool helpers
 
-Mirrors POST /v1/drives/clone with the same CSI-shaped request body
-the REST endpoint accepts. Returns CloneDriveResponse so e2e tests
-can assert on the source_volume_ref / snapshot_name echo as well as
-the new drive's identity.
+CloneDrive issues POST /v1/drives/clone with the same CSI-shaped
+request body the REST endpoint accepts, marshalled via json.Marshal
+so omitempty semantics (mount_path, snapshot_name) carry through to
+the wire. Returns CloneDriveResponse so e2e tests can assert on the
+provenance echo.
+
+CallMCPTool dispatches a single JSON-RPC tools/call against the
+daemon's /mcp endpoint over the streamable HTTP transport. Handles
+both the plain JSON and SSE response framings the mcp-go server
+may produce. Returns the first text-content block and the isError
+flag, matching the contract every Nexus tool follows via
+jsonResult / NewToolResultText.
+
+Both helpers exist to support the upcoming drive_clone e2e tests.
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -1104,17 +1625,18 @@ EOF
 
 ---
 
-### Task 5: E2E coverage for `CloneDrive` (SQLite-only, btrfs)
+### Task 6: E2E coverage for `CloneDrive` (REST + MCP, SQLite + btrfs)
 
-**Depends on:** Tasks 2 and 4 (REST endpoint + harness client).
+**Depends on:** Tasks 3, 4, 5 (REST endpoint, MCP tool, harness helpers).
 
 **Files:**
 - Create: `tests/e2e/drive_clone_test.go`
 
-The clone path uses `BtrfsStorage.SnapshotVolume` + `RestoreVolume`,
-which go through the in-process `pkg/btrfs` ioctl interface — they do
-NOT shell out to `build/nexus-btrfs`. So `requireBtrfs` is the right
-guard; `requireBtrfsSend` would over-skip.
+The clone path uses `BtrfsStorage.SnapshotVolume`,
+`BtrfsStorage.CloneVolume`, and `BtrfsStorage.DeleteVolumeSnapshot`
+— all in-process btrfs ioctls. `requireBtrfs` is the right guard;
+`requireBtrfsSend` would over-skip (that helper exists for the
+send/receive path which DOES shell out to `nexus-btrfs`).
 
 **Step 1: Write the e2e test file**
 
@@ -1126,6 +1648,7 @@ package e2e
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -1133,13 +1656,11 @@ func TestCloneDrive_E2E_HappyPath(t *testing.T) {
 	requireBtrfs(t)
 	bd := startBtrfsDaemon(t)
 
-	// Seed the source drive.
 	src, err := bd.client.CreateDrive("project-master", "10Mi", "/work")
 	if err != nil {
 		t.Fatalf("create source drive: %v", err)
 	}
 
-	// Clone it into a new drive.
 	clone, err := bd.client.CloneDrive(src.Name, "work-item-W1", "/work", "")
 	if err != nil {
 		t.Fatalf("CloneDrive: %v", err)
@@ -1151,38 +1672,53 @@ func TestCloneDrive_E2E_HappyPath(t *testing.T) {
 		t.Errorf("source_volume_ref echo = %q, want %q", clone.SourceVolumeRef, src.Name)
 	}
 	if clone.SizeBytes != src.SizeBytes {
-		t.Errorf("clone size = %d, want %d (inherited)", clone.SizeBytes, src.SizeBytes)
+		t.Errorf("clone size = %d, want %d", clone.SizeBytes, src.SizeBytes)
 	}
 	if clone.VMID != nil {
 		t.Errorf("clone must be unattached, got vm_id=%v", *clone.VMID)
 	}
 
-	// Verify the clone is a real btrfs subvolume on disk.
+	// Verify the clone is a real btrfs subvolume on disk and writable.
 	clonePath := filepath.Join(bd.drivesDir, clone.Name)
 	out, err := btrfsPropertyGet(clonePath)
 	if err != nil {
 		t.Fatalf("btrfs property get %s: %v: %s", clonePath, err, out)
 	}
-	// Cloned drives are writable (ro=false). The intermediate snapshot
-	// should already be cleaned up because we passed snapshot_name="".
-	if !contains(out, "ro=false") {
+	if !strings.Contains(out, "ro=false") {
 		t.Errorf("clone subvolume not writable: %q", out)
 	}
 
-	// And it is reachable via GET /v1/drives/{id}.
-	got, err := bd.client.ListDrives()
+	// And it is reachable via GET /v1/drives.
+	drives, err := bd.client.ListDrives()
 	if err != nil {
 		t.Fatalf("list drives: %v", err)
 	}
 	var found bool
-	for _, d := range got {
+	for _, d := range drives {
 		if d.Name == clone.Name {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("cloned drive not in ListDrives: %v", got)
+		t.Errorf("cloned drive not in ListDrives: %v", drives)
+	}
+}
+
+func TestCloneDrive_E2E_MountPathInherited(t *testing.T) {
+	requireBtrfs(t)
+	bd := startBtrfsDaemon(t)
+
+	if _, err := bd.client.CreateDrive("master", "10Mi", "/inherited"); err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	clone, err := bd.client.CloneDrive("master", "child", "", "")
+	if err != nil {
+		t.Fatalf("CloneDrive: %v", err)
+	}
+	if clone.MountPath != "/inherited" {
+		t.Errorf("mount_path = %q, want /inherited (inherited)", clone.MountPath)
 	}
 }
 
@@ -1205,14 +1741,13 @@ func TestCloneDrive_E2E_RetainSnapshot(t *testing.T) {
 	}
 
 	// The named intermediate snapshot must exist at
-	// <drivesDir>/.snapshots/<snapName>.
+	// <drivesDir>/.snapshots/<snapName> as a read-only subvolume.
 	snapPath := filepath.Join(bd.drivesDir, ".snapshots", snapName)
 	out, err := btrfsPropertyGet(snapPath)
 	if err != nil {
 		t.Fatalf("named snapshot missing at %s: %v: %s", snapPath, err, out)
 	}
-	// Snapshots are read-only.
-	if !contains(out, "ro=true") {
+	if !strings.Contains(out, "ro=true") {
 		t.Errorf("retained snapshot not read-only: %q", out)
 	}
 }
@@ -1221,13 +1756,11 @@ func TestCloneDrive_E2E_SourceNotFound(t *testing.T) {
 	requireBtrfs(t)
 	bd := startBtrfsDaemon(t)
 
-	_, err := bd.client.CloneDrive("ghost", "clone", "/x", "")
+	_, err := bd.client.CloneDrive("ghost", "clone", "", "")
 	if err == nil {
 		t.Fatal("expected error for missing source")
 	}
-	// Loosely check the status — the harness Client surfaces APIError
-	// strings with "404" prefix.
-	if !contains(err.Error(), "404") {
+	if !strings.Contains(err.Error(), "404") {
 		t.Errorf("err = %v, want a 404", err)
 	}
 }
@@ -1243,63 +1776,110 @@ func TestCloneDrive_E2E_NameConflict(t *testing.T) {
 		t.Fatalf("seed taken: %v", err)
 	}
 
-	_, err := bd.client.CloneDrive("src", "taken", "/x", "")
+	_, err := bd.client.CloneDrive("src", "taken", "", "")
 	if err == nil {
 		t.Fatal("expected error for name conflict")
 	}
-	if !contains(err.Error(), "409") {
+	if !strings.Contains(err.Error(), "409") {
 		t.Errorf("err = %v, want a 409", err)
 	}
 }
 
-// contains is a tiny test helper that avoids pulling strings into every
-// test function (mirrors the pattern already used in this package).
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (func() bool {
-		for i := 0; i+len(needle) <= len(haystack); i++ {
-			if haystack[i:i+len(needle)] == needle {
-				return true
-			}
+func TestCloneDrive_E2E_MCP_HappyPath(t *testing.T) {
+	requireBtrfs(t)
+	bd := startBtrfsDaemon(t)
+
+	if _, err := bd.client.CreateDrive("mcp-master", "10Mi", "/m"); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+
+	res, err := bd.client.CallMCPTool("drive_clone", map[string]any{
+		"source_volume_ref": "mcp-master",
+		"name":              "mcp-child",
+	})
+	if err != nil {
+		t.Fatalf("CallMCPTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, `"name":"mcp-child"`) {
+		t.Errorf("result content missing expected name; got=%s", res.Content)
+	}
+	if !strings.Contains(res.Content, `"source_volume_ref":"mcp-master"`) {
+		t.Errorf("result content missing source_volume_ref echo; got=%s", res.Content)
+	}
+
+	// The drive is also reachable via REST after MCP creation.
+	drives, err := bd.client.ListDrives()
+	if err != nil {
+		t.Fatalf("list drives: %v", err)
+	}
+	var found bool
+	for _, d := range drives {
+		if d.Name == "mcp-child" {
+			found = true
+			break
 		}
-		return false
-	})()
+	}
+	if !found {
+		t.Errorf("MCP-cloned drive not in ListDrives")
+	}
+}
+
+func TestCloneDrive_E2E_MCP_MissingRequired(t *testing.T) {
+	requireBtrfs(t)
+	bd := startBtrfsDaemon(t)
+
+	res, err := bd.client.CallMCPTool("drive_clone", map[string]any{
+		"name": "child-only",
+		// missing source_volume_ref
+	})
+	if err != nil {
+		t.Fatalf("CallMCPTool: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("expected isError=true for missing source_volume_ref; content=%s", res.Content)
+	}
 }
 ```
-
-If a `contains` helper already exists elsewhere in `tests/e2e/`,
-delete the local copy and use the existing one. Verify with
-`grep -n "func contains(" tests/e2e/*.go` before committing.
 
 **Step 2: Run the e2e tests**
 
 Run: `mise run e2e -- -run TestCloneDrive_E2E -v`
 
-Expected: 4 PASS or 4 SKIP. The SKIP path applies on a host without
-btrfs; the PASS path requires the btrfs filesystem (no caps required —
-the clone path uses ioctls only).
+Expected: 7 PASS or 7 SKIP (all-or-nothing on `requireBtrfs`).
 
-If running on a non-btrfs host, the suite should SKIP cleanly with
-"working directory is not on btrfs" — verify the SKIP message before
-declaring success.
+If running on a non-btrfs host, the suite must SKIP cleanly with
+"working directory is not on btrfs".
 
 **Step 3: Commit**
 
 ```
 git commit -m "$(cat <<'EOF'
-test(e2e): cover POST /v1/drives/clone end-to-end on SQLite + btrfs
+test(e2e): cover POST /v1/drives/clone and drive_clone end-to-end
 
-Four e2e scenarios against the live daemon:
+Seven e2e scenarios against the live daemon on SQLite + btrfs:
+
+REST:
   1. happy path — clone succeeds, clone is a writable btrfs subvolume,
      intermediate snapshot is cleaned up
-  2. retained snapshot — when snapshot_name is set, the intermediate
+  2. mount_path inheritance — empty mount_path inherits from source
+  3. retained snapshot — when snapshot_name is set, the intermediate
      snapshot lives on at <drivesDir>/.snapshots/<name> as a read-only
      subvolume (CSI VolumeSnapshot semantics)
-  3. source not found — returns 404
-  4. target name conflict — returns 409
+  4. source not found — returns 404
+  5. target name conflict — returns 409
 
-Single-backend (SQLite) per the Nexus PG deferral. Guarded with the
-existing requireBtrfs helper; the clone path uses in-process btrfs
-ioctls, so requireBtrfsSend would over-skip.
+MCP:
+  6. happy path — drive_clone via /mcp creates a drive reachable via
+     REST, response echoes source_volume_ref
+  7. missing required field — drive_clone returns isError=true when
+     source_volume_ref is omitted
+
+Single-backend (SQLite) per the Nexus PG deferral. Guarded with
+requireBtrfs (the clone path uses in-process btrfs ioctls, so
+requireBtrfsSend would over-skip).
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -1308,23 +1888,31 @@ EOF
 
 ---
 
-### Task 6: Document the new operation
+### Task 7: Document the new operation
 
-**Depends on:** Tasks 2 and 3.
+**Depends on:** Tasks 3 and 4.
 
 **Files:**
 - Modify: `docs/2026-04-18-vm-pool-and-clone.md` (mark the
-  `CloneDrive` requirement as implemented; add a brief reference to
-  the REST + MCP surfaces)
+  `CloneDrive` requirement as implemented; reference the REST + MCP
+  surfaces)
 - Modify: `docs/remaining-features.md` (close the corresponding entry
-  if one exists; otherwise no-op — verify with `grep -n CloneDrive
+  if present; otherwise no-op — verify with `grep -n CloneDrive
   docs/remaining-features.md` first)
+
+**Note:** the umbrella doc has a section titled "Drive clone from a
+long-lived master" (verified — it appears in
+`docs/2026-04-18-vm-pool-and-clone.md` around line 50). That heading
+is stable; the developer can rely on it. If `grep -n "Drive clone
+from a long-lived master" docs/2026-04-18-vm-pool-and-clone.md`
+returns no matches at the time of the task, fall back to finding the
+nearest analog and mention the divergence in the commit body.
 
 **Step 1: Update the umbrella spec**
 
-Edit `docs/2026-04-18-vm-pool-and-clone.md`. In the "Drive clone from
-a long-lived master" section, replace the `Required addition: CloneDrive
-on DriveService` block with a short note that the operation has landed:
+Edit `docs/2026-04-18-vm-pool-and-clone.md`. Replace the entire
+"Drive clone from a long-lived master" section (the `Required
+addition: CloneDrive on DriveService` block) with:
 
 ```markdown
 ### Drive clone from a long-lived master — IMPLEMENTED
@@ -1335,28 +1923,40 @@ k8s `VolumeSnapshot` + `PersistentVolumeClaim` clone-from-snapshot
 semantics:
 
 - REST: `POST /v1/drives/clone` with body
-  `{source_volume_ref, name, mount_path, snapshot_name?}`
+  `{source_volume_ref, name, mount_path?, snapshot_name?}`
 - MCP: tool `drive_clone` with the same four arguments
 
-The intermediate btrfs snapshot is ephemeral when `snapshot_name` is
-omitted (CSI no-snapshot path) and retained when set (CSI named-
-snapshot path).
+`mount_path` is optional — when omitted the clone inherits the
+source drive's `mount_path`, matching CSI's separation of volume
+creation from mount-target declaration. The intermediate btrfs
+snapshot is ephemeral when `snapshot_name` is omitted (CSI no-
+snapshot path) and retained when set (CSI named-snapshot path).
 
-The implementation reuses the existing `s.storage.SnapshotVolume`
-primitive that `CloneSnapshot` already uses for whole-VM clones —
-just exposed at the drive level.
+Implementation reuses `s.storage.SnapshotVolume` and a new
+`s.storage.CloneVolume` primitive; the underlying btrfs operation
+is `btrfs.CreateSnapshot(snap, dst, readOnly=false)`. Provenance
+(source_volume_ref / snapshot_name) is echoed in the response for
+the immediate caller's bookkeeping but is not persisted on
+`domain.Drive`.
 ```
 
 Leave the rest of the document (pool tagging, no-hot-attach, etc.)
 intact.
 
-**Step 2: Update the cross-cutting tracker**
+**Step 2: Check `docs/remaining-features.md`**
+
+Run: `grep -n "CloneDrive\|clone-drive\|drive.clone" docs/remaining-features.md`
+
+If matches exist, remove the corresponding entries. If none, this
+file is untouched in this commit.
+
+**Step 3: Note on cross-repo tracker**
 
 `/home/kazw/Work/WorkFort/AGENT-POOL-REMAINING-WORK.md` is **not in
-this repo** — do NOT modify it from this plan. The Team Lead will
-update the cross-repo tracker separately when this plan completes.
+this repo** — do NOT modify it from this plan. The Team Lead updates
+the cross-repo tracker separately when this plan completes.
 
-**Step 3: Commit**
+**Step 4: Commit**
 
 ```
 git commit -m "$(cat <<'EOF'
@@ -1366,7 +1966,8 @@ The umbrella spec called for CloneDrive on DriveService; the
 operation now ships as VMService.CloneDrive, surfaced at
 POST /v1/drives/clone and MCP tool drive_clone with a CSI-shaped
 request body that maps 1:1 to k8s VolumeSnapshot + PVC clone-from-
-snapshot semantics.
+snapshot semantics. mount_path is optional with inheritance from
+source; snapshot_name controls intermediate retention.
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 EOF
@@ -1377,21 +1978,23 @@ EOF
 
 ## Verification Checklist
 
-After all six tasks land:
+After all seven tasks land:
 
 - [ ] `mise run test` from repo root → all unit tests pass, including
-      the 5 new `TestCloneDrive*` cases in `internal/app/`.
-- [ ] `mise run test` from repo root → 3 new `TestCloneDriveEndpoint*`
+      the new `TestBtrfsStorage_CloneVolume` (skipped on non-btrfs)
+      and the 6 `TestCloneDrive*` cases in `internal/app/`.
+- [ ] `mise run test` from repo root → 4 new `TestCloneDriveEndpoint*`
       cases in `internal/infra/httpapi/` pass.
-- [ ] `mise run test` from repo root → 2 new `TestDriveCloneTool*`
-      cases in `internal/infra/mcp/` pass.
+- [ ] `mise run test` from repo root → existing
+      `TestNewHandlerNonNil` smoke test in `internal/infra/mcp/` still
+      passes; no new unit tests in that package by design.
 - [ ] On a btrfs host: `mise run e2e -- -run TestCloneDrive_E2E -v`
-      → 4 PASS.
-- [ ] On a non-btrfs host: same command → 4 SKIP with
+      → 7 PASS.
+- [ ] On a non-btrfs host: same command → 7 SKIP with
       `working directory is not on btrfs`.
 - [ ] `cd /home/kazw/Work/WorkFort/nexus/lead && git status` → clean
       working tree.
-- [ ] `git log --oneline -7` shows six new commits with multi-line
+- [ ] `git log --oneline -7` shows seven new commits with multi-line
       conventional format, `Co-Authored-By: Claude Sonnet 4.6` trailer,
       no `!` markers, no `BREAKING CHANGE:` footers.
 - [ ] `grep -rn "subvol\|btrfs_snapshot_id\|parent_subvol_path" \
@@ -1399,7 +2002,8 @@ After all six tasks land:
       → ZERO matches (no btrfs vocabulary in the public API).
 - [ ] `curl -s http://localhost:9600/openapi.json | jq '.paths."/v1/drives/clone"'`
       against a running daemon shows the route registered with
-      `source_volume_ref`, `name`, `mount_path`, `snapshot_name` fields.
+      `source_volume_ref`, `name`, `mount_path`, `snapshot_name` fields
+      and a description noting that provenance is request-scoped.
 - [ ] MCP `tools/list` against the daemon includes `drive_clone`.
 - [ ] `docs/2026-04-18-vm-pool-and-clone.md` reflects the implemented
       state.
@@ -1410,15 +2014,19 @@ After all six tasks land:
   The internal package may use `subvol` / `snapshot` — the wire MUST
   use CSI shape.
 - **Do not** add a `domain.DriveSnapshot` entity table. Intermediate
-  snapshots are implementation detail; a future k8s adapter would
-  use `VolumeSnapshot` resources directly without persisting them in
-  Nexus's database.
+  snapshots are implementation detail.
+- **Do not** persist `source_volume_ref` / `snapshot_name` on
+  `domain.Drive`. Provenance is request-scoped echo only.
+- **Do not** require `mount_path` on the wire. CSI separates volume
+  creation from mount-target declaration; inheriting from source is
+  the correct default.
 - **Do not** wire a Flow-side consumer in this plan. The Nexus driver
-  impl in Flow that calls this endpoint is a separate plan, dispatched
-  after this one lands.
-- **Do not** alter `CloneSnapshot` (the whole-VM operation) — it stays
-  on its current code path; the new use-case is parallel, not a
-  refactor.
+  impl in Flow that calls this endpoint is a separate plan.
+- **Do not** alter `CloneSnapshot` (the whole-VM operation). The
+  latent `RestoreVolume`-into-non-existent-target defect there is
+  noted in Task 1's commit message but not fixed in this plan; a
+  follow-up may migrate `CloneSnapshot` onto `CloneVolume` for
+  correctness once the team has appetite for that scope.
 - **Do not** skip the cap-aware guards if the developer chooses to
   also exercise the export/import path during local verification —
   use `requireBtrfsSend` for those (already present in the test file
