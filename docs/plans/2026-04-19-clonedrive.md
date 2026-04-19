@@ -2,15 +2,15 @@
 type: plan
 step: "1"
 title: "Nexus CloneDrive — CSI-shaped REST + MCP"
-status: pending
-assessment_status: needed
+status: approved
+assessment_status: complete
 provenance:
   source: roadmap
   issue_id: null
   roadmap_step: null
 dates:
   created: "2026-04-19"
-  approved: null
+  approved: "2026-04-19"
   completed: null
 related_plans:
   - docs/2026-04-18-vm-pool-and-clone.md
