@@ -3,26 +3,47 @@ package e2e
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Work-Fort/nexus-e2e/harness"
 )
 
 // requireNetworking skips the test if the networking helpers in build/
-// are not available (they need caps from dev-setcap-loop).
+// are missing or lack the capabilities that dev-setcap-loop sets. The
+// daemon's network path returns HTTP 500 if nexus-cni-exec is invoked
+// without cap_net_admin, so the existence-only check is insufficient.
 func requireNetworking(t *testing.T) {
 	t.Helper()
-	for _, bin := range []string{"nexus-netns", "nexus-cni-exec"} {
-		p, err := filepath.Abs(filepath.Join("..", "..", "build", bin))
-		if err != nil {
-			t.Skipf("cannot resolve build/%s: %v", bin, err)
-		}
+
+	netnsPath, err := filepath.Abs("../../build/nexus-netns")
+	if err != nil {
+		t.Skipf("cannot resolve build/nexus-netns: %v", err)
+	}
+	cniPath, err := filepath.Abs("../../build/nexus-cni-exec")
+	if err != nil {
+		t.Skipf("cannot resolve build/nexus-cni-exec: %v", err)
+	}
+	for _, p := range []string{netnsPath, cniPath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("build/%s not found (run mise run build and dev-setcap-loop): %v", bin, err)
+			t.Skipf("%s not found (run `mise run build`): %v", p, err)
 		}
 	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		netnsOut, err1 := exec.Command("getcap", netnsPath).Output()
+		cniOut, err2 := exec.Command("getcap", cniPath).Output()
+		if err1 == nil && strings.Contains(string(netnsOut), "cap_sys_admin") &&
+			err2 == nil && strings.Contains(string(cniOut), "cap_net_admin") {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Skipf("networking helpers in build/ lack required caps — run: sudo ./scripts/dev-setcap-loop.sh")
 }
 
 // startNetworkedDaemon starts a daemon with CNI networking enabled,

@@ -306,28 +306,6 @@ available in a standard development sandbox:
 | `tests/e2e/metrics_test.go` | 2 | built binary not found |
 | `tests/e2e/nexus_test.go` | 1 | networking capabilities not set on binary |
 
-### Known Defects: Missing `t.Skip` Guards (filed 2026-04-19)
-
-The following tests FAIL (instead of SKIP) on a development host where btrfs
-capability or networking capability is not configured. Per the test coverage
-convention above, these must be converted to conditional skips.
-
-
-#### DEF-2: `metrics_test.go` — `TestPrometheusTargets` FAIL when networking binaries lack caps
-
-**Symptom:** `create: 500: Internal Server Error` when starting a VM under a
-networked daemon whose network helpers are present but uncapabilitated.
-
-**Root cause:** `requireNetworking` in `metrics_test.go` checks that
-`build/nexus-netns` and `build/nexus-cni-exec` exist on disk but does NOT check
-whether they have the required `CAP_NET_ADMIN`/`CAP_NET_RAW` capabilities. When
-the binaries exist without caps, the daemon starts with networking enabled, but
-any VM creation that touches the network path returns 500.
-
-**Fix:** Extend `requireNetworking` (or add a `requireNetworkCaps` helper in
-`metrics_test.go`) to check capabilities on the networking binaries using
-`getcap`/`Getxattr` and skip if they are absent. This is analogous to the
-`requireNetworkCaps` guard already in `nexus_test.go`.
 
 ### `mise run e2e` Sandbox Limitation
 
