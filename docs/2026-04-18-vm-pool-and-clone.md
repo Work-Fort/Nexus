@@ -46,36 +46,29 @@ record.
 Suggested convention: pool VMs are tagged `pool=claude-cli`. Flow
 queries `vm_list` and filters by tag.
 
-### Drive clone from a long-lived master
+### Drive clone from a long-lived master — IMPLEMENTED
 
-Flow maintains a per-project source master as a drive. For each
-work item, Flow needs to clone the master drive into a new
-short-lived drive that can be attached to a runtime VM.
+`CloneDrive` ships as `app.VMService.CloneDrive` and is exposed on
+both REST and MCP using a CSI-shaped wire surface that maps 1:1 to
+k8s `VolumeSnapshot` + `PersistentVolumeClaim` clone-from-snapshot
+semantics:
 
-The underlying btrfs primitive exists today
-(`internal/app/snapshot.go` calls `s.storage.SnapshotVolume`), but
-it's only reachable via `CloneSnapshot`, which clones a whole VM
-(rootfs + all attached drives + new networking + new ID). Flow
-needs **drive-only clone** — copy a single drive's btrfs subvolume
-into a new drive, no VM involved.
+- REST: `POST /v1/drives/clone` with body
+  `{source_volume_ref, name, mount_path?, snapshot_name?}`
+- MCP: tool `drive_clone` with the same four arguments
 
-**Required addition: `CloneDrive` on `DriveService`** (or
-equivalent on `VMService` if drive operations live there). Shape:
+`mount_path` is optional — when omitted the clone inherits the
+source drive's `mount_path`, matching CSI's separation of volume
+creation from mount-target declaration. The intermediate btrfs
+snapshot is ephemeral when `snapshot_name` is omitted (CSI no-
+snapshot path) and retained when set (CSI named-snapshot path).
 
-```go
-// CloneDrive creates a new drive that is a btrfs CoW clone of an
-// existing drive's underlying subvolume. The source drive must
-// not be attached to a running VM. The new drive is unattached.
-func (s *DriveService) CloneDrive(ctx context.Context, srcRef, newName string) (*domain.Drive, error)
-```
-
-Implementation reuses the existing `s.storage.SnapshotVolume`
-primitive that `CloneSnapshot` already calls — same btrfs
-operation, just exposed at the drive level instead of as part of a
-whole-VM clone.
-
-Must be exposed on **both REST and MCP** so Flow (REST) and
-operator tooling (MCP) can call it.
+Implementation reuses `s.storage.SnapshotVolume` and a new
+`s.storage.CloneVolume` primitive; the underlying btrfs operation
+is `btrfs.CreateSnapshot(snap, dst, readOnly=false)`. Provenance
+(source_volume_ref / snapshot_name) is echoed in the response for
+the immediate caller's bookkeeping but is not persisted on
+`domain.Drive`.
 
 ### No hot-attach required
 
