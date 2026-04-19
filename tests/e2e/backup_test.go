@@ -13,7 +13,7 @@ import (
 const testImage = "docker.io/library/alpine:latest"
 
 func TestExportImportWithDrive(t *testing.T) {
-	requireBtrfs(t)
+	requireBtrfsSend(t)
 	// Use default containerd snapshotter (not btrfs) — only drive storage needs btrfs.
 	bd := startBtrfsDaemon(t, harness.WithSnapshotter(""))
 
@@ -100,7 +100,7 @@ func TestExportImportWithDrive(t *testing.T) {
 }
 
 func TestExportImportMultipleDrives(t *testing.T) {
-	requireBtrfs(t)
+	requireBtrfsSend(t)
 	bd := startBtrfsDaemon(t, harness.WithSnapshotter(""))
 
 	vm, err := bd.client.CreateVMWithImage("export-multi", "agent", testImage)
@@ -170,7 +170,7 @@ func TestExportImportMultipleDrives(t *testing.T) {
 }
 
 func TestExportImportCrossDaemon(t *testing.T) {
-	requireBtrfs(t)
+	requireBtrfsSend(t)
 
 	// Daemon A: source — create VM with drive and marker data, then export.
 	srcDaemon := startBtrfsDaemon(t, harness.WithSnapshotter(""))
@@ -282,7 +282,7 @@ func TestExportImportCrossDaemon(t *testing.T) {
 }
 
 func TestExportImportNameConflict(t *testing.T) {
-	requireBtrfs(t)
+	requireBtrfsSend(t)
 	bd := startBtrfsDaemon(t, harness.WithSnapshotter(""))
 
 	vm, err := bd.client.CreateVMWithImage("conflict-vm", "agent", testImage)

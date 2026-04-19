@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Work-Fort/nexus-e2e/harness"
 )
@@ -28,6 +29,35 @@ func requireBtrfs(t *testing.T) {
 	if _, err := exec.LookPath("btrfs"); err != nil {
 		t.Skip("btrfs CLI not in PATH")
 	}
+}
+
+// requireBtrfsSend skips the test if the build/nexus-btrfs helper is
+// missing CAP_SYS_ADMIN. The btrfs send/receive path used by drive
+// export/import shells out to this helper, which silently returns
+// "CAP 21 not in permitted set" when uncapabilitated. Run
+// `sudo ./scripts/dev-setcap-loop.sh` (or `sudo mise run install:local`)
+// to set caps; this helper polls up to 5s in case the loop is mid-cycle.
+func requireBtrfsSend(t *testing.T) {
+	t.Helper()
+	requireBtrfs(t)
+
+	helper, err := filepath.Abs("../../build/nexus-btrfs")
+	if err != nil {
+		t.Skipf("cannot resolve build/nexus-btrfs: %v", err)
+	}
+	if _, err := os.Stat(helper); err != nil {
+		t.Skipf("build/nexus-btrfs not found (run `mise run build`): %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := exec.Command("getcap", helper).Output()
+		if err == nil && strings.Contains(string(out), "cap_sys_admin") {
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Skipf("build/nexus-btrfs lacks cap_sys_admin — run: sudo ./scripts/dev-setcap-loop.sh")
 }
 
 // btrfsPropertyGet runs "btrfs property get <path> ro" and returns the output.
